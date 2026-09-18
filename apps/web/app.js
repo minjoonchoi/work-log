@@ -1,6 +1,7 @@
 import { integrationUI } from './integrations.js';
 import { writingUI } from './writing.js';
 import { historyUI } from './history.js';
+import { executionSettingsUI } from './execution-settings.js';
 const $ = selector => document.querySelector(selector);
 const esc = text => String(text ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const state = { items: [], selected: new Set(), view: 'items', attention: false, currentOnly: false, waitingOnly: false, calendarView: 'month', mode: 'sessions', date: new Date(), detail: null };
@@ -30,6 +31,7 @@ function modal(html) { $('#modal-content').innerHTML = html; if (!$('#modal').op
 const integrations = integrationUI({ api, esc, modal, toast, absoluteTime, refresh: async id => { await openDetail(id, undefined, true, true); await load(); } });
 const writing = writingUI({ api, esc, toast, absoluteTime, refresh: async id => { await openDetail(id, undefined, true); await load(); } });
 const history = historyUI({ api, esc, eventHTML, invalidated: scheduleRefresh });
+const executionSettings = executionSettingsUI({ api, esc, modal, toast });
 function badge(value) { return `<span class="badge ${esc(value)}">${esc(statusLabels[value] || value)}</span>`; }
 function liveStatus() {
   return `<span class="history-live ${streamConnected ? 'connected' : ''}" role="status">${streamConnected ? '실시간 갱신 중' : '실시간 연결 대기 · 재연결 중'}</span>`;
@@ -330,6 +332,7 @@ function move(direction) { if (state.calendarView === 'month') state.date = new 
 $('#previous').onclick = safe(() => move(-1)); $('#next').onclick = safe(() => move(1));
 $('#today').onclick = safe(() => { state.date = new Date(); return renderCalendar(); });
 $('#settings').onclick = safe(integrations.showSettings);
+$('#execution-settings').onclick = safe(executionSettings.showSettings);
 window.addEventListener('harness:navigate', safe(async e => {
   const route = typeof e.detail === 'string' ? { view: e.detail } : e.detail;
   if (!route || !['items', 'current', 'attention', 'waiting-user', 'calendar', 'settings'].includes(route.view)) return;

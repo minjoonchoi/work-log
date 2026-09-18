@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "description", "stages"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "description": { "type": "string", "minLength": 1 },
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "produce": { "$ref": "#/$defs/engines" },
+        "review": { "$ref": "#/$defs/engines" },
+        "repair": { "$ref": "#/$defs/engines" },
+        "plan": { "$ref": "#/$defs/engines" }
+      }
+    }
+  },
+  "$defs": {
+    "codexSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "effort"],
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] }
+      }
+    },
+    "claudeSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "effort"],
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "auto"] }
+      }
+    },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codex", "claude"],
+      "properties": {
+        "codex": { "$ref": "#/$defs/codexSelection" },
+        "claude": { "$ref": "#/$defs/claudeSelection" }
+      }
+    }
+  }
+}

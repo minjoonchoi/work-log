@@ -6,24 +6,28 @@ import { ROOT, atomic, assert, json, redact, redactValue } from './shared.mjs';
 const versions = new Map();
 
 export function commandFor(engine, context) {
-  const { cwd, schemaPath, outputPath, stage, allowedFile } = context;
+  const { cwd, schemaPath, outputPath, stage, execution } = context;
+  if (['codex', 'claude'].includes(engine)) {
+    assert(execution && typeof execution.model === 'string' && execution.model.trim(), `${engine} 모델 설정이 필요합니다.`);
+    assert(typeof execution.effort === 'string' && execution.effort.trim(), `${engine} effort 설정이 필요합니다.`);
+  }
   if (engine === 'codex') return {
-    command: process.env.HARNESS_CODEX_BIN || 'codex', args: ['exec', '--json', '--output-schema', schemaPath,
-      '-o', outputPath, '-C', cwd, '-s', stage === 'review' ? 'read-only' : 'workspace-write',
-      '-c', 'approval_policy="never"', '--skip-git-repo-check', '-']
+    command: process.env.HARNESS_CODEX_BIN || 'codex', args: ['exec', '--json', '--model', execution.model,
+      '-c', `model_reasoning_effort="${execution.effort}"`, '--dangerously-bypass-approvals-and-sandbox',
+      '--output-schema', schemaPath, '-o', outputPath, '-C', cwd, '--skip-git-repo-check', '-']
   };
   if (engine === 'claude') return {
-    command: process.env.HARNESS_CLAUDE_BIN || 'claude', args: ['-p', '--output-format', 'json',
-      '--json-schema', fs.readFileSync(schemaPath, 'utf8'), '--permission-mode', 'dontAsk',
-      '--tools', stage === 'review' ? 'Read' : 'Read,Write,Edit',
-      '--allowedTools', stage === 'review' ? `Read(./${allowedFile})` : `Read(./${allowedFile}),Edit(./${allowedFile})`, '--no-session-persistence']
+    command: process.env.HARNESS_CLAUDE_BIN || 'claude', args: ['-p', '--model', execution.model, '--effort', execution.effort,
+      '--output-format', 'json', '--json-schema', fs.readFileSync(schemaPath, 'utf8'),
+      '--allow-dangerously-skip-permissions', '--permission-mode', 'bypassPermissions',
+      '--tools', stage === 'review' ? 'Read' : 'Read,Write,Edit,Bash', '--no-session-persistence']
   };
   assert(engine === 'fixture' && process.env.HARNESS_TEST_MODE === '1', '허용되지 않은 실행 엔진입니다.');
   return { command: process.execPath, args: [path.join(ROOT, 'tests/fixtures/worker.mjs'), outputPath, stage] };
 }
 
 export function execute(context) {
-  const { engine, cwd, attemptDir, stage, prompt, limits, onSpawn, parent, fixture } = context;
+  const { engine, cwd, attemptDir, stage, prompt, limits, onSpawn, parent, fixture, execution } = context;
   const outputPath = path.join(attemptDir, 'result.json');
   const schemaPath = path.join(attemptDir, 'schema.json');
   atomic(schemaPath, json(context.schema || JSON.parse(fs.readFileSync(path.join(ROOT, 'contracts/task-result.schema.json'), 'utf8'))));
@@ -37,7 +41,8 @@ export function execute(context) {
     'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'];
   const env = Object.fromEntries(allowed.filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]]));
   Object.assign(env, { HARNESS_DATA_DIR: context.dataDir, HARNESS_WORKER: '1', HARNESS_PARENT: json(parent),
-    HARNESS_ATTEMPT_ID: parent.task_id, HARNESS_ENGINE: engine, HARNESS_TEST_MODE: process.env.HARNESS_TEST_MODE || '', HARNESS_FIXTURE: json(fixture || {}) });
+    HARNESS_ATTEMPT_ID: parent.task_id, HARNESS_ENGINE: engine, HARNESS_STAGE: stage,
+    HARNESS_TEST_MODE: process.env.HARNESS_TEST_MODE || '', HARNESS_FIXTURE: json(fixture || {}) });
   const processRun = runProcess({ command, args, cwd, env, stdin: prompt, attemptDir, limits, onSpawn });
   const promise = processRun.promise.then(({ ok, stdout, observation: observed }) => {
     let nativeSession = null, usage = null;
@@ -52,7 +57,9 @@ export function execute(context) {
     } else if (engine === 'claude') {
       try { const outer = JSON.parse(stdout); nativeSession = outer.session_id || null; usage = outer.usage || null; } catch {}
     }
-    const observation = { ...observed, engine, cli_version: versions.get(command), native_session_id: nativeSession, usage };
+    const observation = { ...observed, engine, model: execution?.model || null, effort: execution?.effort || null,
+      permission_mode: ['codex', 'claude'].includes(engine) ? 'bypass' : null,
+      cli_version: versions.get(command), native_session_id: nativeSession, usage };
     atomic(path.join(attemptDir, 'process.json'), json(observation));
     if (!ok) return { ok: false, observation };
     try {

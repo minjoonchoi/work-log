@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const args = process.argv.slice(2), codex = args[0] === 'exec';
 if (args.includes('--version')) { console.log('protocol-double 1.0'); process.exit(0); }
-const review = codex ? args[args.indexOf('-s') + 1] === 'read-only' : args[args.indexOf('--tools') + 1] === 'Read';
+const review = process.env.HARNESS_STAGE === 'review';
 fs.writeFileSync(path.join(process.cwd(), '../invocation.json'), JSON.stringify(args));
 const output = codex ? args[args.indexOf('-o') + 1] : path.join(process.cwd(), '../claude-structured.json');
 const prompt = fs.readFileSync(0, 'utf8');

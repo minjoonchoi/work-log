@@ -234,6 +234,11 @@ iframe { width: 100%; height: 460px; border: 1px solid var(--line); border-radiu
 /* Account connection and worklog summaries use the same restrained surface tokens. */
 .help { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.backend-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+.backend-settings section { border: 1px solid var(--line); border-radius: 7px; padding: 14px; background: var(--surface-muted); min-width: 0; }
+.backend-settings h3 { margin: 0 0 4px; }
+.backend-settings label { margin-top: 12px; }
+.backend-settings .help { margin: 10px 0 0; line-height: 1.5; overflow-wrap: anywhere; }
 .connection-note { background: var(--surface-muted); border: 1px solid var(--line); border-radius: 6px; padding: 12px; font-size: 13px; }
 .service-details { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 16px; font-size: 13px; }
 .jira-preview { margin: 20px 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; }

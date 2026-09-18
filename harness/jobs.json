@@ -21,6 +21,7 @@
         "PRD-AC-001"
       ],
       "persona": "요구사항과 관찰 가능한 수용 기준을 작성하는 제품 기획자",
+      "execution_profile": "document",
       "workflow": "create-reviewed",
       "input_schema": "contracts/inputs/document.schema.json"
     },
@@ -38,6 +39,7 @@
         "OUTPUT-001"
       ],
       "persona": "요청된 화면과 상호작용을 구현하는 프런트엔드 작성자",
+      "execution_profile": "html",
       "workflow": "create-reviewed",
       "input_schema": "contracts/inputs/html.schema.json"
     },
@@ -55,6 +57,7 @@
         "MODEL-001"
       ],
       "persona": "식별자, 관계, 생명주기를 명시하는 도메인 설계자",
+      "execution_profile": "data-model",
       "workflow": "create-reviewed",
       "input_schema": "contracts/inputs/document.schema.json"
     },
@@ -67,6 +70,7 @@
         "REQ-001"
       ],
       "persona": "제공된 사실과 요청 형식을 따르는 작성자",
+      "execution_profile": "document",
       "workflow": "create-reviewed",
       "input_schema": "contracts/inputs/document.schema.json"
     },
@@ -78,6 +82,7 @@
       "requiredSections": [],
       "rules": ["REQ-001", "SUMMARY-001"],
       "persona": "원본 대화에서 확인된 작업과 결과만 요약하는 기록자. 첫 줄은 제목 1줄, 다음 1~5줄은 설명으로 작성한다. 빈 줄·마크다운 제목·목록·코드 블록 없이 하나의 일반 텍스트를 만든다. 수행되지 않은 작업을 완료했다고 쓰지 않고 미확인 결과는 미확인으로 표현한다.",
+      "execution_profile": "metadata",
       "workflow": "create-reviewed",
       "input_schema": "contracts/inputs/session-summary.schema.json"
     },
@@ -89,6 +94,7 @@
       "requiredSections": [],
       "rules": ["REQ-001", "REWRITE-001"],
       "persona": "고정된 세션 이력과 요약에 근거해 제목과 설명을 다시 작성하는 기록자. format=work-item-metadata이면 모든 제공 세션의 목표·진행·결과를 아우르는 제목 1줄과 간결한 설명을 작성한다. format=session-summary이면 해당 세션의 제목 1줄과 설명 1~5줄을 작성한다. title, description만 가진 JSON 파일을 반환한다. 설명 줄 구분은 JSON 문자열의 줄바꿈으로 표현한다. 세션 요약은 빈 줄·마크다운 제목·목록·코드 블록 없는 일반 텍스트이다. 원본 입출력이 요약보다 우선하며 요청을 완료 사실로 바꾸거나 누락된 출력을 만들어 내지 않는다.",
+      "execution_profile": "metadata",
       "workflow": "create-reviewed",
       "input_schema": "contracts/inputs/text-rewrite.schema.json",
       "artifact_schema": "contracts/text-rewrite.schema.json"
@@ -104,6 +110,7 @@
         "SCENARIO-001"
       ],
       "persona": "요구사항을 관찰 가능한 E2E 시나리오로 구체화하는 검증 설계자",
+      "execution_profile": "scenario",
       "artifact_schema": "contracts/scenario-plan.schema.json",
       "default_categories": [
         "normal",

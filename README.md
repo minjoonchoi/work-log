@@ -18,6 +18,8 @@ macOS 메뉴 막대에서 에이전트 업무, 프롬프트 입출력 이력, �
 - **업무 상세 → Jira 이슈**에서 제목·설명으로 새 이슈를 만들거나, **키·제목·URL로 검색**해 기존 이슈를 선택하고 연결합니다. 결과 목록은 상태와 더 보기를 제공하며 REST API는 내부 클라이언트가 처리합니다. 이슈 링크·현재 상태·허용된 상태 변경을 같은 화면에서 제공합니다. 종료 세션은 제목 1줄+설명 최대 5줄로 요약해 Jira 업무 로그에 코멘트·시작·관측 시간을 동기화합니다. [이슈 연결·상태 변경 설계](docs/jira-issues.md)
 - PRD, 단일 HTML 목업, 논리 엔티티 설계, 텍스트 작성. 생성 → 자동 검사 → 독립 검토 → 최대 2회 수정 → 최종 산출물 확정.
 - 별도 subprocess인 `codex exec`·`claude -p` 어댑터, 실행 동시성 3, timeout·출력량 제한, 프로세스 트리 취소, 중단 복구, 게시 직후 crash 복구.
+- 업무가 참조하는 [유형별 모델 실행 프로필](docs/execution-profiles.md)에서 단계별 model·effort를 고정합니다. Codex와 Claude worker는 승인 질문 없이 수행하도록 각 CLI의 명시적 permission bypass 옵션으로 실행합니다.
+- GUI의 **작업 실행 설정**에서 업무별 지시문, 기본 Codex/Claude backend와 backend별 model·effort override를 로컬에 저장합니다. 변경은 이후 생성되는 run에만 적용되고 실행 정의에 고정됩니다.
 - SQLite 두 개와 파일 저장소. 실행 DB는 실행 서비스, 업무·세션 DB는 관리 서비스가 각각 소유합니다.
 - 구현 중 반복된 시나리오 설계, 등록된 검사 실행, 실행 근거 보고서 작성을 재사용 업무로 등록했습니다. 모델 worker와 검사 명령이 같은 프로세스 실행기를 사용합니다.
 - 모든 업무의 `task/input`을 JSON Schema로 검증하고 버전을 고정합니다. 실행기는 workflow의 명시적인 상태 전이를 따라 필수 검사·검토·수정 한도를 집행하고 각 전이를 기록합니다.
@@ -69,7 +71,7 @@ npm run verify:self
 
 검사 프로필은 `harness.e2e`(전체), `harness.service-e2e`, `harness.gui-e2e`입니다. `--input` 요청의 `input.profile`로 범위를 지정할 수 있습니다. 현재 프로필의 대상은 이 하네스 개발 저장소입니다. 테스트 소스가 없는 배포 앱에서는 **미실행**으로 기록합니다. 임의 명령 문자열이나 모델이 제안한 명령은 실행하지 않습니다. 새 검사 명령은 유지보수자가 `harness/check-profiles.json`에 등록합니다.
 
-작업 정의와 workflow는 `harness/task-types.json`, `harness/workflows.json`에서 관리합니다. 재사용 업무를 추출한 과정은 [0.2 개선 기록](docs/harness-improvements-v0.2.md)에 있습니다.
+작업 정의와 workflow는 `harness/task-types.json`, `harness/workflows.json`에서 관리합니다. 모델과 effort는 업무의 `execution_profile`이 참조하는 `harness/execution-profiles/*.json`에서 관리하며 실행 시작 시 정의에 고정됩니다. 재사용 업무를 추출한 과정은 [0.2 개선 기록](docs/harness-improvements-v0.2.md)에 있습니다.
 
 ## 개발 환경에서 실행
 
@@ -160,7 +162,7 @@ HARNESS_LIVE_APPROVED=1 node scripts/live-smoke.mjs
 
 같은 승인 범위에서 재검증할 때는 `HARNESS_LIVE_PREVIOUS_REPORT`에 이전 `report.json` 경로를 지정합니다. 앞서 사용한 호출까지 합산하며, 남은 한도 안에서 해당 업무의 최대 호출 수를 수용할 수 없으면 시작하지 않습니다. 18회는 작업 subprocess 기준이며 CLI 내부의 모델·도구 왕복과 토큰 사용량을 따로 기록합니다.
 
-**로컬 E2E 서비스·CLI·설치 99개, GUI 32개**가 통과했습니다. [세션 입출력 무한 스크롤](docs/session-record-history.md)에 서비스 4개·GUI 5개 시나리오를 추가했으며, `checks.run → verification.report`로 서비스 검사와 GUI 최종 재검증의 근거를 보존했습니다. [Jira 검색·상태 변경](docs/jira-issues.md), [이력 기반 재작성](docs/on-demand-writing.md)과 실시간 이력·Atlassian·세션 요약도 포함합니다. 실제 계정 미검증 사항은 [연동 검증 기록](docs/verification-atlassian.md)에 정리했습니다. Codex 실모델의 PRD·HTML·엔티티 설계 3개 예시도 검증·검토·전달을 통과했으며, 최초 실패를 포함해 총 12/18회 호출을 사용했습니다. 발견한 계약 불일치와 관리 이력 수집 대기 수정은 [0.3.1 실모델 E2E 기록](docs/live-model-e2e-v0.3.1.md)에 있습니다. 구조화 실행 설계는 [0.3 구조화 오케스트레이션](docs/structured-orchestration-v0.3.md), 첫 버전 기록은 [0.1 검증 보고서](docs/verification-v0.1.md)에 있습니다. 화면·트레이스는 `output/playwright/`, 실모델 실행 결과는 `output/live/`에 보관합니다. 테스트용 fixture 엔진과 검사 프로필은 `HARNESS_TEST_MODE=1`로 시작한 서비스에서만 사용할 수 있습니다.
+**로컬 E2E 서비스·CLI·설치 130개, GUI 41개**가 통과했습니다. [세션 입출력 무한 스크롤](docs/session-record-history.md)에 서비스 4개·GUI 5개 시나리오를 추가했으며, `checks.run → verification.report`로 서비스 검사와 GUI 최종 재검증의 근거를 보존했습니다. [Jira 검색·상태 변경](docs/jira-issues.md), [이력 기반 재작성](docs/on-demand-writing.md)과 실시간 이력·Atlassian·세션 요약, 로컬 작업 실행 설정도 포함합니다. 실제 계정 미검증 사항은 [연동 검증 기록](docs/verification-atlassian.md)에 정리했습니다. Codex 실모델의 PRD·HTML·엔티티 설계 3개 예시도 검증·검토·전달을 통과했으며, 최초 실패를 포함해 총 12/18회 호출을 사용했습니다. 발견한 계약 불일치와 관리 이력 수집 대기 수정은 [0.3.1 실모델 E2E 기록](docs/live-model-e2e-v0.3.1.md)에 있습니다. 구조화 실행 설계는 [0.3 구조화 오케스트레이션](docs/structured-orchestration-v0.3.md), 첫 버전 기록은 [0.1 검증 보고서](docs/verification-v0.1.md)에 있습니다. 화면·트레이스는 `output/playwright/`, 실모델 실행 결과는 `output/live/`에 보관합니다. 테스트용 fixture 엔진과 검사 프로필은 `HARNESS_TEST_MODE=1`로 시작한 서비스에서만 사용할 수 있습니다.
 
 ## Atlassian 연결
 

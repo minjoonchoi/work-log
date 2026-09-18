@@ -1,0 +1,18 @@
+{
+  "id": "scenario",
+  "description": "E2E 시나리오 계획·검토·수정",
+  "stages": {
+    "plan": {
+      "codex": { "model": "gpt-5.6", "effort": "high" },
+      "claude": { "model": "sonnet", "effort": "high" }
+    },
+    "review": {
+      "codex": { "model": "gpt-5.6", "effort": "high" },
+      "claude": { "model": "sonnet", "effort": "high" }
+    },
+    "repair": {
+      "codex": { "model": "gpt-5.6", "effort": "high" },
+      "claude": { "model": "sonnet", "effort": "high" }
+    }
+  }
+}

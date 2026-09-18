@@ -37,6 +37,12 @@ try {
   await assert.rejects(h.run(), /지원하지 않는 엔진/); report.checks.push('fixture execution disabled in normal packaged service');
   const catalog = await h.runtime('/catalog');
   assert.ok(['test.scenarios.plan', 'checks.run', 'verification.report'].every(id => catalog.jobs.some(j => j.id === id)));
+  assert.equal(catalog.jobs.find(j => j.id === 'prd.create').execution_profile, 'document');
+  assert.equal(catalog.execution_profiles.document.stages.produce.codex.model, 'gpt-5.6');
+  assert.equal(catalog.execution_profiles.document.stages.produce.claude.effort, 'medium');
+  const executionSettings = await h.runtime('/execution-settings');
+  assert.equal(executionSettings.tasks.find(task => task.id === 'prd.create').backend, 'codex');
+  assert.ok(executionSettings.tasks.every(task => task.instruction && task.backends.codex.defaults));
   assert.ok(catalog.check_profiles.every(p => !p.id.startsWith('fixture.')));
   assert.ok(catalog.jobs.every(j => j.input_schema));
   await assert.rejects(h.runtime('/runs', { method: 'POST', body: { task: 'prd.create', input: {} } }), /input.*위반/);
@@ -47,6 +53,7 @@ try {
   const rendered = await h.finish(await h.runtime('/runs', { method: 'POST', body: { task: 'verification.report', input: { run_ids: [checkRun.id] } } }));
   assert.equal(rendered.status, 'completed'); assert.equal(rendered.steps[0].next_node, '$completed');
   report.checks.push('reusable jobs bundled; absent development test sources produce not_run evidence');
+  report.checks.push('packaged task instructions and backend model/effort defaults are available to the GUI');
   report.checks.push('bundled schemas validate structured inputs; local workflow produces a report with recorded transitions');
   assert.equal(spawnSync('codesign', ['--verify', '--deep', '--strict', app]).status, 0); report.checks.push('ad-hoc signature verification');
   assert.equal(spawnSync('unzip', ['-tq', path.join(ROOT, 'dist/WorkLog-macos-arm64.zip')]).status, 0); report.checks.push('distribution ZIP integrity');

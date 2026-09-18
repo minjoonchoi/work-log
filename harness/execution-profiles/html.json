@@ -1,0 +1,18 @@
+{
+  "id": "html",
+  "description": "동작형 HTML 목업 생성·검토·수정",
+  "stages": {
+    "produce": {
+      "codex": { "model": "gpt-5.6", "effort": "high" },
+      "claude": { "model": "sonnet", "effort": "high" }
+    },
+    "review": {
+      "codex": { "model": "gpt-5.6", "effort": "high" },
+      "claude": { "model": "sonnet", "effort": "high" }
+    },
+    "repair": {
+      "codex": { "model": "gpt-5.6", "effort": "high" },
+      "claude": { "model": "sonnet", "effort": "high" }
+    }
+  }
+}

@@ -8,10 +8,12 @@ import { initialEvidence, saveEvidence, readEvidence, executeChecks, sourceSnaps
 import { validateSchema, canonicalJson } from './schema.mjs';
 import { nextStep } from './workflow.mjs';
 import { resolveTask } from './intake.mjs';
+import { executionSettings } from './execution-settings.mjs';
 
 const dir = dataRoot(); lockService(dir, 'runtime');
-const { definitions, rules, responseSchema, taskTypes, workflows, profiles, runSchema, requestSchema } = loadCatalog();
-const runtimeDigest = digest([...['runtime', 'executor', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
+const { definitions, rules, responseSchema, taskTypes, workflows, profiles, executionProfiles, runSchema, requestSchema } = loadCatalog();
+const settings = executionSettings({ dir, jobs: definitions.jobs, workflows, profiles: executionProfiles });
+const runtimeDigest = digest([...['runtime', 'executor', 'execution-settings', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
   fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8')].join('\n'));
 const db = database(path.join(dir, 'runtime.sqlite'), `
  CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, request TEXT NOT NULL, definition TEXT NOT NULL,
@@ -58,10 +60,13 @@ function create(input) {
   validateSchema(runSchema, input, '실행 요청');
   const task = resolveTask(input);
   assert(typeof task === 'string' && Object.hasOwn(definitions.jobs, task), '지원하지 않는 업무입니다.');
-  const job = definitions.jobs[task];
+  const catalogJob = definitions.jobs[task];
+  const job = structuredClone(catalogJob);
   const workflow = workflows[job.workflow];
+  const configured = workflow.mode === 'artifact' ? settings.resolve(task) : null;
+  if (configured) job.instruction = configured.instruction;
   const compiled = compileRequest(task, input.input ?? {}, input.prompt, job, requestSchema), normalizedInput = compiled.input;
-  const engine = workflow.mode === 'artifact' ? input.engine || 'codex' : 'local';
+  const engine = workflow.mode === 'artifact' ? input.engine || configured.backend : 'local';
   assert(workflow.mode !== 'artifact' || ['codex', 'claude'].includes(engine) || (engine === 'fixture' && process.env.HARNESS_TEST_MODE === '1'), '지원하지 않는 엔진입니다.');
   if (task === 'checks.run') {
     assert(Object.hasOwn(profiles, normalizedInput.profile), '등록되지 않은 검사 프로필입니다.');
@@ -82,6 +87,7 @@ function create(input) {
   const definition = { version: definitions.version, runtime_digest: runtimeDigest, job, workflow, task_types: taskTypes,
     rules: Object.fromEntries(job.rules.map(k => [k, rules[k]])), request_schema: requestSchema,
     response_schema: responseSchema, limits: { ...definitions.limits } };
+  if (workflow.mode === 'artifact') definition.execution_profile = configured.profile;
   if (task === 'checks.run') definition.check_profile = profiles[normalizedInput.profile];
   if (task === 'verification.report') {
     const latest = input.work_item_id || input.origin
@@ -175,6 +181,7 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
   db.prepare('INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(attempt, runId, row.epoch, task, round, 'running', null, now(), null, null, attemptDir);
   emit({ ...workerBase, id: `input-${attempt}`, kind: 'input', event_at: now(), turn_id: attempt, text: prompt });
   const processRun = execute({ engine: request.engine, cwd, attemptDir, stage: task, prompt, limits: definition.limits, parent, dataDir: dir,
+    execution: request.engine === 'fixture' ? null : definition.execution_profile.stages[task][request.engine],
     schema: definition.response_schema, allowedFile: job.file, fixture: { ...request.fixture, job, round, input: request.input },
     onSpawn: pid => db.prepare('UPDATE attempts SET pid=? WHERE id=?').run(pid, attempt) });
   running.set(runId, processRun);
@@ -322,8 +329,14 @@ for (const row of db.prepare("SELECT * FROM runs WHERE status='running'").all())
 const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(process.env.HARNESS_RUNTIME_PORT || 0), handler: async (req, url) => {
   if (req.method === 'GET' && url.pathname === '/health') return { role: 'execution', version: definitions.version, active: running.size };
   if (req.method === 'GET' && url.pathname === '/catalog') return {
-    version: definitions.version, jobs: Object.entries(definitions.jobs).map(([id, job]) => ({ id, label: job.label, workflow: job.workflow, input_schema: job.input_schema })),
-    task_types: taskTypes, workflows, check_profiles: Object.entries(profiles).map(([id, p]) => ({ id, label: p.label, validation_scope: p.validation_scope })) };
+    version: definitions.version, jobs: Object.entries(definitions.jobs).map(([id, job]) => ({ id, label: job.label, workflow: job.workflow,
+      input_schema: job.input_schema, execution_profile: job.execution_profile || null })),
+    task_types: taskTypes, workflows, execution_profiles: executionProfiles,
+    check_profiles: Object.entries(profiles).map(([id, p]) => ({ id, label: p.label, validation_scope: p.validation_scope })) };
+  if (req.method === 'GET' && url.pathname === '/execution-settings') return settings.snapshot();
+  let settingMatch = url.pathname.match(/^\/execution-settings\/([^/]+)$/);
+  if (settingMatch && req.method === 'PUT') return settings.save(decodeURIComponent(settingMatch[1]), await body(req));
+  if (settingMatch && req.method === 'DELETE') return settings.reset(decodeURIComponent(settingMatch[1]), (await body(req)).revision);
   if (req.method === 'GET' && url.pathname === '/events') {
     const after = Number(url.searchParams.get('after') || 0); assert(Number.isSafeInteger(after) && after >= 0, '잘못된 커서입니다.');
     const rows = db.prepare('SELECT * FROM outbox WHERE seq>? ORDER BY seq LIMIT 500').all(after);

@@ -13,12 +13,26 @@ for (const engine of ['codex', 'claude']) test(`${engine} process adapter: stdin
   assert.equal(result.status, 'completed', result.message);
   const calls = result.attempts.map(a => JSON.parse(fs.readFileSync(path.join(a.directory, 'invocation.json'))));
   assert.ok(calls[0].includes(engine === 'codex' ? '--output-schema' : '--json-schema'));
-  assert.ok(calls[1].includes(engine === 'codex' ? 'read-only' : 'Read'));
-  if (engine === 'claude') assert.ok(calls[0].includes('Read(./prd.md),Edit(./prd.md)'));
+  if (engine === 'codex') {
+    assert.ok(calls.every(c => c.includes('--dangerously-bypass-approvals-and-sandbox')));
+    assert.ok(calls.every(c => !c.includes('--sandbox') && !c.includes('approval_policy="never"')));
+    assert.equal(calls[0][calls[0].indexOf('--model') + 1], 'gpt-5.6');
+    assert.ok(calls[0].includes('model_reasoning_effort="medium"'));
+    assert.ok(calls[1].includes('model_reasoning_effort="high"'));
+  } else {
+    assert.ok(calls.every(c => c.includes('--allow-dangerously-skip-permissions')));
+    assert.ok(calls.every(c => c[c.indexOf('--permission-mode') + 1] === 'bypassPermissions'));
+    assert.equal(calls[0][calls[0].indexOf('--model') + 1], 'sonnet');
+    assert.equal(calls[0][calls[0].indexOf('--effort') + 1], 'medium');
+    assert.equal(calls[1][calls[1].indexOf('--effort') + 1], 'high');
+    assert.equal(calls[1][calls[1].indexOf('--tools') + 1], 'Read');
+  }
   const observed = JSON.parse(fs.readFileSync(path.join(result.attempts[0].directory, 'process.json')));
   assert.equal(observed.native_session_id, engine === 'codex' ? 'protocol-thread' : 'protocol-session');
   assert.equal(observed.usage.output_tokens, 20);
-  assert.ok(calls.every(c => !c.includes('--dangerously-bypass-approvals-and-sandbox') && !c.includes('--dangerously-skip-permissions')));
+  assert.equal(observed.model, engine === 'codex' ? 'gpt-5.6' : 'sonnet');
+  assert.equal(observed.effort, 'medium');
+  assert.equal(observed.permission_mode, 'bypass');
 });
 test('source hook retry preserves original observed timestamp; bad hook input remains non-blocking and visible', async t => {
   const h = new Harness(); await h.start('manager'); t.after(() => h.close());
