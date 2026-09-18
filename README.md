@@ -111,6 +111,15 @@ HARNESS_DATA_DIR="$PWD/.data" node bin/harness.mjs run "팀원 초대 기능 PRD
 
 ## macOS 설치 패키지
 
+저장소에서 GUI·백그라운드 서비스·기록 훅·요청 스킬을 함께 설치합니다. 필요한 Node·Swift·브라우저는 위 개발 환경 조건을 따릅니다.
+
+```sh
+make install
+make uninstall
+```
+
+`make install`은 프로젝트 의존성 설치와 앱 빌드 후 사용자 홈에 설치합니다. 설치·제거 대상을 먼저 보려면 `make install-plan`, `make uninstall-plan`을 사용합니다. 제거는 빌드를 요구하지 않습니다.
+
 ```sh
 npm run build:mac
 node bin/harness.mjs install-plan --output dist/install-plan
@@ -118,7 +127,7 @@ node bin/harness.mjs install-plan --output dist/install-plan
 
 `HARNESS_GUI_DATA_DIR` 없이 빌드하면 일반 사용자 데이터 경로를 사용하는 배포용 앱을 만듭니다. 기본 Node 번들은 `~/.nvm/versions/node/v22.17.0/bin/node`입니다. 없으면 독립 배포 가능한 Node 실행 파일을 `HARNESS_BUNDLE_NODE`로 지정하세요. Homebrew 동적 라이브러리에 의존하는 바이너리는 거부합니다.
 
-결과는 `dist/WorkLog.app`과 `dist/WorkLog-macos-arm64.zip`입니다. ZIP에는 앱과 `Install WorkLog.command`가 들어 있습니다. 개발용 ad-hoc 서명이며 Apple 공증은 적용하지 않았습니다.
+결과는 `dist/WorkLog.app`과 `dist/WorkLog-macos-arm64.zip`입니다. ZIP에는 앱과 `Install WorkLog.command`, `Uninstall WorkLog.command`가 들어 있습니다. 개발용 ad-hoc 서명이며 Apple 공증은 적용하지 않았습니다.
 
 **설치 계획 생성은 사용자 설정을 변경하지 않습니다.** 실제 설치는 ZIP의 설치 명령을 사용하거나 `node scripts/install.mjs --apply`를 명시해 수행합니다. 다음 변경을 만듭니다.
 
@@ -126,8 +135,13 @@ node bin/harness.mjs install-plan --output dist/install-plan
 - 사용자 LaunchAgent 3개: 실행 서비스, 관리 서비스, 로그인 시 GUI 시작.
 - `~/Library/Application Support/WorkLog/versions/…`에 버전을 고정한 실행 파일.
 - 기존 항목을 보존하는 `~/.codex/hooks.json`, `~/.claude/settings.json`의 수집 훅 추가와 설정 백업.
+- 요청 접수용 `worklog-request` 스킬 하나의 심링크: `~/.claude/skills/worklog-request`, `~/.agents/skills/worklog-request`, `~/.codex/worklog/skills/worklog-request`. Codex의 공식 자동 탐색은 `.agents/skills`를 사용하며 `.codex/worklog`는 같은 설치 원본의 참조 경로입니다. 기존 `CLAUDE.md`·`AGENTS.md`를 수정하지 않습니다.
 
-사내 정책에서 해당 훅·실행 엔진을 허용해야 합니다. 설치는 정책의 비활성화 설정을 해제하지 않습니다. 기존 설치가 있으면 덮어쓰지 않고 중단합니다. 자동 업데이트·공증·제거 프로그램은 후속 범위입니다. 현재 워크스페이스에서는 실제 사용자 훅·LaunchAgent 설치를 수행하지 않았습니다.
+스킬은 사용자 요청과 자료를 자연어 `prompt`로 전달합니다. 업무 유형 분류·구조화·헤드리스 작업자 위임·검토 루프는 하네스가 담당하며 업무마다 스킬을 만들지 않습니다. 현재 분류는 제한된 규칙 방식이고 요청당 한 종류의 산출물을 지원합니다.
+
+설치별 고유 ID와 훅 원본·심링크 대상·파일 해시를 `~/Library/Application Support/WorkLog/installation.json`에 기록합니다. `make uninstall`은 현재 내용과 이 기록이 일치하는 설치 항목만 제거합니다. 사용자가 변경한 훅·심링크·서비스·앱 파일은 보존하고 `needs_attention`으로 보고합니다. 전체 설정 백업을 덮어 복원하거나 이름에 `worklog`가 포함됐다는 이유로 삭제하지 않습니다. **업무 DB·산출물·로그·백업·Keychain 토큰은 제거하지 않습니다.** 자세한 동작과 검증 범위는 [설치 소유권과 제거](docs/installation-ownership.md)에 있습니다.
+
+사내 정책에서 해당 훅·스킬·실행 엔진을 허용해야 합니다. 설치는 정책의 비활성화 설정을 해제하지 않습니다. 동일한 정상 설치를 다시 실행하면 중복 추가 없이 유지하고, 기존 사용자 파일이나 소유 기록 없는 과거 설치가 있으면 덮어쓰지 않습니다. 자동 업데이트·공증은 후속 범위입니다. 현재 워크스페이스에서는 실제 사용자 훅·LaunchAgent 설치를 수행하지 않았습니다.
 
 ## 테스트
 

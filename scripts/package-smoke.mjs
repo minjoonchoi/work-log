@@ -1,15 +1,26 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { Harness, eventually } from '../tests/helpers.mjs';
 import { ROOT, atomic } from '../src/shared.mjs';
+import { prepareInstall, applyInstall } from './install.mjs';
 
 const app = path.join(ROOT, 'dist/WorkLog.app');
-const h = new Harness(); h.executable = path.join(app, 'Contents/MacOS/node');
-h.serviceRoot = path.join(app, 'Contents/Resources/harness'); h.testMode = false;
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-package-install-'));
+const homeDir = path.join(sandbox, 'home');
+const plan = prepareInstall({ output: path.join(sandbox, 'plan'), homeDir, sourceApp: app });
+const h = new Harness(plan.dataDir); h.executable = path.join(plan.runtimeRoot, 'node');
+h.serviceRoot = path.join(plan.runtimeRoot, 'harness'); h.testMode = false;
 const report = { checked_at: new Date().toISOString(), app, checks: [] };
 try {
+  const installed = applyInstall(plan, { activate: false }); assert.equal(installed.status, 'installed');
+  assert.deepEqual(plan.skills, ['worklog-request']);
+  for (const link of plan.links) assert.equal(fs.readlinkSync(link.target), link.source);
+  const helper = spawnSync(path.join(plan.links[0].target, 'scripts/harness'), [], { encoding: 'utf8' });
+  assert.equal(helper.status, 0, helper.stderr); assert.ok(JSON.parse(helper.stdout).usage);
+  report.checks.push('packaged app installs into an isolated home with one request skill and owned links');
   assert.ok(!fs.readFileSync(path.join(app, 'Contents/Info.plist'), 'utf8').includes('HarnessDataRoot')); report.checks.push('release app contains no development data-root override');
   const node = spawnSync(h.executable, ['--version'], { encoding: 'utf8' }); assert.equal(node.status, 0); report.node = node.stdout.trim();
   await h.start('runtime'); await h.start('manager');
@@ -38,7 +49,13 @@ try {
   report.checks.push('bundled schemas validate structured inputs; local workflow produces a report with recorded transitions');
   assert.equal(spawnSync('codesign', ['--verify', '--deep', '--strict', app]).status, 0); report.checks.push('ad-hoc signature verification');
   assert.equal(spawnSync('unzip', ['-tq', path.join(ROOT, 'dist/WorkLog-macos-arm64.zip')]).status, 0); report.checks.push('distribution ZIP integrity');
+  await h.close(false);
+  const removed = spawnSync(h.executable, [path.join(h.serviceRoot, 'scripts/uninstall.mjs'), '--apply', '--home-dir', homeDir, '--no-deactivate'], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(removed.status, 0, removed.stderr); assert.equal(JSON.parse(removed.stdout).status, 'uninstalled');
+  assert.ok(fs.existsSync(path.join(plan.dataDir, 'memory.sqlite')));
+  assert.equal(fs.existsSync(plan.targetApp), false); assert.equal(fs.existsSync(plan.runtimeRoot), false);
+  report.checks.push('packaged uninstaller removes owned hooks, links and executables while retaining SQLite');
   report.passed = true;
-} finally { await h.close(); }
+} finally { await h.close(false); fs.rmSync(sandbox, { recursive: true, force: true }); }
 atomic(path.join(ROOT, 'output/package-validation.json'), JSON.stringify(report, null, 2));
 console.log(JSON.stringify(report));
