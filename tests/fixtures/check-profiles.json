@@ -1,0 +1,156 @@
+{
+  "fixture.pass": {
+    "label": "pass",
+    "scope": "harness-source",
+    "watch": [
+      "tests/fixtures/check-source.txt"
+    ],
+    "validation_scope": "E2E control fixture; no live model.",
+    "checks": [
+      {
+        "id": "check-1",
+        "label": "pass command 1",
+        "args": [
+          "tests/fixtures/check.mjs",
+          "pass"
+        ],
+        "timeoutMs": 10000
+      }
+    ]
+  },
+  "fixture.mixed": {
+    "label": "mixed",
+    "scope": "harness-source",
+    "watch": [
+      "tests/fixtures/check-source.txt"
+    ],
+    "validation_scope": "E2E control fixture; no live model.",
+    "checks": [
+      {
+        "id": "check-1",
+        "label": "pass command 1",
+        "args": [
+          "tests/fixtures/check.mjs",
+          "pass"
+        ],
+        "timeoutMs": 10000
+      },
+      {
+        "id": "check-2",
+        "label": "fail command 2",
+        "args": [
+          "tests/fixtures/check.mjs",
+          "fail"
+        ],
+        "timeoutMs": 10000
+      },
+      {
+        "id": "check-3",
+        "label": "pass command 3",
+        "args": [
+          "tests/fixtures/check.mjs",
+          "pass"
+        ],
+        "timeoutMs": 10000
+      }
+    ]
+  },
+  "fixture.slow": {
+    "label": "slow",
+    "scope": "harness-source",
+    "watch": [
+      "tests/fixtures/check-source.txt"
+    ],
+    "validation_scope": "E2E control fixture; no live model.",
+    "checks": [
+      {
+        "id": "check-1",
+        "label": "slow command 1",
+        "args": [
+          "tests/fixtures/check.mjs",
+          "slow"
+        ],
+        "timeoutMs": 10000
+      }
+    ]
+  },
+  "fixture.timeout": {
+    "label": "timeout",
+    "scope": "harness-source",
+    "watch": [
+      "tests/fixtures/check-source.txt"
+    ],
+    "validation_scope": "E2E control fixture; no live model.",
+    "checks": [
+      {
+        "id": "check-1",
+        "label": "slow command 1",
+        "args": [
+          "tests/fixtures/check.mjs",
+          "slow"
+        ],
+        "timeoutMs": 80
+      }
+    ]
+  },
+  "fixture.change": {
+    "label": "change",
+    "scope": "harness-source",
+    "watch": [
+      "tests/fixtures/check-source.txt"
+    ],
+    "validation_scope": "E2E control fixture; no live model.",
+    "checks": [
+      {
+        "id": "check-1",
+        "label": "change-source command 1",
+        "args": [
+          "tests/fixtures/check.mjs",
+          "change-source"
+        ],
+        "timeoutMs": 10000
+      }
+    ]
+  },
+  "fixture.flood": {
+    "label": "flood",
+    "scope": "harness-source",
+    "watch": [
+      "tests/fixtures/check-source.txt"
+    ],
+    "validation_scope": "E2E control fixture; no live model.",
+    "checks": [
+      {
+        "id": "check-1",
+        "label": "flood command 1",
+        "args": [
+          "tests/fixtures/check.mjs",
+          "flood"
+        ],
+        "timeoutMs": 10000
+      }
+    ]
+  },
+  "fixture.missing": {
+    "label": "missing",
+    "scope": "harness-source",
+    "watch": [
+      "tests/fixtures/check-source.txt"
+    ],
+    "validation_scope": "E2E control fixture; no live model.",
+    "checks": [
+      {
+        "id": "check-1",
+        "label": "pass command 1",
+        "args": [
+          "tests/fixtures/check.mjs",
+          "pass"
+        ],
+        "timeoutMs": 10000,
+        "requires": [
+          "tests/fixtures/does-not-exist"
+        ]
+      }
+    ]
+  }
+}

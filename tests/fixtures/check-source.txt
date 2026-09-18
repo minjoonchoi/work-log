@@ -1,0 +1,1 @@
+Source fingerprint fixture owned by checks.e2e; restored after each mutation scenario.

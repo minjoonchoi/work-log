@@ -1,0 +1,107 @@
+{
+  "harness.e2e": {
+    "label": "harness.e2e",
+    "scope": "harness-source",
+    "watch": [
+      "src",
+      "bin",
+      "harness",
+      "contracts",
+      "tests",
+      "apps",
+      "scripts",
+      "package.json",
+      "package-lock.json",
+      "playwright.config.mjs"
+    ],
+    "validation_scope": "실제 로컬 프로세스·SQLite·훅·브라우저 검사. 모델 응답은 fixture 또는 CLI 프로토콜 대역이며 실모델 품질·실제 사용자 훅 설치는 검증하지 않습니다.",
+    "checks": [
+      {
+        "id": "service-e2e",
+        "label": "서비스·CLI·설치 E2E",
+        "args": [
+          "--test",
+          "--test-concurrency=1"
+        ],
+        "test_directory": "tests/e2e",
+        "timeoutMs": 180000
+      },
+      {
+        "id": "gui-e2e",
+        "label": "브라우저 GUI E2E",
+        "args": [
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--reporter=json"
+        ],
+        "requires": [
+          "node_modules/@playwright/test/cli.js",
+          "tests/ui"
+        ],
+        "timeoutMs": 180000
+      }
+    ]
+  },
+  "harness.service-e2e": {
+    "label": "harness.service-e2e",
+    "scope": "harness-source",
+    "watch": [
+      "src",
+      "bin",
+      "harness",
+      "contracts",
+      "tests",
+      "apps",
+      "scripts",
+      "package.json",
+      "package-lock.json",
+      "playwright.config.mjs"
+    ],
+    "validation_scope": "실제 로컬 프로세스·SQLite·훅·브라우저 검사. 모델 응답은 fixture 또는 CLI 프로토콜 대역이며 실모델 품질·실제 사용자 훅 설치는 검증하지 않습니다.",
+    "checks": [
+      {
+        "id": "service-e2e",
+        "label": "서비스·CLI·설치 E2E",
+        "args": [
+          "--test",
+          "--test-concurrency=1"
+        ],
+        "test_directory": "tests/e2e",
+        "timeoutMs": 180000
+      }
+    ]
+  },
+  "harness.gui-e2e": {
+    "label": "harness.gui-e2e",
+    "scope": "harness-source",
+    "watch": [
+      "src",
+      "bin",
+      "harness",
+      "contracts",
+      "tests",
+      "apps",
+      "scripts",
+      "package.json",
+      "package-lock.json",
+      "playwright.config.mjs"
+    ],
+    "validation_scope": "실제 로컬 프로세스·SQLite·훅·브라우저 검사. 모델 응답은 fixture 또는 CLI 프로토콜 대역이며 실모델 품질·실제 사용자 훅 설치는 검증하지 않습니다.",
+    "checks": [
+      {
+        "id": "gui-e2e",
+        "label": "브라우저 GUI E2E",
+        "args": [
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--reporter=json"
+        ],
+        "requires": [
+          "node_modules/@playwright/test/cli.js",
+          "tests/ui"
+        ],
+        "timeoutMs": 180000
+      }
+    ]
+  }
+}

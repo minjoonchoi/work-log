@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "result"],
+  "properties": {
+    "status": { "type": "string", "enum": ["done", "revise", "blocked", "failed"] },
+    "result": {
+      "anyOf": [
+        { "type": "object", "additionalProperties": false, "required": ["file"], "properties": { "file": { "type": "string" } } },
+        { "type": "object", "additionalProperties": false, "required": ["evaluations"], "properties": { "evaluations": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["rule", "passed", "evidence"], "properties": { "rule": { "type": "string" }, "passed": { "type": "boolean" }, "evidence": { "type": "string" } } } } } },
+        { "type": "object", "additionalProperties": false, "required": ["issues"], "properties": { "issues": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["rule", "detail"], "properties": { "rule": { "type": "string" }, "detail": { "type": "string" } } } } } },
+        { "type": "object", "additionalProperties": false, "required": ["message"], "properties": { "message": { "type": "string" } } }
+      ]
+    }
+  }
+}

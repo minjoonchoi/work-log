@@ -1,0 +1,82 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mode",
+    "initial",
+    "max_steps",
+    "nodes"
+  ],
+  "properties": {
+    "mode": {
+      "enum": [
+        "artifact",
+        "checks",
+        "report"
+      ]
+    },
+    "initial": {
+      "type": "string",
+      "minLength": 1
+    },
+    "max_steps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "nodes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task",
+          "on"
+        ],
+        "properties": {
+          "task": {
+            "enum": [
+              "plan",
+              "produce",
+              "review",
+              "repair",
+              "verify",
+              "render"
+            ]
+          },
+          "budget": {
+            "const": "repairs"
+          },
+          "on": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "done",
+              "blocked",
+              "failed"
+            ],
+            "properties": {
+              "done": {
+                "type": "string",
+                "minLength": 1
+              },
+              "revise": {
+                "type": "string",
+                "minLength": 1
+              },
+              "blocked": {
+                "type": "string",
+                "minLength": 1
+              },
+              "failed": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

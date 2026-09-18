@@ -1,0 +1,30 @@
+{
+  "plan": {
+    "executor": "agent",
+    "writes_artifact": true,
+    "instruction": "요구사항을 실행 가능한 시나리오로 계획하세요. 실제 검사를 수행했다고 주장하지 마세요."
+  },
+  "produce": {
+    "executor": "agent",
+    "writes_artifact": true,
+    "instruction": "입력 자료와 요청 범위에 맞는 산출물을 작성하세요."
+  },
+  "review": {
+    "executor": "agent",
+    "writes_artifact": false,
+    "instruction": "독립 검토자로서 모든 등록 규칙을 산출물과 대조하고 위치와 근거를 제시하세요."
+  },
+  "repair": {
+    "executor": "agent",
+    "writes_artifact": true,
+    "instruction": "주어진 지적을 수정하고 기존 요구사항을 보존하세요."
+  },
+  "verify": {
+    "executor": "validator",
+    "writes_artifact": false
+  },
+  "render": {
+    "executor": "renderer",
+    "writes_artifact": true
+  }
+}

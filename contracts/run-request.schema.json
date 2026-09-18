@@ -1,0 +1,85 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [],
+  "properties": {
+    "prompt": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "input": {
+      "type": "object"
+    },
+    "internal": { "type": "boolean" },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "engine": {
+      "type": "string",
+      "enum": [
+        "codex",
+        "claude",
+        "fixture",
+        "local"
+      ]
+    },
+    "work_item_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine",
+        "agent_session_id",
+        "turn_id"
+      ],
+      "properties": {
+        "engine": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "agent_session_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "fixture": {
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "prompt": {}
+      }
+    },
+    {
+      "required": [
+        "task",
+        "input"
+      ],
+      "properties": {
+        "task": {},
+        "input": {}
+      }
+    }
+  ]
+}

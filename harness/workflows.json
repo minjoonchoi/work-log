@@ -1,0 +1,132 @@
+{
+  "create-reviewed": {
+    "mode": "artifact",
+    "initial": "produce",
+    "max_steps": 12,
+    "nodes": {
+      "produce": {
+        "task": "produce",
+        "on": {
+          "done": "verify",
+          "blocked": "$blocked",
+          "failed": "$failed"
+        }
+      },
+      "verify": {
+        "task": "verify",
+        "on": {
+          "done": "review",
+          "blocked": "$blocked",
+          "failed": "$failed",
+          "revise": "repair"
+        }
+      },
+      "review": {
+        "task": "review",
+        "on": {
+          "done": "render",
+          "blocked": "$blocked",
+          "failed": "$failed",
+          "revise": "repair"
+        }
+      },
+      "repair": {
+        "task": "repair",
+        "on": {
+          "done": "verify",
+          "blocked": "$blocked",
+          "failed": "$failed"
+        },
+        "budget": "repairs"
+      },
+      "render": {
+        "task": "render",
+        "on": {
+          "done": "$completed",
+          "blocked": "$blocked",
+          "failed": "$failed"
+        }
+      }
+    }
+  },
+  "plan-reviewed": {
+    "mode": "artifact",
+    "initial": "plan",
+    "max_steps": 12,
+    "nodes": {
+      "plan": {
+        "task": "plan",
+        "on": {
+          "done": "verify",
+          "blocked": "$blocked",
+          "failed": "$failed"
+        }
+      },
+      "verify": {
+        "task": "verify",
+        "on": {
+          "done": "review",
+          "blocked": "$blocked",
+          "failed": "$failed",
+          "revise": "repair"
+        }
+      },
+      "review": {
+        "task": "review",
+        "on": {
+          "done": "render",
+          "blocked": "$blocked",
+          "failed": "$failed",
+          "revise": "repair"
+        }
+      },
+      "repair": {
+        "task": "repair",
+        "on": {
+          "done": "verify",
+          "blocked": "$blocked",
+          "failed": "$failed"
+        },
+        "budget": "repairs"
+      },
+      "render": {
+        "task": "render",
+        "on": {
+          "done": "$completed",
+          "blocked": "$blocked",
+          "failed": "$failed"
+        }
+      }
+    }
+  },
+  "run-checks": {
+    "mode": "checks",
+    "initial": "verify",
+    "max_steps": 1,
+    "nodes": {
+      "verify": {
+        "task": "verify",
+        "on": {
+          "done": "$completed",
+          "blocked": "$blocked",
+          "failed": "$failed"
+        }
+      }
+    }
+  },
+  "evidence-report": {
+    "mode": "report",
+    "initial": "render",
+    "max_steps": 1,
+    "nodes": {
+      "render": {
+        "task": "render",
+        "on": {
+          "done": "$completed",
+          "blocked": "$blocked",
+          "failed": "$failed"
+        }
+      }
+    }
+  }
+}

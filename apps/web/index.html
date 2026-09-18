@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Work Log</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">w</span><div>Work Log<small>LOCAL AGENT HARNESS</small></div></div>
+    <div class="nav-label">WORKSPACE</div>
+    <nav aria-label="주 탐색"><button id="nav-items" class="active" aria-label="업무 목록"><span aria-hidden="true">▤</span> 업무 목록 <b id="item-count">0</b></button><button id="nav-calendar" aria-label="캘린더"><span aria-hidden="true">▦</span> 캘린더</button><button id="nav-waiting-user" aria-label="사용자 답변 필요"><span aria-hidden="true">?</span> 사용자 답변 필요</button><button id="nav-attention" aria-label="확인이 필요한 작업"><span aria-hidden="true">◷</span> 확인이 필요한 작업</button></nav>
+    <div class="sidebar-note"><span class="live-dot"></span> 이 컴퓨터에 보관됨<p>에이전트의 작업은 백그라운드에서 계속됩니다.</p></div>
+    <button id="settings" class="settings">⚙ 연결 설정</button>
+  </aside>
+  <main>
+    <header><div><div class="eyebrow" id="eyebrow">YOUR WORK, CONNECTED</div><h1 id="page-title">업무 목록</h1><p id="page-description">여러 에이전트의 작업과 대화를 한곳에서 이어 보세요.</p></div><span class="connection" id="connection" role="status">연결 중</span></header>
+    <div id="error" class="error" role="alert" hidden></div>
+    <section id="items-view">
+      <div class="toolbar"><div class="search-wrap"><span>⌕</span><input id="search" type="search" placeholder="업무 제목과 설명 검색" aria-label="업무 검색"></div><button id="refresh" class="secondary">새로고침</button><button id="merge" class="primary" disabled>선택한 업무 병합</button></div>
+      <div class="section-heading"><span id="list-label">모든 업무</span><span id="selection-label">업무를 선택해 이력을 확인하세요</span></div>
+      <div id="item-list" class="item-list" aria-label="업무 목록"></div>
+    </section>
+    <section id="calendar-view" hidden>
+      <div class="calendar-toolbar"><div class="date-navigation"><button id="previous" aria-label="이전 기간">‹</button><button id="today">오늘</button><button id="next" aria-label="다음 기간">›</button><input type="date" id="calendar-date" aria-label="캘린더 날짜"></div><div class="calendar-options"><select id="calendar-mode" aria-label="캘린더 표시 단위"><option value="sessions">세션 단위</option><option value="items">업무 단위</option></select><div class="segmented" role="group" aria-label="캘린더 보기"><button data-view="day">일</button><button data-view="week">주</button><button data-view="month" class="active">월</button></div></div></div>
+      <div class="section-heading"><strong id="calendar-title"></strong><span id="timezone-label"></span></div>
+      <div id="calendar" aria-label="작업 캘린더"></div>
+      <p class="calendar-note">관측된 입력부터 출력까지의 기록 구간입니다. 사람의 실작업 시간이나 모델 사용 시간을 뜻하지 않습니다.</p>
+    </section>
+  </main>
+  <aside id="detail" class="detail" aria-label="업무 상세" hidden></aside>
+  <dialog id="modal"><div id="modal-content"></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body></html>

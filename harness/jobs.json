@@ -1,0 +1,139 @@
+{
+  "version": "0.3.1",
+  "limits": {
+    "concurrency": 3,
+    "maxRepairs": 2,
+    "timeoutMs": 180000,
+    "maxOutputBytes": 4194304
+  },
+  "jobs": {
+    "prd.create": {
+      "label": "PRD 작성",
+      "file": "prd.md",
+      "kind": "document",
+      "requiredSections": [
+        "문제",
+        "요구사항",
+        "수용 기준"
+      ],
+      "rules": [
+        "REQ-001",
+        "PRD-AC-001"
+      ],
+      "persona": "요구사항과 관찰 가능한 수용 기준을 작성하는 제품 기획자",
+      "workflow": "create-reviewed",
+      "input_schema": "contracts/inputs/document.schema.json"
+    },
+    "mockup.html.create": {
+      "label": "HTML 목업",
+      "file": "mockup.html",
+      "kind": "html",
+      "requiredSections": [
+        "<!DOCTYPE html",
+        "<title",
+        "<body"
+      ],
+      "rules": [
+        "REQ-001",
+        "OUTPUT-001"
+      ],
+      "persona": "요청된 화면과 상호작용을 구현하는 프런트엔드 작성자",
+      "workflow": "create-reviewed",
+      "input_schema": "contracts/inputs/html.schema.json"
+    },
+    "entity.design": {
+      "label": "엔티티 설계",
+      "file": "entities.md",
+      "kind": "data_model",
+      "requiredSections": [
+        "엔티티",
+        "관계",
+        "불변식"
+      ],
+      "rules": [
+        "REQ-001",
+        "MODEL-001"
+      ],
+      "persona": "식별자, 관계, 생명주기를 명시하는 도메인 설계자",
+      "workflow": "create-reviewed",
+      "input_schema": "contracts/inputs/document.schema.json"
+    },
+    "text.generate": {
+      "label": "텍스트 작성",
+      "file": "result.md",
+      "kind": "document",
+      "requiredSections": [],
+      "rules": [
+        "REQ-001"
+      ],
+      "persona": "제공된 사실과 요청 형식을 따르는 작성자",
+      "workflow": "create-reviewed",
+      "input_schema": "contracts/inputs/document.schema.json"
+    },
+    "session.summarize": {
+      "allow_internal": true,
+      "label": "세션 대화 요약",
+      "file": "session-summary.txt",
+      "kind": "session_summary",
+      "requiredSections": [],
+      "rules": ["REQ-001", "SUMMARY-001"],
+      "persona": "원본 대화에서 확인된 작업과 결과만 요약하는 기록자. 첫 줄은 제목 1줄, 다음 1~5줄은 설명으로 작성한다. 빈 줄·마크다운 제목·목록·코드 블록 없이 하나의 일반 텍스트를 만든다. 수행되지 않은 작업을 완료했다고 쓰지 않고 미확인 결과는 미확인으로 표현한다.",
+      "workflow": "create-reviewed",
+      "input_schema": "contracts/inputs/session-summary.schema.json"
+    },
+    "text.rewrite": {
+      "label": "이력 기반 텍스트 재작성",
+      "allow_internal": true,
+      "file": "rewrite.json",
+      "kind": "text_rewrite",
+      "requiredSections": [],
+      "rules": ["REQ-001", "REWRITE-001"],
+      "persona": "고정된 세션 이력과 요약에 근거해 제목과 설명을 다시 작성하는 기록자. format=work-item-metadata이면 모든 제공 세션의 목표·진행·결과를 아우르는 제목 1줄과 간결한 설명을 작성한다. format=session-summary이면 해당 세션의 제목 1줄과 설명 1~5줄을 작성한다. title, description만 가진 JSON 파일을 반환한다. 설명 줄 구분은 JSON 문자열의 줄바꿈으로 표현한다. 세션 요약은 빈 줄·마크다운 제목·목록·코드 블록 없는 일반 텍스트이다. 원본 입출력이 요약보다 우선하며 요청을 완료 사실로 바꾸거나 누락된 출력을 만들어 내지 않는다.",
+      "workflow": "create-reviewed",
+      "input_schema": "contracts/inputs/text-rewrite.schema.json",
+      "artifact_schema": "contracts/text-rewrite.schema.json"
+    },
+    "test.scenarios.plan": {
+      "label": "E2E 시나리오 설계",
+      "workflow": "plan-reviewed",
+      "file": "scenarios.json",
+      "kind": "scenario_plan",
+      "requiredSections": [],
+      "rules": [
+        "REQ-001",
+        "SCENARIO-001"
+      ],
+      "persona": "요구사항을 관찰 가능한 E2E 시나리오로 구체화하는 검증 설계자",
+      "artifact_schema": "contracts/scenario-plan.schema.json",
+      "default_categories": [
+        "normal",
+        "failure",
+        "boundary",
+        "recovery"
+      ],
+      "input_schema": "contracts/inputs/scenarios.schema.json"
+    },
+    "checks.run": {
+      "label": "등록된 검사 실행",
+      "workflow": "run-checks",
+      "file": "checks.json",
+      "kind": "check_evidence",
+      "requiredSections": [],
+      "rules": [
+        "EVIDENCE-001"
+      ],
+      "input_schema": "contracts/inputs/checks.schema.json"
+    },
+    "verification.report": {
+      "label": "검사 근거 보고서",
+      "workflow": "evidence-report",
+      "file": "verification.md",
+      "kind": "document",
+      "requiredSections": [],
+      "rules": [
+        "EVIDENCE-001"
+      ],
+      "input_schema": "contracts/inputs/report.schema.json"
+    }
+  }
+}
