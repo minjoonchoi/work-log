@@ -43,7 +43,7 @@ do {
         if status == errSecItemNotFound {
             var create = query
             create[kSecValueData as String] = bytes
-            create[kSecAttrLabel as String] = "Work Log · Atlassian OAuth"
+            create[kSecAttrLabel as String] = "WorkLog · Atlassian OAuth"
             status = SecItemAdd(create as CFDictionary, nil)
         }
         respond(["ok": status == errSecSuccess, "status": status])

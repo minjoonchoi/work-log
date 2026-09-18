@@ -15,7 +15,7 @@ export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 export const json = value => JSON.stringify(value);
 export function fail(message, status = 400) { const e = new Error(message); e.status = status; throw e; }
 export function assert(condition, message, status = 400) { if (!condition) fail(message, status); }
-export function dataRoot(value) { return path.resolve(value || process.env.HARNESS_DATA_DIR || path.join(os.homedir(), 'Library/Application Support/WorkLogHarness')); }
+export function dataRoot(value) { return path.resolve(value || process.env.HARNESS_DATA_DIR || path.join(os.homedir(), 'Library/Application Support/WorkLog')); }
 export function atomic(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.${crypto.randomUUID()}.tmp`;

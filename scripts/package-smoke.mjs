@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { Harness, eventually } from '../tests/helpers.mjs';
 import { ROOT, atomic } from '../src/shared.mjs';
 
-const app = path.join(ROOT, 'dist/Work Log.app');
+const app = path.join(ROOT, 'dist/WorkLog.app');
 const h = new Harness(); h.executable = path.join(app, 'Contents/MacOS/node');
 h.serviceRoot = path.join(app, 'Contents/Resources/harness'); h.testMode = false;
 const report = { checked_at: new Date().toISOString(), app, checks: [] };

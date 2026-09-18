@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         let override = Bundle.main.object(forInfoDictionaryKey: "HarnessDataRoot") as? String
         let base = override ?? ProcessInfo.processInfo.environment["HARNESS_DATA_DIR"]
         return base.map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/WorkLogHarness")
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/WorkLog")
     }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         let submenu = NSMenu(); appRoot.submenu = submenu
         let quick = NSMenuItem(title: "빠른 패널 열기", action: #selector(showQuickMenu), keyEquivalent: "")
         quick.target = self; submenu.addItem(quick); submenu.addItem(.separator())
-        submenu.addItem(withTitle: "Work Log 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        submenu.addItem(withTitle: "WorkLog 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let editRoot = NSMenuItem(); appMenu.addItem(editRoot)
         let editMenu = NSMenu(title: "편집"); editRoot.submenu = editMenu
         editMenu.addItem(withTitle: "복사", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
@@ -41,11 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         NSApp.mainMenu = appMenu
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        let icon = NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: "Work Log")
+        let icon = NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: "WorkLog")
         icon?.isTemplate = true
         statusItem.button?.image = icon
-        statusItem.button?.setAccessibilityLabel("Work Log 빠른 패널")
-        statusItem.button?.toolTip = "Work Log · 로컬 에이전트 업무"
+        statusItem.button?.setAccessibilityLabel("WorkLog 빠른 패널")
+        statusItem.button?.toolTip = "WorkLog · 로컬 에이전트 업무"
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusClicked(_:))
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -57,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             item.representedObject = route; item.target = self; utilityMenu.addItem(item)
         }
         utilityMenu.addItem(.separator())
-        utilityMenu.addItem(withTitle: "Work Log 종료 (작업은 계속됨)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        utilityMenu.addItem(withTitle: "WorkLog 종료 (작업은 계속됨)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let viewRoot = NSMenuItem(); appMenu.addItem(viewRoot)
         let viewMenu = NSMenu(title: "보기"); viewRoot.submenu = viewMenu
         for item in utilityMenu.items where item.action == #selector(navigate(_:)) {
@@ -66,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 820),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "Work Log"
+        window.title = "WorkLog"
         window.appearance = NSAppearance(named: .aqua)
         window.minSize = NSSize(width: 920, height: 660)
         window.isReleasedWhenClosed = false
@@ -140,7 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         view.navigationDelegate = self
         return view
     }
-    let offlineHTML = "<html lang='ko'><meta name='viewport' content='width=device-width, initial-scale=1'><body style='font-family:-apple-system;padding:28px;color:#171717;background:#fafafa;color-scheme:light'><h1 style='font-size:22px;color:#2563eb'>Work Log</h1><h2 style='font-size:16px'>서비스 연결을 기다리고 있습니다.</h2><p style='font-size:13px;line-height:1.7;color:#737373'>로컬 서비스에 연결되면 현재 작업과 업무 이력이 표시됩니다. 자동으로 다시 확인합니다.</p></body></html>"
+    let offlineHTML = "<html lang='ko'><meta name='viewport' content='width=device-width, initial-scale=1'><body style='font-family:-apple-system;padding:28px;color:#171717;background:#fafafa;color-scheme:light'><h1 style='font-size:22px;color:#2563eb'>WorkLog</h1><h2 style='font-size:16px'>서비스 연결을 기다리고 있습니다.</h2><p style='font-size:13px;line-height:1.7;color:#737373'>로컬 서비스에 연결되면 현재 작업과 업무 이력이 표시됩니다. 자동으로 다시 확인합니다.</p></body></html>"
     func loadMain() {
         mainReady = false
         let view = makeWebView(frame: window.contentView!.bounds, quick: false)
@@ -156,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
               let rawToken = try? String(contentsOf: dataRoot.appendingPathComponent("token"), encoding: .utf8) else {
             connectionItem.title = "관리 서비스 연결 대기"
             statusItem.button?.title = ""
-            statusItem.button?.toolTip = "Work Log · 관리 서비스 연결 대기"
+            statusItem.button?.toolTip = "WorkLog · 관리 서비스 연결 대기"
             if quickWebView == nil {
                 let view = makeWebView(frame: quickController.view.bounds, quick: true)
                 quickWebView = view; quickController.view = view
@@ -184,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                 guard error == nil, (response as? HTTPURLResponse)?.statusCode == 200, let overview = overview else {
                     self.connectionItem.title = "관리 서비스 연결 끊김"
                     self.statusItem.button?.title = ""
-                    self.statusItem.button?.toolTip = "Work Log · 관리 서비스 연결 끊김"
+                    self.statusItem.button?.toolTip = "WorkLog · 관리 서비스 연결 끊김"
                     return
                 }
                 let counts = overview["counts"] as? [String: Any] ?? [:]
@@ -193,7 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                 self.connectionItem.title = health["runtime_connected"] as? Bool == true ? "실행·관리 서비스 연결됨" : "관리 연결됨 · 실행 상태 확인 중"
                 self.statusItem.button?.title = current > 0 ? " \(current)" : ""
                 let waiting = counts["waiting"] as? Int ?? 0
-                self.statusItem.button?.toolTip = "Work Log · 현재 \(current)개 · 사용자 답변 \(waiting)개 · 확인 필요 \(attention)개 · \(self.connectionItem.title)"
+                self.statusItem.button?.toolTip = "WorkLog · 현재 \(current)개 · 사용자 답변 \(waiting)개 · 확인 필요 \(attention)개 · \(self.connectionItem.title)"
             }
         }
         connectionTask?.resume()

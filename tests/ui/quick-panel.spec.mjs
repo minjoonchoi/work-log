@@ -35,7 +35,7 @@ test('compact panel shows bounded groups and opens exact item or full-window des
   expect(await page.locator('.quick-content').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
   await page.locator('[data-item=c0]').click();
   await page.locator('[data-group=current] .quick-more').click();
-  for (const title of ['오늘 캘린더', '연결 설정', 'Work Log 전체 창 열기']) await page.getByRole('button', { name: title, exact: true }).click();
+  for (const title of ['오늘 캘린더', '연결 설정', 'WorkLog 전체 창 열기']) await page.getByRole('button', { name: title, exact: true }).click();
   expect(await page.evaluate(() => window.nativeRoutes)).toEqual([{ view: 'items', item_id: 'c0' }, { view: 'current' }, { view: 'calendar' }, { view: 'settings' }, { view: 'items' }]);
   expect(writes).toEqual([]);
 });

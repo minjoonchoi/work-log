@@ -9,8 +9,8 @@ const quote = s => `'${s.replaceAll("'", "'\\''")}'`;
 const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const plist = object => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>${Object.entries(object).map(([k, v]) => `<key>${xml(k)}</key>${typeof v === 'boolean' ? `<${v}/>` : Array.isArray(v) ? `<array>${v.map(s => `<string>${xml(s)}</string>`).join('')}</array>` : typeof v === 'object' ? `<dict>${Object.entries(v).map(([a, b]) => `<key>${xml(a)}</key><string>${xml(b)}</string>`).join('')}</dict>` : `<string>${xml(v)}</string>`}`).join('')}</dict></plist>`;
 
-export function prepareInstall({ output, homeDir = os.homedir(), sourceApp = fs.existsSync(path.join(ROOT, 'dist/Work Log.app')) ? path.join(ROOT, 'dist/Work Log.app') : path.resolve(ROOT, '../../..') }) {
-  const targetApp = path.join(homeDir, 'Applications/Work Log.app'), dataDir = path.join(homeDir, 'Library/Application Support/WorkLogHarness');
+export function prepareInstall({ output, homeDir = os.homedir(), sourceApp = fs.existsSync(path.join(ROOT, 'dist/WorkLog.app')) ? path.join(ROOT, 'dist/WorkLog.app') : path.resolve(ROOT, '../../..') }) {
+  const targetApp = path.join(homeDir, 'Applications/WorkLog.app'), dataDir = path.join(homeDir, 'Library/Application Support/WorkLog');
   const version = `0.3.1-${digest(fs.readFileSync(path.join(ROOT, 'harness/jobs.json'))).slice(0, 12)}`;
   const runtimeRoot = path.join(dataDir, 'versions', version), node = path.join(runtimeRoot, 'node'), harness = path.join(runtimeRoot, 'harness');
   const files = [];
@@ -42,7 +42,7 @@ export function prepareInstall({ output, homeDir = os.homedir(), sourceApp = fs.
 export function applyInstall(plan, { homeDir = os.homedir(), activate = true } = {}) {
   // Intentional first-install boundary: never overwrite an existing app or LaunchAgent blindly.
   assert(!fs.existsSync(plan.targetApp), '이미 설치된 앱이 있습니다. 실행 중 버전 보존을 위한 업데이트 절차가 필요합니다.');
-  assert(plan.files.every(f => !fs.existsSync(f.target)), '기존 Work Log LaunchAgent가 있습니다. 설치를 중단했습니다.');
+  assert(plan.files.every(f => !fs.existsSync(f.target)), '기존 WorkLog LaunchAgent가 있습니다. 설치를 중단했습니다.');
   assert(fs.existsSync(path.join(plan.sourceApp, 'Contents/MacOS/node')), '먼저 macOS 앱을 빌드하세요.');
   const replacements = [];
   for (const engine of ['codex', 'claude']) {

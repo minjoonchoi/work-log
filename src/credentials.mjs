@@ -51,7 +51,7 @@ export class OnePasswordCredentials {
 
 export class KeychainTokens {
   constructor(dir, binary) {
-    this.binary = binary || process.env.HARNESS_KEYCHAIN_BIN || [path.join(ROOT, '../WorkLogKeychain'), path.join(ROOT, '../../MacOS/WorkLogKeychain'), path.join(ROOT, 'dist/Work Log.app/Contents/MacOS/WorkLogKeychain')].find(p => fs.existsSync(p));
+    this.binary = binary || process.env.HARNESS_KEYCHAIN_BIN || [path.join(ROOT, '../WorkLogKeychain'), path.join(ROOT, '../../MacOS/WorkLogKeychain'), path.join(ROOT, 'dist/WorkLog.app/Contents/MacOS/WorkLogKeychain')].find(p => fs.existsSync(p));
     this.account = `oauth-${digest(path.resolve(dir)).slice(0, 24)}`;
   }
   async command(operation, value) {

@@ -1,4 +1,4 @@
-# Work Log Harness · 0.3.1
+# WorkLog · 0.3.1
 
 macOS 메뉴 막대에서 에이전트 업무, 프롬프트 입출력 이력, 시간별 세션을 탐색하는 로컬 하네스의 첫 구현입니다. **수행 규칙·작업 실행·모니터링 관리를 분리**했습니다. GUI 없이 CLI에서 작업을 실행할 수 있으며, GUI와 관리 서비스가 종료되어도 실행 서비스는 작업을 계속합니다.
 
@@ -75,6 +75,8 @@ npm run verify:self
 
 macOS Apple Silicon, Node.js 22.17 이상, GUI 빌드에는 Xcode의 Swift 컴파일러가 필요합니다. 브라우저 검증과 GUI E2E는 설치된 Google Chrome을 기본으로 사용합니다. `HARNESS_BROWSER`로 다른 Chromium 실행 파일을 지정할 수 있습니다.
 
+기본 데이터 경로는 `~/Library/Application Support/WorkLog/`입니다. 서비스·GUI·훅이 같은 경로를 사용하며 `HARNESS_DATA_DIR`로 별도 경로를 지정할 수 있습니다.
+
 ```sh
 npm ci
 node bin/harness.mjs doctor
@@ -82,7 +84,7 @@ HARNESS_DATA_DIR="$PWD/.data" node bin/harness.mjs start
 HARNESS_GUI_DATA_DIR="$PWD/.data" npm run build:mac
 ```
 
-이후 Finder에서 `dist/Work Log.app`을 엽니다. `start`는 현재 사용자 설정이나 LaunchAgent를 변경하지 않고 지정한 데이터 디렉터리에서 두 서비스를 시작합니다. 테스트용 데이터는 실제 업무 데이터와 분리하세요.
+이후 Finder에서 `dist/WorkLog.app`을 엽니다. `start`는 현재 사용자 설정이나 LaunchAgent를 변경하지 않고 지정한 데이터 디렉터리에서 두 서비스를 시작합니다. 테스트용 데이터는 실제 업무 데이터와 분리하세요.
 
 이미 설치·인증한 엔진으로 실제 작업을 실행하는 명령입니다. 모델 사용량이 발생할 수 있습니다.
 
@@ -116,13 +118,13 @@ node bin/harness.mjs install-plan --output dist/install-plan
 
 `HARNESS_GUI_DATA_DIR` 없이 빌드하면 일반 사용자 데이터 경로를 사용하는 배포용 앱을 만듭니다. 기본 Node 번들은 `~/.nvm/versions/node/v22.17.0/bin/node`입니다. 없으면 독립 배포 가능한 Node 실행 파일을 `HARNESS_BUNDLE_NODE`로 지정하세요. Homebrew 동적 라이브러리에 의존하는 바이너리는 거부합니다.
 
-결과는 `dist/Work Log.app`과 `dist/WorkLog-macos-arm64.zip`입니다. ZIP에는 앱과 `Install Work Log.command`가 들어 있습니다. 개발용 ad-hoc 서명이며 Apple 공증은 적용하지 않았습니다.
+결과는 `dist/WorkLog.app`과 `dist/WorkLog-macos-arm64.zip`입니다. ZIP에는 앱과 `Install WorkLog.command`가 들어 있습니다. 개발용 ad-hoc 서명이며 Apple 공증은 적용하지 않았습니다.
 
 **설치 계획 생성은 사용자 설정을 변경하지 않습니다.** 실제 설치는 ZIP의 설치 명령을 사용하거나 `node scripts/install.mjs --apply`를 명시해 수행합니다. 다음 변경을 만듭니다.
 
-- `~/Applications/Work Log.app`
+- `~/Applications/WorkLog.app`
 - 사용자 LaunchAgent 3개: 실행 서비스, 관리 서비스, 로그인 시 GUI 시작.
-- `~/Library/Application Support/WorkLogHarness/versions/…`에 버전을 고정한 실행 파일.
+- `~/Library/Application Support/WorkLog/versions/…`에 버전을 고정한 실행 파일.
 - 기존 항목을 보존하는 `~/.codex/hooks.json`, `~/.claude/settings.json`의 수집 훅 추가와 설정 백업.
 
 사내 정책에서 해당 훅·실행 엔진을 허용해야 합니다. 설치는 정책의 비활성화 설정을 해제하지 않습니다. 기존 설치가 있으면 덮어쓰지 않고 중단합니다. 자동 업데이트·공증·제거 프로그램은 후속 범위입니다. 현재 워크스페이스에서는 실제 사용자 훅·LaunchAgent 설치를 수행하지 않았습니다.

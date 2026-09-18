@@ -28,7 +28,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     modal(`<h2>연결 설정</h2><p>1Password에 보관된 OAuth 앱으로 Jira와 Confluence를 연결합니다.</p>
       <div id="dialog-error" class="error" role="alert" hidden></div>
       <label for="op-vault">1Password vault 이름</label><input id="op-vault" maxlength="200" autocomplete="off" value="${esc(s.config?.vault || '')}" placeholder="예: Engineering">
-      <label for="op-item">1Password item 이름</label><input id="op-item" maxlength="200" autocomplete="off" value="${esc(s.config?.item || '')}" placeholder="예: Work Log Atlassian OAuth">
+      <label for="op-item">1Password item 이름</label><input id="op-item" maxlength="200" autocomplete="off" value="${esc(s.config?.item || '')}" placeholder="예: WorkLog Atlassian OAuth">
       <p class="help">item의 필드 이름은 <code>client_id</code>, <code>client_secret</code>입니다. 설정에는 vault와 item 이름만 저장합니다.</p>
       <label for="oauth-callback">OAuth 앱의 Callback URL</label><input id="oauth-callback" readonly value="${esc(s.callback_url)}">
       <p class="help">Jira 읽기·쓰기, Confluence 페이지 읽기와 offline_access 권한을 사용합니다. 연결은 기본 브라우저에서 진행됩니다.</p>

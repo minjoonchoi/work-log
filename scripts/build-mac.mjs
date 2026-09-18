@@ -5,11 +5,11 @@ import { spawnSync } from 'node:child_process';
 import { ROOT, assert, atomic, json } from '../src/shared.mjs';
 
 function run(command, args) { const result = spawnSync(command, args, { stdio: 'inherit' }); assert(result.status === 0, `${command} 실패`); }
-const app = path.join(ROOT, 'dist/Work Log.app'), contents = path.join(app, 'Contents'), resources = path.join(contents, 'Resources');
+const app = path.join(ROOT, 'dist/WorkLog.app'), contents = path.join(app, 'Contents'), resources = path.join(contents, 'Resources');
 fs.mkdirSync(path.join(contents, 'MacOS'), { recursive: true }); fs.mkdirSync(resources, { recursive: true });
 const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const plist = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>local.worklog.harness</string><key>CFBundleName</key><string>Work Log</string><key>CFBundleDisplayName</key><string>Work Log</string>
+<key>CFBundleIdentifier</key><string>local.worklog.harness</string><key>CFBundleName</key><string>WorkLog</string><key>CFBundleDisplayName</key><string>WorkLog</string>
 <key>CFBundleExecutable</key><string>WorkLog</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>4</string><key>CFBundleShortVersionString</key><string>0.3.1</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string><key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
@@ -37,9 +37,9 @@ run('codesign', ['--force', '--deep', '--sign', '-', app]);
 run('codesign', ['--verify', '--deep', '--strict', app]);
 const packageDir = path.join(ROOT, 'dist/package/WorkLog');
 fs.rmSync(packageDir, { recursive: true, force: true }); fs.mkdirSync(packageDir, { recursive: true });
-fs.cpSync(app, path.join(packageDir, 'Work Log.app'), { recursive: true });
-atomic(path.join(packageDir, 'Install Work Log.command'), '#!/bin/zsh\nset -eu\nPACKAGE_DIR="${0:A:h}"\n"$PACKAGE_DIR/Work Log.app/Contents/MacOS/node" "$PACKAGE_DIR/Work Log.app/Contents/Resources/harness/scripts/install.mjs" --apply\n');
-fs.chmodSync(path.join(packageDir, 'Install Work Log.command'), 0o755);
-atomic(path.join(packageDir, 'INSTALL.txt'), 'Work Log 0.3.1 · macOS Apple Silicon\n\nInstall Work Log.command 실행 시 ~/Applications 앱, 사용자 LaunchAgent 3개, Claude/Codex 기록 훅을 설치합니다. 기존 훅을 보존하고 설정 백업을 남깁니다.\n먼저 사내 허용 정책을 확인하세요. 기존 설치는 덮어쓰지 않습니다.\n이 빌드는 개발용 ad-hoc 서명이며 공증되지 않았습니다.\n');
+fs.cpSync(app, path.join(packageDir, 'WorkLog.app'), { recursive: true });
+atomic(path.join(packageDir, 'Install WorkLog.command'), '#!/bin/zsh\nset -eu\nPACKAGE_DIR="${0:A:h}"\n"$PACKAGE_DIR/WorkLog.app/Contents/MacOS/node" "$PACKAGE_DIR/WorkLog.app/Contents/Resources/harness/scripts/install.mjs" --apply\n');
+fs.chmodSync(path.join(packageDir, 'Install WorkLog.command'), 0o755);
+atomic(path.join(packageDir, 'INSTALL.txt'), 'WorkLog 0.3.1 · macOS Apple Silicon\n\nInstall WorkLog.command 실행 시 ~/Applications 앱, 사용자 LaunchAgent 3개, Claude/Codex 기록 훅을 설치합니다. 기존 훅을 보존하고 설정 백업을 남깁니다.\n먼저 사내 허용 정책을 확인하세요. 기존 설치는 덮어쓰지 않습니다.\n이 빌드는 개발용 ad-hoc 서명이며 공증되지 않았습니다.\n');
 run('ditto', ['-c', '-k', '--keepParent', packageDir, path.join(ROOT, 'dist/WorkLog-macos-arm64.zip')]);
 console.log(json({ app, archive: path.join(ROOT, 'dist/WorkLog-macos-arm64.zip'), signing: 'local ad-hoc; not notarized', test_data_root: process.env.HARNESS_GUI_DATA_DIR || null }));

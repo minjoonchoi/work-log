@@ -98,7 +98,7 @@ export class AtlassianClient {
         const response = await this.tokenRequest({ grant_type: 'authorization_code', ...flow.credentials, code, redirect_uri: flow.callback });
         await this.saveTokens(response, flow.config, flow.credentials.client_id);
       });
-      this.flowError = null; res.end('Atlassian 연결이 완료되었습니다. Work Log로 돌아가세요.');
+      this.flowError = null; res.end('Atlassian 연결이 완료되었습니다. WorkLog로 돌아가세요.');
     } catch (e) {
       this.flowError = e.message;
       res.statusCode = e.status || 502; res.end(e.message);

@@ -17,7 +17,7 @@ function dayStart(date) { return new Date(date.getFullYear(), date.getMonth(), d
 function addDays(date, days) { const d = new Date(date); d.setDate(d.getDate() + days); return d; }
 async function api(url, options = {}) {
   const token = window.__HARNESS_TOKEN__;
-  if (!token) throw new Error('앱 연결 정보가 없습니다. 설치된 Work Log 앱으로 열어 주세요.');
+  if (!token) throw new Error('앱 연결 정보가 없습니다. 설치된 WorkLog 앱으로 열어 주세요.');
   const response = await fetch(`/api${url}`, { ...options, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     ...(options.body ? { body: JSON.stringify(options.body) } : {}) });
   const result = await response.json();
