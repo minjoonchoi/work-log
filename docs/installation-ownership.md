@@ -4,15 +4,15 @@
 
 ## 단일 요청 스킬
 
-`skills/worklog-request/SKILL.md` 하나를 배포한다. 이 스킬은 사용자의 원하는 결과·자료·제약을 `prompt`로 요청한다. 내부 task 선택, 입력 스키마 정규화, `codex exec`/`claude -p` 실행과 검증·수정은 하네스가 담당한다. 업무별 스킬, 별도 페르소나 카탈로그, 스킬 자체의 작업 분해 루프를 만들지 않는다. 현재 분류는 `src/intake.mjs`의 제한된 규칙이며 다중 산출물 요청은 아직 지원하지 않는다.
+`skills/work/SKILL.md` 하나를 배포한다. 이 스킬은 사용자의 원하는 결과·자료·제약을 `prompt`로 요청한다. 내부 task 선택, 입력 스키마 정규화, `codex exec`/`claude -p` 실행과 검증·수정은 하네스가 담당한다. 업무별 스킬, 별도 페르소나 카탈로그, 스킬 자체의 작업 분해 루프를 만들지 않는다. 현재 분류는 `src/intake.mjs`의 제한된 규칙이며 다중 산출물 요청은 아직 지원하지 않는다.
 
 설치된 스킬의 `scripts/harness`는 해당 설치의 Node·CLI·데이터 디렉터리에 고정된 실행 도우미다. 경로는 셸 인자로 인용하고 프롬프트는 JSON 파일로 전달한다. 내부 worker의 재귀 제출은 기존 CLI 경계로 차단한다. 설치가 유료 모델 사용이나 Jira 등의 외부 쓰기를 자동 승인하지 않는다.
 
 | 연결 | 용도 |
 |---|---|
-| `~/.claude/skills/worklog-request` | Claude 개인 스킬 |
-| `~/.agents/skills/worklog-request` | Codex 공식 개인 스킬 탐색 |
-| `~/.codex/worklog/skills/worklog-request` | 같은 원본을 가리키는 Codex 설정 디렉터리의 참조 |
+| `~/.claude/skills/work` | Claude 개인 스킬 |
+| `~/.agents/skills/work` | Codex 공식 개인 스킬 탐색 |
+| `~/.codex/worklog/skills/work` | 같은 원본을 가리키는 Codex 설정 디렉터리의 참조 |
 
 세 연결은 설치 버전의 같은 스킬 디렉터리를 가리킨다. 기존 `CLAUDE.md`·`AGENTS.md`는 수정하지 않는다. 경로 선택은 [Codex 공식 스킬 문서](https://learn.chatgpt.com/docs/build-skills)와 [Claude 공식 스킬 문서](https://code.claude.com/docs/en/skills)를 따른다. 조직 정책이나 도구 환경이 스킬 로딩을 제한하면 자동 활성화를 가정하지 않는다.
 

@@ -45,7 +45,7 @@ test('install plan, owned installation, and reinstall preserve user instructions
   const f = setup(t);
   assert.equal(present(f.plan.targetApp), false); assert.deepEqual(f.read('codex'), f.config);
   const result = f.install(); assert.equal(result.activated, false);
-  assert.equal(f.plan.skills.join(), 'worklog-request');
+  assert.equal(f.plan.skills.join(), 'work');
   for (const engine of ['codex', 'claude']) {
     const after = f.read(engine);
     assert.equal(after.model, 'preserve-me'); assert.equal(after.disableAllHooks, true); assert.deepEqual(after.hooks.Stop[0], f.config.hooks.Stop[0]);
@@ -56,7 +56,7 @@ test('install plan, owned installation, and reinstall preserve user instructions
   assert.equal(f.plan.files.length, 3); assert.equal(f.plan.links.length, 3);
   for (const link of f.plan.links) {
     assert.equal(fs.readlinkSync(link.target), link.source);
-    assert.match(fs.readFileSync(path.join(link.target, 'SKILL.md'), 'utf8'), /name: worklog-request/);
+    assert.match(fs.readFileSync(path.join(link.target, 'SKILL.md'), 'utf8'), /name: work/);
   }
   assert.equal(f.plan.hooks.claude.hooks.PostToolUseFailure.length, 1);
   assert.equal(f.plan.hooks.codex.hooks.PostToolUseFailure, undefined);
@@ -129,7 +129,7 @@ test('uninstall never follows a replaced config file or parent directory symlink
   fs.renameSync(skills, originalSkills); fs.symlinkSync(originalSkills, skills);
   assert.equal(f.uninstall().status, 'needs_attention');
   assert.equal(fs.readFileSync(outside, 'utf8'), JSON.stringify({ keep: true }));
-  assert.ok(present(path.join(originalSkills, 'worklog-request')));
+  assert.ok(present(path.join(originalSkills, 'work')));
 });
 
 test('changed app files and new runtime files preserve complete installation trees', t => {

@@ -16,7 +16,8 @@ h.serviceRoot = path.join(plan.runtimeRoot, 'harness'); h.testMode = false;
 const report = { checked_at: new Date().toISOString(), app, checks: [] };
 try {
   const installed = applyInstall(plan, { activate: false }); assert.equal(installed.status, 'installed');
-  assert.deepEqual(plan.skills, ['worklog-request']);
+  assert.deepEqual(plan.skills, ['work']);
+  assert.deepEqual(fs.readdirSync(path.join(app, 'Contents/Resources/harness/skills')), ['work']);
   for (const link of plan.links) assert.equal(fs.readlinkSync(link.target), link.source);
   const helper = spawnSync(path.join(plan.links[0].target, 'scripts/harness'), [], { encoding: 'utf8' });
   assert.equal(helper.status, 0, helper.stderr); assert.ok(JSON.parse(helper.stdout).usage);

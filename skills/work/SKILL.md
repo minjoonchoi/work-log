@@ -1,5 +1,5 @@
 ---
-name: worklog-request
+name: work
 description: Submit a user's requested work to the installed WorkLog harness and return the verified result. Use when the user asks WorkLog to carry out a task, or delegates an artifact request through WorkLog. The harness classifies the work and dispatches headless workers; this skill does not select task types or create its own orchestration loop.
 ---
 

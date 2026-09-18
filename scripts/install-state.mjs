@@ -61,7 +61,7 @@ export function readManifest(loc) {
   assert(typeof m.version === 'string' && /^\d+\.\d+\.\d+-[a-f0-9]{12}$/.test(m.version), '설치 버전 형식이 잘못되었습니다.');
   const runtime = path.join(loc.data, 'versions', m.version);
   assert(Array.isArray(m.skills) && m.skills.length > 0 && new Set(m.skills).size === m.skills.length
-    && m.skills.every(s => s === 'worklog-request'), '요청 스킬 목록이 잘못되었습니다.');
+    && m.skills.every(s => s === 'work'), '요청 스킬 목록이 잘못되었습니다.');
   assert(Array.isArray(m.trees) && m.trees.length === 2 && m.trees[0].path === loc.app && m.trees[1].path === runtime, '설치 파일의 허용 경로가 다릅니다.');
   for (const tree of m.trees) {
     assert(Array.isArray(tree.entries), '설치 파일 목록이 없습니다.');

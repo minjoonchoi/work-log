@@ -135,7 +135,7 @@ node bin/harness.mjs install-plan --output dist/install-plan
 - 사용자 LaunchAgent 3개: 실행 서비스, 관리 서비스, 로그인 시 GUI 시작.
 - `~/Library/Application Support/WorkLog/versions/…`에 버전을 고정한 실행 파일.
 - 기존 항목을 보존하는 `~/.codex/hooks.json`, `~/.claude/settings.json`의 수집 훅 추가와 설정 백업.
-- 요청 접수용 `worklog-request` 스킬 하나의 심링크: `~/.claude/skills/worklog-request`, `~/.agents/skills/worklog-request`, `~/.codex/worklog/skills/worklog-request`. Codex의 공식 자동 탐색은 `.agents/skills`를 사용하며 `.codex/worklog`는 같은 설치 원본의 참조 경로입니다. 기존 `CLAUDE.md`·`AGENTS.md`를 수정하지 않습니다.
+- 요청 접수용 `work` 스킬 하나의 심링크: `~/.claude/skills/work`, `~/.agents/skills/work`, `~/.codex/worklog/skills/work`. Codex의 공식 자동 탐색은 `.agents/skills`를 사용하며 `.codex/worklog`는 같은 설치 원본의 참조 경로입니다. 기존 `CLAUDE.md`·`AGENTS.md`를 수정하지 않습니다.
 
 스킬은 사용자 요청과 자료를 자연어 `prompt`로 전달합니다. 업무 유형 분류·구조화·헤드리스 작업자 위임·검토 루프는 하네스가 담당하며 업무마다 스킬을 만들지 않습니다. 현재 분류는 제한된 규칙 방식이고 요청당 한 종류의 산출물을 지원합니다.
 

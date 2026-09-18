@@ -6,6 +6,7 @@ import { ROOT, assert, atomic, json } from '../src/shared.mjs';
 
 function run(command, args) { const result = spawnSync(command, args, { stdio: 'inherit' }); assert(result.status === 0, `${command} 실패`); }
 const app = path.join(ROOT, 'dist/WorkLog.app'), contents = path.join(app, 'Contents'), resources = path.join(contents, 'Resources');
+fs.rmSync(app, { recursive: true, force: true });
 fs.mkdirSync(path.join(contents, 'MacOS'), { recursive: true }); fs.mkdirSync(resources, { recursive: true });
 const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const plist = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>

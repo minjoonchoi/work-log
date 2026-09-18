@@ -14,7 +14,7 @@ const plist = object => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist P
 
 export function prepareInstall({ output, homeDir = os.homedir(), sourceApp = fs.existsSync(path.join(ROOT, 'dist/WorkLog.app')) ? path.join(ROOT, 'dist/WorkLog.app') : path.resolve(ROOT, '../../..') }) {
   const loc = locations(homeDir), installationId = crypto.randomUUID();
-  const skills = ['worklog-request'];
+  const skills = ['work'];
   const version = `0.3.1-${digest(fs.readFileSync(path.join(ROOT, 'harness/jobs.json'))).slice(0, 12)}`;
   const runtimeRoot = path.join(loc.data, 'versions', version), node = path.join(runtimeRoot, 'node'), harness = path.join(runtimeRoot, 'harness');
   const files = [];
