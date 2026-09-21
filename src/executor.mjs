@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runProcess } from './process-runner.mjs';
 import { ROOT, atomic, assert, json, redact, redactValue } from './shared.mjs';
+import { assertModelSelection } from './model-capabilities.mjs';
 const versions = new Map();
 
 function errorMessage(value) {
@@ -28,7 +29,7 @@ export function commandFor(engine, context) {
   const { cwd, schemaPath, outputPath, stage, execution } = context;
   if (['codex', 'claude'].includes(engine)) {
     assert(execution && typeof execution.model === 'string' && execution.model.trim(), `${engine} 모델 설정이 필요합니다.`);
-    assert(typeof execution.effort === 'string' && execution.effort.trim(), `${engine} effort 설정이 필요합니다.`);
+    assertModelSelection(engine, execution);
   }
   if (engine === 'codex') return {
     command: process.env.HARNESS_CODEX_BIN || 'codex', args: ['exec', '--json', '--model', execution.model,
@@ -36,7 +37,7 @@ export function commandFor(engine, context) {
       '--output-schema', schemaPath, '-o', outputPath, '-C', cwd, '--skip-git-repo-check', '-']
   };
   if (engine === 'claude') return {
-    command: process.env.HARNESS_CLAUDE_BIN || 'claude', args: ['-p', '--model', execution.model, '--effort', execution.effort,
+    command: process.env.HARNESS_CLAUDE_BIN || 'claude', args: ['-p', '--model', execution.model, ...(execution.effort == null ? [] : ['--effort', execution.effort]),
       '--output-format', 'json', '--json-schema', fs.readFileSync(schemaPath, 'utf8'),
       '--allow-dangerously-skip-permissions', '--permission-mode', 'bypassPermissions',
       '--tools', stage === 'review' ? 'Read' : 'Read,Write,Edit,Bash', '--no-session-persistence']

@@ -104,7 +104,7 @@ else console.log(JSON.stringify({ is_error: false, structured_output: result }))
       const attemptDir = path.join(dir, `${engine}-${stage}`), cwd = path.join(attemptDir, 'work');
       fs.mkdirSync(cwd, { recursive: true });
       const result = await execute({ engine, stage, attemptDir, cwd, dataDir, prompt: 'protocol input',
-        parent: { task_id: `${engine}-${stage}` }, execution: { model: 'fixture-model', effort: 'low' },
+        parent: { task_id: `${engine}-${stage}` }, execution: { model: engine === 'codex' ? 'gpt-5.6-luna' : 'sonnet', effort: 'low' },
         limits: { timeoutMs: 3000, maxOutputBytes: 100000 } }).promise;
       assert.equal(result.ok, true, JSON.stringify(result.observation));
     }

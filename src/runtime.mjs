@@ -9,6 +9,7 @@ import { validateSchema, canonicalJson } from './schema.mjs';
 import { nextStep } from './workflow.mjs';
 import { resolveTask } from './intake.mjs';
 import { executionSettings } from './execution-settings.mjs';
+import { assertModelSelection } from './model-capabilities.mjs';
 import { planOrchestrator } from './plans.mjs';
 import { validateCodeInput } from './code-bundle.mjs';
 import { compileReview, reviewPolicy } from './review-policy.mjs';
@@ -17,7 +18,8 @@ import { normalizeWorkspace, snapshotInputFiles, executionInputDigest, materiali
 const dir = dataRoot(); lockService(dir, 'runtime');
 const { definitions, rules, responseSchema, taskTypes, workflows, profiles, executionProfiles, runSchema, requestSchema } = loadCatalog();
 const settings = executionSettings({ dir, jobs: definitions.jobs, workflows, profiles: executionProfiles });
-const runtimeDigest = digest([...['runtime', 'plans', 'review-policy', 'code-bundle', 'artifact-handoff', 'executor', 'execution-settings', 'task-instruction', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite', 'work-report'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
+const runtimeDigest = digest([...['runtime', 'plans', 'review-policy', 'code-bundle', 'artifact-handoff', 'executor', 'execution-settings', 'model-capabilities', 'task-instruction', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite', 'work-report'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
+  fs.readFileSync(path.join(ROOT, 'harness/model-capabilities.json'), 'utf8'),
   fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8')].join('\n'));
 const db = database(path.join(dir, 'runtime.sqlite'), `
  CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, request TEXT NOT NULL, definition TEXT NOT NULL,
@@ -83,6 +85,11 @@ function prepare(input, context = {}) {
   if (job.kind === 'code_bundle') validateCodeInput(normalizedInput);
   const engine = workflow.mode === 'artifact' ? input.engine || configured.backend : 'local';
   assert(workflow.mode !== 'artifact' || ['codex', 'claude'].includes(engine) || (engine === 'fixture' && process.env.HARNESS_TEST_MODE === '1'), '지원하지 않는 엔진입니다.');
+  if (configured) {
+    const backend = engine === 'fixture' ? configured.backend : engine;
+    for (const node of Object.values(workflow.nodes)) if (taskTypes[node.task]?.executor === 'agent')
+      assertModelSelection(backend, configured.profile.stages[node.task][backend]);
+  }
   if (task === 'checks.run') {
     assert(Object.hasOwn(profiles, normalizedInput.profile), '등록되지 않은 검사 프로필입니다.');
     assert(!(process.env.HARNESS_CHECK_ACTIVE === '1' && normalizedInput.profile.startsWith('harness.')), '검사 실행 중 하네스 전체 검사를 재귀 실행할 수 없습니다.');

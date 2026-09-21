@@ -330,7 +330,7 @@ test('packaged custom task settings survive uninstall and reinstall unchanged an
   const task = created.created_task_id, instruction = '# 재설치 보존 지시문\n\n고객별 **수용 기준**과 실패 경로를 확인한다.';
   const edited = await h.manager(`/execution-settings/${task}`, { method: 'PUT', body: {
     revision: created.revision, label: '고객 계약 PRD', description: '고객 계약의 요구와 수용 기준을 정리한다.', routing_terms: ['고객 계약 PRD'],
-    instruction, backend: 'claude', backends: { codex: { model: 'saved-codex', effort: 'high' }, claude: { model: 'saved-claude', effort: 'max' } }
+    instruction, backend: 'claude', backends: { codex: { model: 'gpt-5.5', effort: 'high' }, claude: { model: 'claude-opus-4-6', effort: 'max' } }
   } });
   const settingsFile = path.join(f.loc.data, 'execution-settings.json'), original = fs.readFileSync(settingsFile);
   await h.close(false);
@@ -342,8 +342,8 @@ test('packaged custom task settings survive uninstall and reinstall unchanged an
   const restored = await h.manager('/execution-settings'), saved = restored.tasks.find(value => value.id === task);
   assert.equal(restored.revision, edited.revision); assert.equal(saved.source, 'user'); assert.equal(saved.template_id, 'prd.create');
   assert.equal(saved.label, '고객 계약 PRD'); assert.equal(saved.instruction, instruction); assert.equal(saved.backend, 'claude');
-  assert.equal(saved.backends.codex.model, 'saved-codex'); assert.equal(saved.backends.codex.effort, 'high');
-  assert.equal(saved.backends.claude.model, 'saved-claude'); assert.equal(saved.backends.claude.effort, 'max');
+  assert.equal(saved.backends.codex.model, 'gpt-5.5'); assert.equal(saved.backends.codex.effort, 'high');
+  assert.equal(saved.backends.claude.model, 'claude-opus-4-6'); assert.equal(saved.backends.claude.effort, 'max');
   const catalog = await h.runtime('/catalog'), custom = catalog.jobs.find(job => job.id === task), template = catalog.jobs.find(job => job.id === 'prd.create');
   assert.equal(custom.source, 'user'); assert.equal(custom.template_id, template.id);
   assert.deepEqual(custom.input_schema, template.input_schema); assert.equal(custom.workflow, template.workflow);

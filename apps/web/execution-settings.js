@@ -42,8 +42,45 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
     flush(); if (code !== null) html += `<pre><code>${esc(code.join('\n'))}</code></pre>`;
     return html || '<p class="help">작성한 지시문이 여기에 표시됩니다.</p>';
   }
-  const effortOptions = (selected, efforts) => `<option value="">유형 기본값 사용</option>${efforts.map(value => `<option value="${esc(value)}" ${selected === value ? 'selected' : ''}>${esc(value)}</option>`).join('')}`;
   const defaults = backend => Object.entries(backend.defaults).map(([stage, value]) => `${stage}: ${value.model} / ${value.effort}`).join(' · ');
+  const modelCatalog = engine => snapshot.models?.[engine] || [];
+  function capabilities(engine, settings, model) {
+    const catalog = modelCatalog(engine);
+    const models = model ? [catalog.find(value => value.id === model)] : [...new Set(Object.values(settings.defaults).map(value => value.model))].map(id => catalog.find(value => value.id === id));
+    const known = models.length > 0 && models.every(Boolean);
+    return { known, efforts: known ? models[0].efforts.filter(effort => models.every(value => value.efforts.includes(effort))) : [] };
+  }
+  function modelOptions(engine, settings) {
+    const selected = settings.model || '';
+    const fallback = [...new Set(Object.values(settings.defaults).map(value => value.model))].join(' · ');
+    const known = modelCatalog(engine).some(model => model.id === selected);
+    return `<option value="">유형 기본값 사용 · ${esc(fallback)}</option>${modelCatalog(engine).map(model => `<option value="${esc(model.id)}" ${model.id === selected ? 'selected' : ''}>${esc(model.label === model.id ? model.id : `${model.label} · ${model.id}`)}</option>`).join('')}
+      ${selected && !known ? `<option value="${esc(selected)}" data-legacy selected>${esc(selected)} · 기존 저장값 (목록에 없음)</option>` : ''}`;
+  }
+  function effortState(engine, settings, model, effort) {
+    const support = capabilities(engine, settings, model);
+    const legacy = !!effort && !support.efforts.includes(effort);
+    const automatic = [...new Set(Object.values(settings.defaults).map(base => {
+      const selected = modelCatalog(engine).find(value => value.id === (model || base.model));
+      return selected?.efforts.includes(base.effort) ? base.effort : selected?.default_effort;
+    }))];
+    const automaticLabel = automatic.length === 1 ? automatic[0] : '단계별';
+    const label = !support.known ? '기존 모델 기본값 유지' : !support.efforts.length ? 'effort 사용 안 함'
+      : `${model ? '자동 선택' : '유형 기본값 사용'} · ${automaticLabel}`;
+    const options = `<option value="">${label}</option>${support.efforts.map(value => `<option value="${esc(value)}" ${effort === value ? 'selected' : ''}>${esc(value)}</option>`).join('')}
+      ${legacy ? `<option value="${esc(effort)}" data-legacy selected>${esc(effort)} · 기존 저장값 (지원 확인 필요)</option>` : ''}`;
+    const warning = !support.known ? '현재 지원 목록에 없는 저장된 모델입니다. 변경하려면 목록의 모델을 선택하세요. 기존 설정은 그대로 유지됩니다.'
+      : legacy ? '저장된 effort는 현재 모델에서 지원하지 않습니다. 기존 설정을 유지하거나 지원되는 설정으로 변경하세요.' : '';
+    return { options, warning, disabled: !support.known || (!support.efforts.length && !legacy) };
+  }
+  function backendEditor(engine, settings) {
+    const effort = effortState(engine, settings, settings.model || '', settings.effort || '');
+    return `<section><h3>${engine === 'codex' ? 'Codex' : 'Claude'}</h3>
+      <label for="${engine}-model">Model override</label><select id="${engine}-model" aria-describedby="${engine}-selection-notice">${modelOptions(engine, settings)}</select>
+      <label for="${engine}-effort">Effort override</label><select id="${engine}-effort" aria-describedby="${engine}-selection-notice" ${effort.disabled ? 'disabled' : ''}>${effort.options}</select>
+      <p id="${engine}-selection-notice" class="help model-selection-notice" role="status" ${effort.warning ? '' : 'hidden'}>${esc(effort.warning)}</p>
+      <p class="help">유형 기본값: ${esc(defaults(settings))}</p></section>`;
+  }
   const categories = { product: '제품 · PO', project: '프로젝트 · PM', design: '공통 설계', frontend: '프런트엔드', backend: '백엔드', engineering: '개발 공통', knowledge: '조사·문서', system: '시스템 작업' };
   const option = (task, selected) => `<option value="${esc(task.id)}" ${task.id === selected ? 'selected' : ''}>${esc(task.label)} · ${esc(task.id)}</option>`;
   const taskOptions = selected => {
@@ -72,12 +109,9 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
       </section>
       <label for="task-backend">기본 backend</label><select id="task-backend"><option value="codex" ${task.backend === 'codex' ? 'selected' : ''}>Codex</option><option value="claude" ${task.backend === 'claude' ? 'selected' : ''}>Claude</option></select>
       <div class="backend-settings">
-        ${['codex', 'claude'].map(engine => `<section><h3>${engine === 'codex' ? 'Codex' : 'Claude'}</h3>
-          <label for="${engine}-model">Model override</label><input id="${engine}-model" value="${esc(task.backends[engine].model || '')}" placeholder="유형 기본값 사용">
-          <label for="${engine}-effort">Effort override</label><select id="${engine}-effort">${effortOptions(task.backends[engine].effort, snapshot.efforts[engine])}</select>
-          <p class="help">${esc(defaults(task.backends[engine]))}</p></section>`).join('')}
+        ${['codex', 'claude'].map(engine => backendEditor(engine, task.backends[engine])).join('')}
       </div>
-      <p class="help">빈 model과 ‘유형 기본값 사용’은 단계별 기본 프로필을 유지합니다. override를 지정하면 이 작업의 생성·검토·수정 단계에 같은 값을 적용합니다.</p>`;
+      <p class="help">모델과 effort는 지원되는 조합만 선택할 수 있습니다. effort의 ‘자동 선택’은 유형의 단계별 기본값을 우선 사용하고, 선택한 모델이 그 값을 지원하지 않을 때만 모델 기본값을 사용합니다. effort 미지원 모델에는 값을 적용하지 않습니다. 두 backend의 설정은 각각 유지됩니다.</p>`;
   const metadata = task => `<section class="custom-task-metadata" aria-label="사용자 작업 정보">
       <label for="custom-task-label">작업 이름</label><input id="custom-task-label" value="${esc(task.label || '')}" maxlength="120" required>
       <label for="custom-task-description">작업 목적</label><textarea id="custom-task-description" maxlength="2000" required>${esc(task.description || '')}</textarea>
@@ -87,7 +121,7 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
   const errorMarkup = '<div id="dialog-error" class="error" role="alert" tabindex="-1" hidden></div>';
   const inherited = template => `<p class="custom-task-template"><strong>기반 작업 유형</strong><br>${esc(template.label)} · ${esc(template.id)}</p>
     <p class="help">기반 유형의 결과물 형식과 검토·수정 절차, 책임 경계를 그대로 사용합니다. 등록 후에는 기반 유형을 바꿀 수 없습니다.</p>`;
-  function bindEditor() {
+  function bindEditor(task) {
     const instructionTabs = [$('#instruction-preview-tab'), $('#instruction-edit-tab')];
     function showInstruction(index, focus = false) {
       const edit = index === 1;
@@ -103,6 +137,22 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
         event.preventDefault(); showInstruction(event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1 - index, true);
       };
     });
+    for (const engine of ['codex', 'claude']) {
+      const model = $(`#${engine}-model`), effort = $(`#${engine}-effort`), notice = $(`#${engine}-selection-notice`);
+      const updateEffort = message => {
+        const state = effortState(engine, task.backends[engine], model.value, effort.value);
+        effort.innerHTML = state.options; effort.disabled = state.disabled;
+        notice.textContent = state.warning || message || ''; notice.hidden = !notice.textContent;
+      };
+      model.onchange = () => {
+        const support = capabilities(engine, task.backends[engine], model.value);
+        const invalid = effort.value && !support.efforts.includes(effort.value);
+        if (invalid) effort.value = '';
+        model.querySelectorAll('option[data-legacy]').forEach(option => { if (!option.selected) option.remove(); });
+        updateEffort(invalid ? support.efforts.length ? '선택한 모델이 지원하지 않는 effort를 기본값으로 바꿨습니다.' : '선택한 모델은 effort를 지원하지 않아 설정을 해제했습니다.' : '');
+      };
+      effort.onchange = () => updateEffort();
+    }
   }
   const executionValues = () => ({
     revision: snapshot.revision, instruction: $('#task-instruction').value, backend: $('#task-backend').value,
@@ -139,7 +189,7 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
       ${custom ? `<section id="custom-task-delete-confirmation" class="custom-task-delete-confirmation" aria-label="작업 등록 삭제 확인" hidden><p><strong>${esc(task.label)}</strong> 작업 등록을 삭제할까요? 이후 새 작업에서 선택할 수 없으며, 기존 실행 기록은 유지됩니다.</p><div class="dialog-actions"><button id="cancel-custom-task-delete">취소</button><button id="confirm-custom-task-delete" class="custom-task-delete">등록 삭제</button></div></section>` : ''}`);
     $('#execution-task').onchange = event => render(event.target.value);
     $('#add-custom-task').onclick = () => renderCreate(task.id);
-    bindEditor();
+    bindEditor(task);
     $('#save-execution').onclick = () => mutate(async () => {
       snapshot = await api(`/execution-settings/${encodeURIComponent(task.id)}`, { method: 'PUT', body: {
         ...executionValues(), ...(custom ? metadataValues() : {})
@@ -177,7 +227,7 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
     $('#cancel-custom-task').onclick = () => render(previousId);
     if (!template) return;
     $('#custom-task-template').onchange = event => renderCreate(previousId, event.target.value, metadataValues());
-    bindEditor();
+    bindEditor(template);
     $('#create-custom-task').onclick = () => mutate(async () => {
       snapshot = await api('/execution-settings/custom-tasks', { method: 'POST', body: {
         ...executionValues(), ...metadataValues(), template_id: template.id

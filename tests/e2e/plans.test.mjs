@@ -97,7 +97,7 @@ test('model preferences and boundary definitions are frozen for waiting work at 
   const snapshot = await h.runtime('/execution-settings'), old = snapshot.tasks.find(value => value.id === 'entity.design');
   const accepted = await create(h, { ...request([step('source'), step('next', 'entity.design', ['source'])]), fixture: { delayMs: 250 } });
   await h.runtime('/execution-settings/entity.design', { method: 'PUT', body: { revision: snapshot.revision, backend: 'claude', instruction: '새 설정에서만 사용할 지시문',
-    backends: { codex: { model: 'next-model', effort: 'low' }, claude: { model: null, effort: null } } } });
+    backends: { codex: { model: 'gpt-5.5', effort: 'low' }, claude: { model: null, effort: null } } } });
   const done = await finish(h, accepted); assert.equal(done.status, 'completed', done.message);
   const run = await h.runtime(`/runs/${done.steps[1].run_id}`), prompt = fs.readFileSync(path.join(run.attempts[0].directory, 'prompt.txt'), 'utf8');
   assert.ok(prompt.includes(old.instruction)); assert.ok(!prompt.includes('새 설정에서만'));

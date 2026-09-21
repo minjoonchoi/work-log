@@ -84,7 +84,7 @@ test('metadata workflow changes preserve existing user instructions and backend 
   const h = new Harness(); t.after(() => h.close());
   const instruction = '사용자가 정한 지시문입니다.\n  기존 표현과 공백을 유지합니다.\n';
   const file = path.join(h.dir, 'execution-settings.json');
-  const custom = { instruction, backend: 'claude', backends: { codex: { model: 'chosen-codex', effort: 'low' }, claude: { model: 'chosen-claude', effort: 'high' } } };
+  const custom = { instruction, backend: 'claude', backends: { codex: { model: 'gpt-5.5', effort: 'low' }, claude: { model: 'claude-opus-4-6', effort: 'high' } } };
   fs.writeFileSync(file, JSON.stringify({ version: 1, revision: 3, tasks: { 'session.summarize': custom, 'text.rewrite': custom } }));
   const original = fs.readFileSync(file); await h.start('runtime');
   for (const input of [summary, rewrite('work-item-metadata')]) {
@@ -92,7 +92,7 @@ test('metadata workflow changes preserve existing user instructions and backend 
     assert.equal(run.attempts.length, 1);
     assert.ok(fs.readFileSync(path.join(run.attempts[0].directory, 'prompt.txt'), 'utf8').includes(instruction));
     const setting = (await h.runtime('/execution-settings')).tasks.find(task => task.id === input.task);
-    assert.equal(setting.backend, 'claude'); assert.equal(setting.backends.codex.model, 'chosen-codex');
+    assert.equal(setting.backend, 'claude'); assert.equal(setting.backends.codex.model, 'gpt-5.5');
     assert.equal(setting.backends.claude.effort, 'high');
   }
   assert.deepEqual(fs.readFileSync(file), original);

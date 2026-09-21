@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { atomic, assert } from './shared.mjs';
 import { defaultTaskInstruction } from './task-instruction.mjs';
+import { modelCapabilities, effectiveSelection, assertModelSelection } from './model-capabilities.mjs';
 
 const efforts = { codex: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'] };
 const engines = ['codex', 'claude'];
@@ -109,6 +110,19 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
     return { instruction: input.instruction.trim(), backend: input.backend,
       backends: Object.fromEntries(engines.map(engine => [engine, { model: input.backends[engine].model, effort: input.backends[engine].effort }])) };
   }
+  function validateSelections(task, input, previous, job = jobs[task]) {
+    const stages = new Set(Object.values(workflows[job.workflow].nodes).map(node => node.task));
+    const profile = profiles[job.execution_profile];
+    for (const engine of engines) {
+      const selection = input.backends[engine], prior = previous?.backends[engine];
+      const unchanged = prior && selection.model === prior.model && selection.effort === prior.effort;
+      // A legacy setting can survive unrelated edits, but cannot be newly selected.
+      if (unchanged && !(input.backend === engine && previous.backend !== input.backend)) continue;
+      for (const [stage, choices] of Object.entries(profile.stages)) if (stages.has(stage)) {
+        assertModelSelection(engine, effectiveSelection(engine, choices[engine], selection));
+      }
+    }
+  }
   function commit(data) {
     assert(data.revision < Number.MAX_SAFE_INTEGER, '설정 revision 한도에 도달했습니다.');
     data.revision += 1;
@@ -121,14 +135,12 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
   function resolve(task) {
     const data = read(), job = artifactJob(task), source = profiles[job.execution_profile], override = data.tasks[task];
     const profile = structuredClone(source);
-    if (override) for (const stage of Object.values(profile.stages)) for (const engine of engines) {
-      if (override.backends[engine].model) stage[engine].model = override.backends[engine].model;
-      if (override.backends[engine].effort) stage[engine].effort = override.backends[engine].effort;
-    }
+    for (const stage of Object.values(profile.stages)) for (const engine of engines)
+      stage[engine] = effectiveSelection(engine, stage[engine], override?.backends[engine]);
     return { instruction: override?.instruction || defaultTaskInstruction(job), backend: override?.backend || 'codex', profile };
   }
   function renderSnapshot(data) {
-    return { revision: data.revision, efforts: structuredClone(efforts), templates: [...templates], tasks: Object.entries(jobs).filter(([, job]) => workflows[job.workflow].mode === 'artifact').map(([id, job]) => {
+    return { revision: data.revision, models: modelCapabilities(), templates: [...templates], tasks: Object.entries(jobs).filter(([, job]) => workflows[job.workflow].mode === 'artifact').map(([id, job]) => {
       const override = data.tasks[id], profile = profiles[job.execution_profile];
       const stages = new Set(Object.values(workflows[job.workflow].nodes).map(node => node.task));
       return { id, label: job.label, category: job.category, kind: job.kind, boundary: structuredClone(job.boundary),
@@ -147,6 +159,7 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
     const data = read();
     validate(task, input);
     revisionMatches(data, input.revision);
+    validateSelections(task, input, data.tasks[task]);
     if (Object.hasOwn(data.custom_tasks, task)) {
       const record = data.custom_tasks[task];
       const changes = Object.fromEntries(metadataFields.filter(field => Object.hasOwn(input, field)).map(field => [field, input[field]]));
@@ -168,6 +181,7 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
     do { task = `user.${crypto.randomBytes(12).toString('hex')}`; } while (Object.hasOwn(jobs, task));
     const override = Object.fromEntries(executionFields.map(field => [field, input[field]]));
     validate(task, override, { [task]: job }, false);
+    validateSelections(task, input, null, job);
     data.custom_tasks[task] = record;
     data.tasks[task] = executionOverride(input);
     return { ...commit(data), created_task_id: task };

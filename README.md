@@ -28,8 +28,8 @@ macOS 메뉴 막대에서 에이전트 업무, 프롬프트 입출력 이력, �
 - **업무 공유 문서 작성**은 제공 자료·독자·공유 목적을 기준으로 팀이나 유관부서가 배경·핵심 내용·확인된 결과·다음 행동을 이해할 문서를 만듭니다. 자료로 받은 PRD·API 설계를 자동 재생성하거나 문서를 전송·게시하지 않습니다. 상태 보고·인수인계·캘린더 업무 요약과 별도 유형으로 구분합니다.
 - `work` 스킬이 원래 요청의 결과와 동작을 기준으로 최대 24개 작업의 구조화 계획을 제출합니다. 실행기는 중복 산출물·순환·코드 경로 충돌을 검사하고, 선행 산출물의 검증·검토가 통과한 후 의존 작업을 실행합니다. 완료 개수와 현재 단계만 간략히 알립니다.
 - 별도 subprocess인 `codex exec`·`claude -p` 어댑터, 실행 동시성 3, timeout·출력량 제한, 프로세스 트리 취소, 중단 복구, 게시 직후 crash 복구.
-- 업무가 참조하는 [유형별 모델 실행 프로필](docs/execution-profiles.md)에서 단계별 model·effort를 고정합니다. Codex와 Claude worker는 승인 질문 없이 수행하도록 각 CLI의 명시적 permission bypass 옵션으로 실행합니다.
-- GUI의 **작업 실행 설정**에서 업무별 지시문, 기본 Codex/Claude backend와 backend별 model·effort override를 로컬에 저장합니다. 변경은 이후 생성되는 run에만 적용되고 실행 정의에 고정됩니다.
+- 업무가 참조하는 [유형별 모델 실행 프로필](docs/execution-profiles.md)에서 단계별 model·effort를 고정합니다. 모든 모델 기반 업무의 기본 backend는 Codex이며 여섯 프로필의 모든 Codex 단계는 `gpt-5.6-luna` / `high`입니다. 기존 업무별 override와 접수된 실행은 보존합니다. Codex와 Claude worker는 승인 질문 없이 수행하도록 각 CLI의 명시적 permission bypass 옵션으로 실행합니다.
+- GUI의 **작업 실행 설정**에서 업무별 지시문, 기본 Codex/Claude backend와 backend별 model·effort override를 로컬에 저장합니다. 모델과 effort는 backend·모델별 지원 목록에서 선택하며, 변경은 이후 생성되는 run에만 적용되고 실행 정의에 고정됩니다. 지원 목록에 없는 기존 설정도 보존하지만 해당 조합으로 새 실행을 시작하려면 설정을 수정해야 합니다.
 - **작업 실행 설정 → 사용자 작업 등록**에서 기존 유형을 템플릿으로 이름·용도·분류 키워드·Markdown 지시문을 등록합니다. 사용자 유형은 요청 카탈로그에 즉시 반영되며, 앱 밖의 `DATA_ROOT/execution-settings.json`에 보관해 제거·재설치 후에도 유지합니다. 템플릿의 입력·산출물·검증 계약을 재사용합니다. [사용자 작업 유형](docs/execution-profiles.md)
 - 메뉴 아이콘은 앱에 포함된 SVG와 PNG로 표시해 아이콘 글꼴이나 CDN이 필요하지 않습니다. 헤드리스 작업에서는 WorkLog 수집 훅을 건너뛰고 실행기가 직접 기록합니다. 일반 사용자 에이전트 세션의 훅 수집은 유지합니다.
 - 기준 SQLite DB 두 개와 파일 저장소. `runtime.sqlite`는 실행 서비스, `memory.sqlite`는 업무·세션 관리 서비스가 소유합니다. 훅의 turn 연결·재전송 기록에는 별도 보조 DB `hook-state.sqlite`를 사용합니다.

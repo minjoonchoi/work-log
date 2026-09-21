@@ -9,7 +9,7 @@ import { ROOT } from '../../src/shared.mjs';
 const settingsFile = h => path.join(h.dir, 'execution-settings.json');
 const preferences = {
   instruction: '# 운영 공유 문서\n\n## 목적\n운영 배경과 결정, 후속 작업을 근거에 따라 정리한다.', backend: 'codex',
-  backends: { codex: { model: 'test-model', effort: 'low' }, claude: { model: null, effort: null } }
+  backends: { codex: { model: 'gpt-5.5', effort: 'low' }, claude: { model: null, effort: null } }
 };
 const definition = revision => ({ revision, template_id: 'document.create', label: '운영 인수인계',
   description: '운영 인수인계의 배경, 결정, 미완료 항목만 공유 문서로 작성한다.', routing_terms: ['운영 인수인계'], ...preferences });
@@ -42,7 +42,7 @@ test('GUI API registration immediately joins the live CLI catalog and executes t
   for (const attempt of run.attempts) assert.ok(fs.readFileSync(path.join(attempt.directory, 'prompt.txt'), 'utf8').includes(preferences.instruction));
   const bytes = fs.readFileSync(settingsFile(h));
   await h.stop('runtime'); await h.start('runtime');
-  assert.equal((await h.runtime('/execution-settings')).tasks.find(task => task.id === id).backends.codex.model, 'test-model');
+  assert.equal((await h.runtime('/execution-settings')).tasks.find(task => task.id === id).backends.codex.model, 'gpt-5.5');
   assert.deepEqual(fs.readFileSync(settingsFile(h)), bytes);
   assert.equal((await h.finish(await h.run({ task: id }))).status, 'completed');
 });

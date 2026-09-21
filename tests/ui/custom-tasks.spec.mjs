@@ -43,9 +43,9 @@ test('custom task registration, metadata and execution edits survive runtime res
   await dialog.getByRole('tab', { name: '원문 편집' }).click();
   await dialog.getByLabel('작업 지시문', { exact: true }).fill('# 주간 회의 기록\n\n- 결정과 담당자를 정리한다.\n- 후속 행동의 기한을 기록한다.');
   await dialog.getByLabel('기본 backend', { exact: true }).selectOption('claude');
-  await dialog.locator('#codex-model').fill('gpt-5.5');
+  await dialog.locator('#codex-model').selectOption('gpt-5.5');
   await dialog.locator('#codex-effort').selectOption('high');
-  await dialog.locator('#claude-model').fill('opus');
+  await dialog.locator('#claude-model').selectOption('opus');
   await dialog.locator('#claude-effort').selectOption('xhigh');
   const id = await register(page, dialog);
   expect(id).toMatch(/^user\./);

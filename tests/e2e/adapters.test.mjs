@@ -19,8 +19,8 @@ for (const engine of ['codex', 'claude']) test(`${engine} process adapter: stdin
     assert.ok(calls.every(c => c.includes('--dangerously-bypass-approvals-and-sandbox')));
     assert.ok(calls.every(c => !c.includes('--sandbox') && !c.includes('approval_policy="never"')));
     assert.equal(calls[0][calls[0].indexOf('--model') + 1], expected.model);
-    assert.ok(calls[0].includes('model_reasoning_effort="medium"'));
-    assert.ok(calls[1].includes('model_reasoning_effort="high"'));
+    assert.ok(calls.every(c => c[c.indexOf('--model') + 1] === 'gpt-5.6-luna'));
+    assert.ok(calls.every(c => c.includes('model_reasoning_effort="high"')));
   } else {
     assert.ok(calls.every(c => c.includes('--allow-dangerously-skip-permissions')));
     assert.ok(calls.every(c => c[c.indexOf('--permission-mode') + 1] === 'bypassPermissions'));
@@ -33,7 +33,7 @@ for (const engine of ['codex', 'claude']) test(`${engine} process adapter: stdin
   assert.equal(observed.native_session_id, engine === 'codex' ? 'protocol-thread' : 'protocol-session');
   assert.equal(observed.usage.output_tokens, 20);
   assert.equal(observed.model, expected.model);
-  assert.equal(observed.effort, 'medium');
+  assert.equal(observed.effort, engine === 'codex' ? 'high' : 'medium');
   assert.equal(observed.permission_mode, 'bypass');
 });
 
@@ -50,7 +50,8 @@ test('Codex fatal JSONL errors retain the safe server cause, while advisory mess
     } }));
     const invocation = JSON.parse(fs.readFileSync(path.join(run.attempts[0].directory, 'invocation.json')));
     assert.equal(invocation[invocation.indexOf('--model') + 1], profiles.metadata.stages.produce.codex.model);
-    assert.ok(invocation.includes('model_reasoning_effort="low"'));
+    assert.equal(invocation[invocation.indexOf('--model') + 1], 'gpt-5.6-luna');
+    assert.ok(invocation.includes('model_reasoning_effort="high"'));
     if (scenario === 'warning-success') {
       assert.equal(run.status, 'completed', run.message);
       assert.ok(run.artifact); continue;

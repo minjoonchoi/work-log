@@ -20,9 +20,9 @@ test('GUI edits and resets task instruction, backend and backend-specific model 
   await dialog.getByRole('tab', { name: '원문 편집' }).click();
   await dialog.getByLabel('작업 지시문').fill('관계 수와 삭제 정책을 명확히 설명한다.');
   await dialog.getByLabel('기본 backend').selectOption('claude');
-  await dialog.getByLabel('Model override', { exact: true }).nth(0).fill('gpt-5.5');
+  await dialog.getByLabel('Model override', { exact: true }).nth(0).selectOption('gpt-5.5');
   await dialog.getByLabel('Effort override', { exact: true }).nth(0).selectOption('low');
-  await dialog.getByLabel('Model override', { exact: true }).nth(1).fill('opus');
+  await dialog.getByLabel('Model override', { exact: true }).nth(1).selectOption('opus');
   await dialog.getByLabel('Effort override', { exact: true }).nth(1).selectOption('xhigh');
   await dialog.getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.locator('#toast')).toHaveText('작업 실행 설정을 저장했습니다.');

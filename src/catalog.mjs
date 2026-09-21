@@ -4,6 +4,7 @@ import { ROOT, assert, json } from './shared.mjs';
 import { compileSchema, validateSchema } from './schema.mjs';
 import { validateWorkflow } from './workflow.mjs';
 import { validateCodeInput } from './code-bundle.mjs';
+import { assertModelSelection } from './model-capabilities.mjs';
 
 const read = file => JSON.parse(fs.readFileSync(path.join(ROOT, file), 'utf8'));
 export function loadCatalog() {
@@ -15,6 +16,7 @@ export function loadCatalog() {
     assert(file.endsWith('.json'), `실행 프로필은 JSON 문서여야 합니다: ${file}`);
     const profile = read(`harness/execution-profiles/${file}`);
     validateSchema(executionProfileSchema, profile, `실행 프로필 ${file}`);
+    for (const choices of Object.values(profile.stages)) for (const engine of ['codex', 'claude']) assertModelSelection(engine, choices[engine]);
     assert(profile.id === path.basename(file, '.json'), `실행 프로필 ID와 파일명이 다릅니다: ${file}`);
     return [profile.id, profile];
   }));
