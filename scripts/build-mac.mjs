@@ -1,10 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { ROOT, assert, atomic, json } from '../src/shared.mjs';
 
 function run(command, args) { const result = spawnSync(command, args, { stdio: 'inherit' }); assert(result.status === 0, `${command} 실패`); }
+// Check the actual runtime before replacing a previous successful build.
+const candidate = process.env.HARNESS_BUNDLE_NODE || process.execPath;
+const probe = spawnSync(candidate, [path.join(ROOT, 'scripts/node-probe.cjs'), '--portable'], { encoding: 'utf8', timeout: 15000,
+  env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+assert(probe.status === 0, `앱에 포함할 Node를 확인하세요. make build는 로컬 Node 선택과 자동 준비를 지원합니다.\n${probe.stderr || probe.error?.message || ''}`);
+const node = probe.stdout.trim();
+assert(fs.existsSync(node), 'HARNESS_BUNDLE_NODE에 Node 22.17+ 실행 파일 경로를 지정하세요.');
 const app = path.join(ROOT, 'dist/WorkLog.app'), contents = path.join(app, 'Contents'), resources = path.join(contents, 'Resources');
 fs.rmSync(app, { recursive: true, force: true });
 fs.mkdirSync(path.join(contents, 'MacOS'), { recursive: true }); fs.mkdirSync(resources, { recursive: true });
@@ -21,10 +27,6 @@ atomic(path.join(contents, 'Info.plist'), plist);
 run('swift', [path.join(ROOT, 'scripts/build-icons.swift'), path.join(ROOT, 'apps/macos/assets/worklog.svg'), path.join(resources, 'WorkLog.icns')]);
 run('swiftc', ['-O', '-target', 'arm64-apple-macos13.0', '-framework', 'Cocoa', '-framework', 'WebKit', path.join(ROOT, 'apps/macos/main.swift'), '-o', path.join(contents, 'MacOS/WorkLog')]);
 run('swiftc', ['-O', '-target', 'arm64-apple-macos13.0', '-framework', 'Security', '-framework', 'LocalAuthentication', path.join(ROOT, 'apps/macos/keychain.swift'), '-o', path.join(contents, 'MacOS/WorkLogKeychain')]);
-const node = process.env.HARNESS_BUNDLE_NODE || path.join(os.homedir(), '.nvm/versions/node/v22.17.0/bin/node');
-assert(fs.existsSync(node), 'HARNESS_BUNDLE_NODE에 독립 배포 가능한 Node 22.17+ 실행 파일을 지정하세요.');
-const libraries = spawnSync('otool', ['-L', node], { encoding: 'utf8' }).stdout;
-assert(!libraries.includes('/opt/homebrew/') && !libraries.includes('/usr/local/opt/'), 'Homebrew 동적 라이브러리에 의존하는 Node는 번들링할 수 없습니다.');
 fs.copyFileSync(node, path.join(contents, 'MacOS/node')); fs.chmodSync(path.join(contents, 'MacOS/node'), 0o755);
 const bundled = path.join(resources, 'harness'); fs.mkdirSync(bundled, { recursive: true });
 for (const folder of ['src', 'bin', 'harness', 'contracts', 'apps/web', 'skills']) fs.cpSync(path.join(ROOT, folder), path.join(bundled, folder), { recursive: true });

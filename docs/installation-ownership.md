@@ -2,6 +2,20 @@
 
 `make install`은 의존성 설치·macOS 앱 빌드·사용자 설치를 수행하고 `make uninstall`은 설치 소유 기록을 확인한 뒤 해당 항목만 제거한다. `make install-plan`, `make uninstall-plan`은 사용자 설정을 바꾸지 않고 대상을 출력한다. ZIP에도 각각의 설치·제거 명령이 포함된다.
 
+## 빌드용 Node 선택과 준비
+
+`make build`와 `make install`은 `scripts/with-node.sh`로 Node를 선택한다. macOS Apple Silicon용 Node.js 22.17 이상이며 `node:sqlite`를 실행할 수 있어야 한다. 앱 안에 복사하므로 외부 Homebrew 동적 라이브러리 등에 의존하지 않는 실행 파일이어야 한다. Xcode의 Swift 컴파일러와 브라우저 검증용 Chrome은 별도 개발 환경 조건으로 유지한다.
+
+명시한 `HARNESS_BUNDLE_NODE`가 가장 우선하고, 그다음은 `NODE`의 실행 파일 경로나 명령이다. 명시값이 실행되지 않거나 요구 조건을 충족하지 못하면 이유를 알리고 중단한다. 명시값이 없을 때는 현재 `PATH`의 `node`, `NVM_BIN`의 Node, `${NVM_DIR:-$HOME/.nvm}/versions/node/`의 설치본, 캐시 순서로 적합한 실행 파일을 찾는다. 셸에서 선택한 nvm 버전은 `PATH`로 재사용하며, 사용자 지정 nvm 디렉터리는 `NVM_DIR`로 찾는다. 예를 들어 `HARNESS_BUNDLE_NODE="$(nvm which current)" make install` 또는 `make install NODE="/custom/node/bin/node"`로 선택을 고정할 수 있다. 자동 탐색 중 발견한 부적합한 후보는 건너뛴다.
+
+적합한 Node가 없으면 [공식 Node.js 22.23.2 배포본](https://nodejs.org/en/download/archive/v22.23.2)의 `node-v22.23.2-darwin-arm64.tar.gz`를 `https://nodejs.org/dist/v22.23.2/`에서 받아 공식 목록으로 확인해 스크립트에 고정한 SHA-256과 비교한다. 검증 후 프로젝트의 `.data/node/node-v22.23.2-darwin-arm64/`에 준비한다. `HARNESS_NODE_CACHE`는 캐시 루트를 바꾸며, `HARNESS_NODE_DOWNLOAD=0`은 다운로드를 금지한다. 다운로드를 끈 상태에서 적합한 실행 파일을 찾지 못하면 로컬 Node 지정 방법과 함께 실패한다. 사용할 수 없는 기존 캐시가 있으면 덮어쓰지 않고 다른 캐시나 Node 경로를 지정하도록 안내한다.
+
+Node는 빌드하는 앱 안에 복사한다. 기존 시스템·nvm 설치본을 이동·수정하지 않으며, `sudo`, 전역 패키지 설치, `nvm install`, 셸 프로필 또는 영구 `PATH` 변경을 수행하지 않는다. 캐시는 개발 프로젝트의 빌드 입력이며 사용자 설치 소유 기록에 포함되지 않는다. `make uninstall`은 이 캐시나 재사용한 기존 Node를 제거하지 않는다.
+
+`make install-plan`, `make uninstall-plan`, `make uninstall`, `make test`는 `--existing` 모드로 기존 Node만 사용하고 다운로드하지 않는다. 이 모드는 자동 탐색 시 nvm 다음으로 설치된 앱과 `dist/WorkLog.app`의 Node를 확인한 뒤 캐시를 찾으며, 버전과 `node:sqlite` 지원을 검사한다. `make test`에는 선택한 Node와 함께 사용할 npm도 필요하다. 제거 명령은 빌드가 필요 없으며 셸에 Node가 없어도 설치된 앱의 실행 파일을 후보로 사용할 수 있다. 필요한 Node를 찾지 못하면 사용자 설정을 바꾸지 않고 실패한다.
+
+`npm run build:mac`을 직접 실행하는 경우에는 `HARNESS_BUNDLE_NODE` 또는 실행 중인 `process.execPath`를 사용한다. 번들 후보 검증은 기존 `dist/WorkLog.app`을 교체하기 전에 수행한다. Node 자동 준비와 의존성 설치까지 필요하면 `make build`를 사용한다. Node 선택 개선은 설치 갱신 정책을 바꾸지 않으므로, 정상 설치에 `make install`을 다시 실행하면 여전히 `already_installed`를 반환한다.
+
 ## 단일 요청 스킬
 
 `skills/work/SKILL.md` 하나를 배포한다. 스킬은 카탈로그의 책임 경계·입력 스키마를 읽고 사용자가 요청한 결과와 동작을 최대 24개 작업의 `prompt/steps` 계획으로 분할한다. 원문 인용·산출물 식별자·실제 자료 의존성을 붙여 `orchestrate`로 한 번 제출한다. 실행 서비스가 계획 검증·순서·동시성·`codex exec`/`claude -p` 실행·검증·수정·취소·재개를 소유한다. 업무별 스킬이나 스킬 안의 별도 실행기를 만들지 않는다. 단일 `run`의 자연어 분류는 제한된 호환 경로이며 복합 요청은 [구조화 계획](task-orchestration.md)을 사용한다.
@@ -43,6 +57,8 @@
 CLI는 완료/이미 제거/미설치에 0, 보존된 충돌·미관리 설치에 2, 잘못된 인자·기록 등 실행 실패에 1을 반환한다. 설치·제거 후 기존 에이전트 세션이 이미 읽은 지시문까지 회수했다고 주장하지 않는다.
 
 ## 검증
+
+`tests/e2e/node-bootstrap.test.mjs`는 Node가 없는 PATH에서 시작한 `make install`, 기존 Node·nvm·사용자 지정 경로·캐시 재사용, npm과 하위 프로세스의 PATH 전달, 구버전·다른 아키텍처·외부 라이브러리·SQLite 미지원, 체크섬 불일치·다운로드 실패·오프라인 실행을 격리된 환경에서 검증한다. 다운로드 도구는 대역을 사용하고 실제 버전·SQLite·라이브러리 검사 코드를 실행한다. 별도로 공식 22.23.2 배포본의 실제 다운로드·체크섬 검사·캐시 재사용과 기존 nvm Node를 사용한 `make build`, 번들 설치·서비스 시작·제거를 확인했다. 실제 사용자 설치는 변경하지 않았다.
 
 `tests/e2e/install.test.mjs`는 임시 홈에서 실제 파일·설정·심링크와 CLI를 사용한다. 정상 제거, 재설치·재제거, 같은 그룹의 사용자 훅, 훅 편집·중복·손상, 링크 교체, 파일/상위 경로 심링크, 변경된 앱, 기록 누락·경로 변조, 설치 중단 복구, 같은 서비스 이름의 다른 프로그램, 데이터 보존을 검증한다.
 

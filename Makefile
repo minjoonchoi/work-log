@@ -1,25 +1,25 @@
-NODE ?= node
-NPM ?= npm
+NODE ?=
+NPM ?=
 INSTALL_ARGS ?=
 UNINSTALL_ARGS ?=
+export NODE NPM HARNESS_BUNDLE_NODE HARNESS_NODE_CACHE HARNESS_NODE_DOWNLOAD
 
 .PHONY: build install install-plan uninstall uninstall-plan test
 
 build:
-	$(NPM) ci
-	$(NPM) run build:mac
+	@./scripts/with-node.sh build
 
 install: build
-	$(NODE) scripts/install.mjs --apply $(INSTALL_ARGS)
+	@./scripts/with-node.sh --existing node scripts/install.mjs --apply $(INSTALL_ARGS)
 
 install-plan:
-	$(NODE) scripts/install.mjs $(INSTALL_ARGS)
+	@./scripts/with-node.sh --existing node scripts/install.mjs $(INSTALL_ARGS)
 
 uninstall:
-	$(NODE) scripts/uninstall.mjs --apply $(UNINSTALL_ARGS)
+	@./scripts/with-node.sh --existing node scripts/uninstall.mjs --apply $(UNINSTALL_ARGS)
 
 uninstall-plan:
-	$(NODE) scripts/uninstall.mjs $(UNINSTALL_ARGS)
+	@./scripts/with-node.sh --existing node scripts/uninstall.mjs $(UNINSTALL_ARGS)
 
 test:
-	$(NPM) test
+	@./scripts/with-node.sh --existing npm test
