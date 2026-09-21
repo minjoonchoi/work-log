@@ -1,0 +1,8 @@
+/* Bundled vector icons: no icon font, CDN, emoji or OS glyph dependency. */
+.menu-icon { display: inline-block; width: 18px; height: 18px; flex: none; vertical-align: middle; pointer-events: none; }
+nav button > .menu-icon { color: var(--muted); }
+nav button.active > .menu-icon { color: inherit; }
+.settings, .quick-footer button, .quick-open, .date-navigation > button { display: inline-flex; align-items: center; gap: 8px; }
+.search-wrap > .menu-icon { position: absolute; left: 13px; top: 11px; color: var(--muted); }
+.quick-footer button { justify-content: center; gap: 5px; }
+.quick-footer .menu-icon { width: 15px; height: 15px; }

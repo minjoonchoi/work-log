@@ -89,8 +89,8 @@ try {
       result = result.jobs.find(job => job.id === task);
       if (!result) throw new Error(`지원하지 않는 업무입니다: ${task}`);
     } else if (summary) {
-      result = { version: result.version, jobs: result.jobs.map(({ id, label, category, kind, internal, boundary, routing, review_policy }) => ({
-        id, label, category, kind, internal, review_policy,
+      result = { version: result.version, jobs: result.jobs.map(({ id, label, category, kind, internal, boundary, routing, review_policy, source, template_id, description }) => ({
+        id, label, category, kind, internal, review_policy, source, template_id, description,
         ...(boundary ? { boundary: { owns: boundary.owns, excludes: boundary.excludes, deliverable: boundary.deliverable } } : {}),
         routing
       })) };

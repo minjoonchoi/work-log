@@ -119,9 +119,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let icon = NSImage(named: NSImage.Name("WorkLogStatusTemplate"))
-            ?? NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: "WorkLog")
-        icon?.size = NSSize(width: 18, height: 18)
-        icon?.isTemplate = true
+            ?? Bundle.main.url(forResource: "WorkLogStatusTemplate", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
+            ?? NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+                // A vector fallback keeps the status button visible without SF Symbols or fonts.
+                NSColor.black.setStroke()
+                let mark = NSBezierPath()
+                mark.lineWidth = 2; mark.lineCapStyle = .round; mark.lineJoinStyle = .round
+                mark.move(to: NSPoint(x: 2, y: 14)); mark.line(to: NSPoint(x: 5, y: 4))
+                mark.line(to: NSPoint(x: 9, y: 11)); mark.line(to: NSPoint(x: 13, y: 4))
+                mark.line(to: NSPoint(x: 16, y: 14)); mark.stroke()
+                return true
+            }
+        icon.size = NSSize(width: 18, height: 18)
+        icon.isTemplate = true
         statusItem.button?.image = icon
         statusItem.button?.setAccessibilityLabel("WorkLog 빠른 패널")
         statusItem.button?.toolTip = "WorkLog · 로컬 에이전트 업무"

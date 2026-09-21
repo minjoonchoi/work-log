@@ -109,6 +109,7 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
   },
   publicHandler: async (req, res, url) => {
     const routes = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/history.js': ['history.js', 'text/javascript'], '/integrations.js': ['integrations.js', 'text/javascript'], '/jira.js': ['jira.js', 'text/javascript'], '/writing.js': ['writing.js', 'text/javascript'], '/execution-settings.js': ['execution-settings.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
+      '/icons.css': ['icons.css', 'text/css'],
       '/description.js': ['description.js', 'text/javascript'], '/automation-settings.js': ['automation-settings.js', 'text/javascript'], '/item-tags.js': ['item-tags.js', 'text/javascript'], '/reports.js': ['reports.js', 'text/javascript'], '/report-body.js': ['report-body.js', 'text/javascript'],
       '/quick': ['quick.html', 'text/html; charset=utf-8'], '/quick.js': ['quick.js', 'text/javascript'], '/quick.css': ['quick.css', 'text/css'] };
     if (req.method !== 'GET' || !routes[url.pathname]) return false;
@@ -133,6 +134,9 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (p === '/api/integrations/atlassian/jira-search' && req.method === 'GET') return atlassian.searchIssues(url.searchParams.get('cloud_id'), url.searchParams.get('query'), url.searchParams.get('next_page_token'));
     if (p === '/api/integrations/atlassian/confluence-page' && req.method === 'GET') return atlassian.confluencePage(url.searchParams.get('cloud_id'), url.searchParams.get('id'));
     if (p === '/api/execution-settings' && req.method === 'GET') return request(dir, 'runtime', '/execution-settings');
+    if (p === '/api/execution-settings/custom-tasks' && req.method === 'POST') return request(dir, 'runtime', '/execution-settings/custom-tasks', { method: 'POST', body: await body(req) });
+    const customSetting = p.match(/^\/api\/execution-settings\/custom-tasks\/([^/]+)$/);
+    if (customSetting && req.method === 'DELETE') return request(dir, 'runtime', `/execution-settings/custom-tasks/${customSetting[1]}`, { method: 'DELETE', body: await body(req) });
     let executionSetting = p.match(/^\/api\/execution-settings\/([^/]+)$/);
     if (executionSetting && ['PUT', 'DELETE'].includes(req.method)) return request(dir, 'runtime', `/execution-settings/${executionSetting[1]}`, { method: req.method, body: await body(req) });
     if (req.method === 'GET' && p === '/api/automation/settings') return writings.automationSettings();

@@ -52,16 +52,17 @@ export function execute(context) {
   atomic(schemaPath, json(context.schema || JSON.parse(fs.readFileSync(path.join(ROOT, 'contracts/task-result.schema.json'), 'utf8'))));
   atomic(path.join(attemptDir, 'prompt.txt'), redact(prompt));
   const { command, args } = commandFor(engine, { ...context, outputPath, schemaPath });
-  if (!versions.has(command)) {
-    const check = spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 2500 });
-    versions.set(command, check.status === 0 ? check.stdout.trim().slice(0, 200) : 'unavailable');
-  }
   const allowed = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM', 'CODEX_HOME',
     'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'];
   const env = Object.fromEntries(allowed.filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]]));
   Object.assign(env, { HARNESS_DATA_DIR: context.dataDir, HARNESS_WORKER: '1', HARNESS_PARENT: json(parent),
     HARNESS_ATTEMPT_ID: parent.task_id, HARNESS_ENGINE: engine, HARNESS_STAGE: stage,
     HARNESS_TEST_MODE: process.env.HARNESS_TEST_MODE || '' });
+  if (!versions.has(command)) {
+    // Version probes belong to the same headless worker and inherit its hook guard.
+    const check = spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 2500, env });
+    versions.set(command, check.status === 0 ? check.stdout.trim().slice(0, 200) : 'unavailable');
+  }
   if (engine === 'fixture') {
     // Source snapshots can exceed the OS argv/environment limit. Fixture workers
     // receive a private file; real CLIs receive their task exclusively on stdin.

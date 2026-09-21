@@ -368,6 +368,19 @@ dialog .instruction-preview p { color: var(--text-secondary); margin-bottom: 12p
 .instruction-preview > :first-child { margin-top: 0; }
 .instruction-preview > :last-child { margin-bottom: 0; }
 dialog .instruction-editor > .help { margin: 9px 0 0; font-size: 11px; }
+.execution-task-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 20px 0 8px; }
+dialog .execution-task-toolbar label { margin: 0; }
+.execution-task-toolbar button { font-size: 12px; }
+.execution-task-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.execution-task-source > span { padding: 3px 8px; border-radius: 4px; color: var(--accent-strong); background: var(--accent-soft); font-size: 11px; font-weight: 600; }
+.custom-task-metadata { padding: 0 14px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-muted); }
+dialog .custom-task-metadata textarea { min-height: 76px; }
+.custom-task-template { overflow-wrap: anywhere; }
+.execution-settings-actions { flex-wrap: wrap; }
+dialog .custom-task-delete { color: #991b1b; }
+.custom-task-delete-confirmation { margin-top: 16px; padding: 14px; border: 1px solid #fecaca; border-radius: 7px; background: #fef2f2; }
+.custom-task-delete-confirmation p { margin: 0; color: #991b1b; overflow-wrap: anywhere; }
+.custom-task-delete-confirmation .dialog-actions { margin-top: 12px; }
 .connection-note { background: var(--surface-muted); border: 1px solid var(--line); border-radius: 6px; padding: 12px; font-size: 13px; }
 .service-details { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 16px; font-size: 13px; }
 .jira-preview { margin: 20px 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; }

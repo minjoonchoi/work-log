@@ -12,6 +12,22 @@ const createArtifact = /작성|생성|만들|\b(?:create|write|generate)\b/i;
 const changeArtifact = /수정|갱신|업데이트|\b(?:update|modify|fix)\b/i;
 const planArtifact = /작성|생성|만들|설계|계획|수립|\b(?:create|write|generate|design|plan)\b/i;
 const executeChecks = /(?:e2e|테스트|검사).*(?:실행(?=\s*(?:해|하|$))|돌려)|\brun\b.*(?:e2e|tests|checks)/i;
+const customActions = {
+  create: createArtifact, design: /작성|생성|만들|설계|\b(?:create|write|generate|design)\b/i,
+  plan: planArtifact, review, update: changeArtifact,
+  define: /정의|정리|수립|\bdefine\b/i,
+  summarize: /요약|정리|\bsummari[sz]e\b/i,
+  analyze: /분석|비교|조사|\b(?:analy[sz]e|compare|research)\b/i,
+  refine: /정제|구체화|\brefine\b/i,
+  prioritize: /우선순위|정렬|\bprioriti[sz]e\b/i,
+  evaluate: /평가|\bevaluate\b/i,
+  record: /기록|작성|\b(?:record|write)\b/i,
+  implement: /구현|\bimplement\b/i,
+  test: /작성|생성|만들|구현|\b(?:write|create|generate|implement)\b/i,
+  fix: /수정|고쳐|고치|\bfix\b/i,
+  refactor: /리팩터|리팩토|\brefactor\b/i,
+  respond: /반영|대응|수정|\b(?:respond|apply|address|fix)\b/i
+};
 const reviewTargets = [
   ['security.review', /보안|security/i], ['accessibility.review', /접근성|accessibility/i],
   ['performance.review', /성능|performance/i], ['query.review', /쿼리|\bsql\b|query/i],
@@ -62,6 +78,27 @@ function removeReference(part) {
 }
 
 function classifyPart(part, jobs) {
+  const builtin = classifyBuiltinPart(part, jobs);
+  const custom = Object.entries(jobs).filter(([, job]) => {
+    if (job.source !== 'user' || job.allow_internal || !job.routing?.terms?.some(term => part.toLocaleLowerCase().includes(term.toLocaleLowerCase()))) return false;
+    const operation = job.routing.action;
+    // Read-only requests never select a producer because its keyword happens to
+    // name the source being reviewed. Command execution also stays a local route.
+    if (review.test(part) && !builtin.includes('review.respond') && operation !== 'review') return false;
+    if (executeChecks.test(part)) return false;
+    if (operation !== 'review' && !['update', 'fix', 'refactor', 'respond'].includes(operation) && changeArtifact.test(part)) return false;
+    return action.test(part) && !!customActions[operation]?.test(part);
+  });
+  if (!custom.length) return builtin;
+  if (custom.length !== 1) return fail();
+  const [id, job] = custom[0];
+  // A custom keyword refines its inherited task or a generic fallback. It must
+  // not silently replace a different specialized artifact or review boundary.
+  if (builtin.some(task => task !== job.template_id && !genericJobs.has(task))) return fail();
+  return [id];
+}
+
+function classifyBuiltinPart(part, jobs) {
   const responseRequested = jobs['review.respond']?.routing.terms.some(term => part.toLocaleLowerCase().includes(term.toLocaleLowerCase()));
   // The word "review" is also part of "review response"; an explicit request to
   // inspect that response must still stay read-only instead of applying changes.
@@ -81,7 +118,7 @@ function classifyPart(part, jobs) {
   if (/검증.*보고서|검사.*보고서|verification report/i.test(part)) return createArtifact.test(part) && !changeArtifact.test(part) ? ['verification.report'] : [];
   if (/(?:테스트|e2e|검증).*시나리오|test scenarios?/i.test(part)) return planArtifact.test(part) && !changeArtifact.test(part) ? ['test.scenarios.plan'] : [];
   if (executeChecks.test(part)) return ['checks.run'];
-  const result = Object.entries(jobs).filter(([, job]) => !job.allow_internal && job.routing?.terms?.some(term => part.toLocaleLowerCase().includes(term.toLocaleLowerCase())))
+  const result = Object.entries(jobs).filter(([, job]) => job.source !== 'user' && !job.allow_internal && job.routing?.terms?.some(term => part.toLocaleLowerCase().includes(term.toLocaleLowerCase())))
     .map(([id]) => id);
   if (action.test(part)) {
     if (/\bprd\b|제품\s*요구사항\s*문서/i.test(part)) result.push('prd.create');

@@ -113,9 +113,9 @@ delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinis
 delegate.loadMain()
 let refresh = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in delegate.refreshConnection(); delegate.setQuickVisible(true) }
 Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { _ in
-    delegate.webView!.evaluateJavaScript("JSON.stringify({ title: document.title, items: document.querySelector('#item-count')?.textContent, body: document.body.innerText, error: document.querySelector('#error')?.textContent })") { main, error in
-        delegate.quickWebView!.evaluateJavaScript("JSON.stringify({ count: document.querySelector('#current-count')?.textContent, body: document.body.innerText })") { quick, error in
-            let result: [String: Any] = ["main": main as? String ?? "", "quick": quick as? String ?? "", "mainReady": delegate.mainReady]
+    delegate.webView!.evaluateJavaScript("JSON.stringify({ title: document.title, items: document.querySelector('#item-count')?.textContent, body: document.body.innerText, error: document.querySelector('#error')?.textContent, icons: Array.from(document.querySelectorAll('.sidebar button svg')).map(icon => icon.getBBox().width > 0 && icon.getBoundingClientRect().width > 0) })") { main, error in
+        delegate.quickWebView!.evaluateJavaScript("JSON.stringify({ count: document.querySelector('#current-count')?.textContent, body: document.body.innerText, icons: Array.from(document.querySelectorAll('button svg')).map(icon => icon.getBBox().width > 0 && icon.getBoundingClientRect().width > 0) })") { quick, error in
+            let result: [String: Any] = ["main": main as? String ?? "", "quick": quick as? String ?? "", "mainReady": delegate.mainReady, "statusIconVisible": (delegate.statusItem.button?.image?.size.width ?? 0) > 0]
             print(String(data: try! JSONSerialization.data(withJSONObject: result), encoding: .utf8)!)
             fflush(stdout); exit(0)
         }
@@ -136,4 +136,7 @@ application.run()
   assert.equal(page.title, 'WorkLog'); assert.equal(page.items, '1'); assert.equal(page.error, '');
   assert.match(page.body, /네이티브 연결 확인 업무/);
   assert.equal(quick.count, '1'); assert.match(quick.body, /네이티브 연결 확인 업무/);
+  assert.deepEqual(page.icons, Array(7).fill(true), 'bundled SVG menu icons render in the native WKWebView');
+  assert.deepEqual(quick.icons, Array(4).fill(true), 'quick panel SVG icons render in the native WKWebView');
+  assert.equal(result.statusIconVisible, true, 'native vector fallback supplies an image in a test executable without bundle resources');
 });

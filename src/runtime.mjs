@@ -460,11 +460,15 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
   if (req.method === 'GET' && url.pathname === '/catalog') return {
     version: definitions.version, jobs: Object.entries(definitions.jobs).map(([id, job]) => ({ id, label: job.label, workflow: job.workflow,
       category: job.category, boundary: job.boundary, routing: job.routing, internal: !!job.allow_internal,
+      source: job.source || 'builtin', template_id: job.template_id || null, description: job.description || '',
       review_policy: reviewPolicy(id, job, workflows[job.workflow]),
       kind: job.kind, input_schema: job.input_schema, execution_profile: job.execution_profile || null })),
     task_types: taskTypes, workflows, execution_profiles: executionProfiles,
     check_profiles: Object.entries(profiles).map(([id, p]) => ({ id, label: p.label, validation_scope: p.validation_scope })) };
   if (req.method === 'GET' && url.pathname === '/execution-settings') return settings.snapshot();
+  if (req.method === 'POST' && url.pathname === '/execution-settings/custom-tasks') return settings.create(await body(req));
+  const customSettingMatch = url.pathname.match(/^\/execution-settings\/custom-tasks\/([^/]+)$/);
+  if (customSettingMatch && req.method === 'DELETE') return settings.remove(decodeURIComponent(customSettingMatch[1]), (await body(req)).revision);
   let settingMatch = url.pathname.match(/^\/execution-settings\/([^/]+)$/);
   if (settingMatch && req.method === 'PUT') return settings.save(decodeURIComponent(settingMatch[1]), await body(req));
   if (settingMatch && req.method === 'DELETE') return settings.reset(decodeURIComponent(settingMatch[1]), (await body(req)).revision);

@@ -8,7 +8,7 @@ import { prepareInstall, applyInstall } from '../../scripts/install.mjs';
 import { prepareUninstall, applyUninstall } from '../../scripts/uninstall.mjs';
 import { controlServices } from '../../scripts/service-control.mjs';
 import { quote, locations } from '../../scripts/install-state.mjs';
-import { ROOT } from '../../src/shared.mjs';
+import { ROOT, readEndpoint } from '../../src/shared.mjs';
 import { Harness, eventually } from '../helpers.mjs';
 
 function setup(t, real = false) {
@@ -95,7 +95,7 @@ for (const change of ['timeout', 'duplicate', 'remove-marker', 'malformed']) tes
   const config = f.read('claude');
   if (change === 'timeout') config.hooks.Stop[1].hooks[0].timeout = 8;
   if (change === 'duplicate') config.hooks.Stop.push(structuredClone(config.hooks.Stop[1]));
-  if (change === 'remove-marker') config.hooks.Stop[1].hooks[0].command = config.hooks.Stop[1].hooks[0].command.replace(/^WORKLOG_INSTALL_ID='[^']+' /, '');
+  if (change === 'remove-marker') config.hooks.Stop[1].hooks[0].command = config.hooks.Stop[1].hooks[0].command.replace(/WORKLOG_INSTALL_ID='[^']+' /, '');
   if (change === 'malformed') fs.writeFileSync(f.loc.configs.claude, '{bad json'); else f.write('claude', config);
   const before = fs.readFileSync(f.loc.configs.claude, 'utf8');
   const result = f.uninstall(); assert.equal(result.status, 'needs_attention'); assert.ok(present(f.plan.runtimeRoot));
@@ -310,4 +310,54 @@ test('installed request skill delegates natural language to classification and a
   assert.equal(f.uninstall().status, 'needs_attention', 'running services must stop before files are removed');
   await h.close(false); assert.equal(f.uninstall().status, 'uninstalled');
   assert.ok(present(path.join(f.loc.data, 'memory.sqlite'))); assert.ok(present(run.artifact.file));
+});
+
+test('packaged custom task settings survive uninstall and reinstall unchanged and packaged GUI serves SVG icons', async t => {
+  const f = setup(t, true);
+  // Add the protocol fixture to this fake package before its owned inventory is captured.
+  const fixtures = path.join(f.sourceApp, 'Contents/Resources/harness/tests/fixtures');
+  fs.mkdirSync(fixtures, { recursive: true });
+  fs.copyFileSync(path.join(ROOT, 'tests/fixtures/worker.mjs'), path.join(fixtures, 'worker.mjs'));
+  f.install();
+  const h = new Harness(f.loc.data); h.executable = path.join(f.plan.runtimeRoot, 'node'); h.serviceRoot = path.join(f.plan.runtimeRoot, 'harness');
+  t.after(() => h.close(false)); await h.start('runtime'); await h.start('manager');
+  const initial = await h.manager('/execution-settings');
+  const backends = { codex: { model: null, effort: null }, claude: { model: null, effort: null } };
+  const created = await h.manager('/execution-settings/custom-tasks', { method: 'POST', body: {
+    revision: initial.revision, template_id: 'prd.create', label: '설치 고객 PRD', description: '설치 고객의 요구와 수용 기준을 정리한다.',
+    routing_terms: ['설치 고객 PRD'], instruction: '# 설치 고객 지시문\n\n요구와 제약을 구분한다.', backend: 'codex', backends
+  } });
+  const task = created.created_task_id, instruction = '# 재설치 보존 지시문\n\n고객별 **수용 기준**과 실패 경로를 확인한다.';
+  const edited = await h.manager(`/execution-settings/${task}`, { method: 'PUT', body: {
+    revision: created.revision, label: '고객 계약 PRD', description: '고객 계약의 요구와 수용 기준을 정리한다.', routing_terms: ['고객 계약 PRD'],
+    instruction, backend: 'claude', backends: { codex: { model: 'saved-codex', effort: 'high' }, claude: { model: 'saved-claude', effort: 'max' } }
+  } });
+  const settingsFile = path.join(f.loc.data, 'execution-settings.json'), original = fs.readFileSync(settingsFile);
+  await h.close(false);
+  assert.equal(f.uninstall().status, 'uninstalled'); assert.deepEqual(fs.readFileSync(settingsFile), original);
+  const replan = prepareInstall({ output: path.join(f.dir, 'reinstall-plan'), homeDir: f.homeDir, sourceApp: f.sourceApp });
+  assert.equal(applyInstall(replan, { activate: false }).status, 'installed');
+  assert.deepEqual(fs.readFileSync(settingsFile), original);
+  await h.start('runtime'); await h.start('manager');
+  const restored = await h.manager('/execution-settings'), saved = restored.tasks.find(value => value.id === task);
+  assert.equal(restored.revision, edited.revision); assert.equal(saved.source, 'user'); assert.equal(saved.template_id, 'prd.create');
+  assert.equal(saved.label, '고객 계약 PRD'); assert.equal(saved.instruction, instruction); assert.equal(saved.backend, 'claude');
+  assert.equal(saved.backends.codex.model, 'saved-codex'); assert.equal(saved.backends.codex.effort, 'high');
+  assert.equal(saved.backends.claude.model, 'saved-claude'); assert.equal(saved.backends.claude.effort, 'max');
+  const catalog = await h.runtime('/catalog'), custom = catalog.jobs.find(job => job.id === task), template = catalog.jobs.find(job => job.id === 'prd.create');
+  assert.equal(custom.source, 'user'); assert.equal(custom.template_id, template.id);
+  assert.deepEqual(custom.input_schema, template.input_schema); assert.equal(custom.workflow, template.workflow);
+  await assert.rejects(h.runtime('/runs', { method: 'POST', body: { task, input: { unexpected: true }, engine: 'fixture' } }), error => error.status === 400);
+  const run = await h.finish(await h.runtime('/runs', { method: 'POST', body: { task, input: { requirements: '계약별 승인 기준을 정리한다.' }, engine: 'fixture' } }));
+  assert.equal(run.status, 'completed', run.message); assert.ok(present(run.artifact.file));
+  assert.ok(fs.readFileSync(path.join(run.attempts[0].directory, 'prompt.txt'), 'utf8').includes(instruction));
+  assert.deepEqual(fs.readFileSync(settingsFile), original, 'startup, catalog access and execution preserve settings bytes');
+  const base = `http://127.0.0.1:${readEndpoint(f.loc.data, 'manager').port}`;
+  const page = await fetch(`${base}/`), icons = await fetch(`${base}/icons.css`);
+  assert.equal(page.status, 200); assert.equal(icons.status, 200); assert.match(icons.headers.get('content-type'), /^text\/css/);
+  const html = await page.text(); assert.match(html, /href="\/icons\.css"/);
+  assert.match(html, /<svg[^>]+class="menu-icon"[^>]+data-icon="execution"/);
+  assert.match(await icons.text(), /\.menu-icon/);
+  await h.close(false); assert.equal(f.uninstall().status, 'uninstalled');
+  assert.deepEqual(fs.readFileSync(settingsFile), original);
 });

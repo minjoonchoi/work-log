@@ -56,7 +56,7 @@ export function loadCatalog() {
 export function normalizeInput(task, input, prompt, job) {
   assert(input && typeof input === 'object' && !Array.isArray(input), 'input은 객체여야 합니다.');
   const only = keys => assert(Object.keys(input).every(k => keys.includes(k)), `이 업무의 input에는 ${keys.join(', ')}만 지정할 수 있습니다.`);
-  if (task === 'test.scenarios.plan') {
+  if (job.kind === 'scenario_plan') {
     only(['requirements', 'categories', 'instructions']);
     const requirements = input.requirements === undefined ? [{ id: 'REQ-001', text: prompt }] : input.requirements;
     assert(Array.isArray(requirements) && requirements.length > 0 && requirements.length <= 80, '요구사항은 1~80개입니다.');

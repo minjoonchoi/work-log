@@ -87,12 +87,17 @@ export function readManifest(loc) {
   for (const h of m.hooks) {
     assert(h.path === loc.configs[h.engine] && Array.isArray(h.entries), '훅 설정 경로가 다릅니다.');
     for (const entry of h.entries) assert(entry.hook?.type === 'command' && typeof entry.event === 'string'
-      && entry.hook.command === hookCommand(loc, runtime, m.id, h.engine), '훅 소유 식별자가 다릅니다.');
+      && [hookCommand(loc, runtime, m.id, h.engine), legacyHookCommand(loc, runtime, m.id, h.engine)].includes(entry.hook.command), '훅 소유 식별자가 다릅니다.');
   }
   return m;
 }
 
 export function hookCommand(loc, runtime, id, engine) {
+  return `if [ "\${HARNESS_WORKER:-}" = "1" ]; then exit 0; fi; ${legacyHookCommand(loc, runtime, id, engine)}`;
+}
+
+// Exact legacy receipts remain removable without accepting unrelated commands.
+function legacyHookCommand(loc, runtime, id, engine) {
   return `WORKLOG_INSTALL_ID=${quote(id)} HARNESS_DATA_DIR=${quote(loc.data)} ${quote(path.join(runtime, 'node'))} ${quote(path.join(runtime, 'harness/src/hook.mjs'))} ${engine}`;
 }
 

@@ -45,23 +45,22 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
   const effortOptions = (selected, efforts) => `<option value="">유형 기본값 사용</option>${efforts.map(value => `<option value="${esc(value)}" ${selected === value ? 'selected' : ''}>${esc(value)}</option>`).join('')}`;
   const defaults = backend => Object.entries(backend.defaults).map(([stage, value]) => `${stage}: ${value.model} / ${value.effort}`).join(' · ');
   const categories = { product: '제품 · PO', project: '프로젝트 · PM', design: '공통 설계', frontend: '프런트엔드', backend: '백엔드', engineering: '개발 공통', knowledge: '조사·문서', system: '시스템 작업' };
-  const taskOptions = selected => Object.entries(categories).map(([category, label]) => {
-    const tasks = snapshot.tasks.filter(task => task.category === category);
-    return tasks.length ? `<optgroup label="${esc(label)}">${tasks.map(task => `<option value="${esc(task.id)}" ${task.id === selected ? 'selected' : ''}>${esc(task.label)} · ${esc(task.id)}</option>`).join('')}</optgroup>` : '';
-  }).join('');
+  const option = (task, selected) => `<option value="${esc(task.id)}" ${task.id === selected ? 'selected' : ''}>${esc(task.label)} · ${esc(task.id)}</option>`;
+  const taskOptions = selected => {
+    const groups = Object.entries(categories).map(([category, label]) => {
+      const tasks = snapshot.tasks.filter(task => task.source !== 'user' && task.category === category);
+      return tasks.length ? `<optgroup label="${esc(label)}">${tasks.map(task => option(task, selected)).join('')}</optgroup>` : '';
+    }).join('');
+    const custom = snapshot.tasks.filter(task => task.source === 'user');
+    return groups + (custom.length ? `<optgroup label="사용자 작업">${custom.map(task => option(task, selected)).join('')}</optgroup>` : '');
+  };
   const boundaryDetails = boundary => !boundary ? '' : `<section id="task-boundary" aria-label="작업 책임 경계">
     <p><strong>담당 결과</strong><br>${esc(boundary.owns)}<br><small>산출물: ${esc(boundary.deliverable)}</small></p>
     <p><strong>제외 범위</strong><br>${boundary.excludes.map(esc).join(' · ')}</p>
     <details><summary>필요 자료와 완료 기준</summary><p><strong>필요 자료</strong><br>${boundary.inputs.map(esc).join(' · ')}</p><p><strong>완료 기준</strong><br>${boundary.acceptance.map(esc).join('<br>')}</p></details>
     <p class="help">이 책임 경계는 지시문을 편집해도 유지됩니다.</p>
   </section>`;
-  function render(taskId) {
-    const task = snapshot.tasks.find(value => value.id === taskId) || snapshot.tasks[0];
-    modal(`<h2>작업 실행 설정</h2><p>새로 시작하는 작업에 적용할 지시문과 backend 설정입니다. 진행 중인 작업의 고정 설정은 바뀌지 않습니다.</p>
-      <div id="dialog-error" class="error" role="alert" hidden></div>
-      <label for="execution-task">작업 유형</label><select id="execution-task">${taskOptions(task.id)}</select>
-      ${boundaryDetails(task.boundary)}
-      <section class="instruction-editor" aria-label="Markdown 지시문">
+  const editor = task => `<section class="instruction-editor" aria-label="Markdown 지시문">
         <div class="instruction-editor-heading"><label for="task-instruction">작업 지시문</label><span>Markdown</span></div>
         <div class="instruction-tabs" role="tablist" aria-label="지시문 보기 방식">
           <button type="button" id="instruction-preview-tab" role="tab" aria-selected="true" aria-controls="instruction-preview">미리보기</button>
@@ -78,9 +77,17 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
           <label for="${engine}-effort">Effort override</label><select id="${engine}-effort">${effortOptions(task.backends[engine].effort, snapshot.efforts[engine])}</select>
           <p class="help">${esc(defaults(task.backends[engine]))}</p></section>`).join('')}
       </div>
-      <p class="help">빈 model과 ‘유형 기본값 사용’은 단계별 기본 프로필을 유지합니다. override를 지정하면 이 작업의 생성·검토·수정 단계에 같은 값을 적용합니다.</p>
-      <div class="dialog-actions"><button data-close>닫기</button><button id="reset-execution" class="secondary" ${task.overridden ? '' : 'disabled'}>기본값 복원</button><button id="save-execution" class="primary">저장</button></div>`);
-    $('#execution-task').onchange = event => render(event.target.value);
+      <p class="help">빈 model과 ‘유형 기본값 사용’은 단계별 기본 프로필을 유지합니다. override를 지정하면 이 작업의 생성·검토·수정 단계에 같은 값을 적용합니다.</p>`;
+  const metadata = task => `<section class="custom-task-metadata" aria-label="사용자 작업 정보">
+      <label for="custom-task-label">작업 이름</label><input id="custom-task-label" value="${esc(task.label || '')}" maxlength="120" required>
+      <label for="custom-task-description">작업 목적</label><textarea id="custom-task-description" maxlength="2000" required>${esc(task.description || '')}</textarea>
+      <label for="custom-task-terms">선택 키워드</label><textarea id="custom-task-terms" aria-describedby="custom-task-terms-help" required>${esc((task.routing_terms || []).join(', '))}</textarea>
+      <p id="custom-task-terms-help" class="help">이 작업을 요청할 때 쓸 구체적인 표현을 쉼표나 줄바꿈으로 구분해 1~20개 입력하세요. 각 표현은 80자 이내로 중복 없이 입력합니다. 다른 작업과 구별되는 표현을 사용하면 선택이 쉬워집니다.</p>
+    </section>`;
+  const errorMarkup = '<div id="dialog-error" class="error" role="alert" tabindex="-1" hidden></div>';
+  const inherited = template => `<p class="custom-task-template"><strong>기반 작업 유형</strong><br>${esc(template.label)} · ${esc(template.id)}</p>
+    <p class="help">기반 유형의 결과물 형식과 검토·수정 절차, 책임 경계를 그대로 사용합니다. 등록 후에는 기반 유형을 바꿀 수 없습니다.</p>`;
+  function bindEditor() {
     const instructionTabs = [$('#instruction-preview-tab'), $('#instruction-edit-tab')];
     function showInstruction(index, focus = false) {
       const edit = index === 1;
@@ -96,24 +103,87 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
         event.preventDefault(); showInstruction(event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1 - index, true);
       };
     });
-    $('#save-execution').onclick = async () => {
-      const button = $('#save-execution'); button.disabled = true;
-      try {
-        snapshot = await api(`/execution-settings/${encodeURIComponent(task.id)}`, { method: 'PUT', body: {
-          revision: snapshot.revision, instruction: $('#task-instruction').value, backend: $('#task-backend').value,
-          backends: Object.fromEntries(['codex', 'claude'].map(engine => [engine, {
-            model: $(`#${engine}-model`).value.trim() || null, effort: $(`#${engine}-effort`).value || null
-          }]))
-        } });
-        toast('작업 실행 설정을 저장했습니다.'); render(task.id);
-      } catch (error) { $('#dialog-error').textContent = error.message; $('#dialog-error').hidden = false; button.disabled = false; }
-    };
-    $('#reset-execution').onclick = async () => {
-      try {
-        snapshot = await api(`/execution-settings/${encodeURIComponent(task.id)}`, { method: 'DELETE', body: { revision: snapshot.revision } });
-        toast('유형 기본값으로 복원했습니다.'); render(task.id);
-      } catch (error) { $('#dialog-error').textContent = error.message; $('#dialog-error').hidden = false; }
-    };
+  }
+  const executionValues = () => ({
+    revision: snapshot.revision, instruction: $('#task-instruction').value, backend: $('#task-backend').value,
+    backends: Object.fromEntries(['codex', 'claude'].map(engine => [engine, {
+      model: $(`#${engine}-model`).value.trim() || null, effort: $(`#${engine}-effort`).value || null
+    }]))
+  });
+  const metadataValues = () => ({
+    label: $('#custom-task-label').value.trim(), description: $('#custom-task-description').value.trim(),
+    routing_terms: $('#custom-task-terms').value.split(/[,\n\r]+/).map(value => value.trim()).filter(Boolean)
+  });
+  async function mutate(action) {
+    const controls = [...document.querySelectorAll('#modal-content button, #modal-content select, #modal-content input, #modal-content textarea')];
+    const enabled = controls.filter(control => !control.disabled);
+    enabled.forEach(control => { control.disabled = true; });
+    const error = $('#dialog-error'); error.hidden = true;
+    try { await action(); }
+    catch (failure) {
+      error.textContent = failure.message; error.hidden = false; error.focus();
+    } finally { enabled.forEach(control => { control.disabled = false; }); }
+  }
+  function render(taskId) {
+    const task = snapshot.tasks.find(value => value.id === taskId) || snapshot.tasks[0];
+    const custom = task.source === 'user';
+    const template = custom && snapshot.tasks.find(value => value.id === task.template_id);
+    modal(`<h2>작업 실행 설정</h2><p>새로 시작하는 작업에 적용할 지시문과 backend 설정입니다. 진행 중인 작업의 고정 설정은 바뀌지 않습니다.</p>
+      ${errorMarkup}
+      <div class="execution-task-toolbar"><label for="execution-task">작업 유형</label><button id="add-custom-task" class="secondary">사용자 작업 등록</button></div>
+      <select id="execution-task">${taskOptions(task.id)}</select>
+      ${custom ? `<p class="execution-task-source"><span>사용자 작업</span><small>${esc(task.id)}</small></p>${metadata(task)}${inherited(template || { id: task.template_id, label: task.template_id })}` : ''}
+      ${boundaryDetails(task.boundary)}${editor(task)}
+      ${custom ? '<p class="help">기본값 복원은 지시문과 backend 설정을 복원합니다. 등록한 작업 유형과 이름·목적·키워드는 유지됩니다.</p>' : ''}
+      <div class="dialog-actions execution-settings-actions"><button data-close>닫기</button>${custom ? '<button id="delete-custom-task" class="custom-task-delete">작업 등록 삭제</button>' : ''}<button id="reset-execution" class="secondary" ${task.overridden ? '' : 'disabled'}>기본값 복원</button><button id="save-execution" class="primary">저장</button></div>
+      ${custom ? `<section id="custom-task-delete-confirmation" class="custom-task-delete-confirmation" aria-label="작업 등록 삭제 확인" hidden><p><strong>${esc(task.label)}</strong> 작업 등록을 삭제할까요? 이후 새 작업에서 선택할 수 없으며, 기존 실행 기록은 유지됩니다.</p><div class="dialog-actions"><button id="cancel-custom-task-delete">취소</button><button id="confirm-custom-task-delete" class="custom-task-delete">등록 삭제</button></div></section>` : ''}`);
+    $('#execution-task').onchange = event => render(event.target.value);
+    $('#add-custom-task').onclick = () => renderCreate(task.id);
+    bindEditor();
+    $('#save-execution').onclick = () => mutate(async () => {
+      snapshot = await api(`/execution-settings/${encodeURIComponent(task.id)}`, { method: 'PUT', body: {
+        ...executionValues(), ...(custom ? metadataValues() : {})
+      } });
+      toast('작업 실행 설정을 저장했습니다.'); render(task.id);
+    });
+    $('#reset-execution').onclick = () => mutate(async () => {
+      snapshot = await api(`/execution-settings/${encodeURIComponent(task.id)}`, { method: 'DELETE', body: { revision: snapshot.revision } });
+      toast('유형 기본값으로 복원했습니다.'); render(task.id);
+    });
+    if (custom) {
+      $('#delete-custom-task').onclick = () => {
+        $('#custom-task-delete-confirmation').hidden = false;
+        $('#cancel-custom-task-delete').focus();
+      };
+      $('#cancel-custom-task-delete').onclick = () => {
+        $('#custom-task-delete-confirmation').hidden = true;
+        $('#delete-custom-task').focus();
+      };
+      $('#confirm-custom-task-delete').onclick = () => mutate(async () => {
+        snapshot = await api(`/execution-settings/custom-tasks/${encodeURIComponent(task.id)}`, { method: 'DELETE', body: { revision: snapshot.revision } });
+        toast('사용자 작업 등록을 삭제했습니다.'); render(task.template_id);
+      });
+    }
+  }
+  function renderCreate(previousId, templateId = 'document.create', draft = {}) {
+    const templates = (snapshot.templates || []).map(id => snapshot.tasks.find(task => task.id === id)).filter(Boolean);
+    const template = templates.find(task => task.id === templateId) || templates[0];
+    modal(`<h2>사용자 작업 등록</h2><p>기존 작업을 기반으로 자주 사용하는 작업 유형을 등록하세요. 등록한 유형은 설정을 다시 열거나 앱을 다시 시작해도 유지됩니다.</p>
+      ${errorMarkup}
+      <label for="custom-task-template">기반 작업 유형</label><select id="custom-task-template">${templates.map(task => option(task, template?.id)).join('')}</select>
+      <p class="help">기반 유형을 바꾸면 지시문과 backend 입력을 해당 유형의 현재 설정으로 바꿉니다.</p>
+      ${template ? `${inherited(template)}${boundaryDetails(template.boundary)}${metadata(draft)}${editor(template)}` : '<p class="help">등록에 사용할 수 있는 기반 작업 유형이 없습니다.</p>'}
+      <div class="dialog-actions"><button id="cancel-custom-task">취소</button><button id="create-custom-task" class="primary" ${template ? '' : 'disabled'}>등록</button></div>`);
+    $('#cancel-custom-task').onclick = () => render(previousId);
+    if (!template) return;
+    $('#custom-task-template').onchange = event => renderCreate(previousId, event.target.value, metadataValues());
+    bindEditor();
+    $('#create-custom-task').onclick = () => mutate(async () => {
+      snapshot = await api('/execution-settings/custom-tasks', { method: 'POST', body: {
+        ...executionValues(), ...metadataValues(), template_id: template.id
+      } });
+      toast('사용자 작업을 등록했습니다.'); render(snapshot.created_task_id);
+    });
   }
   async function showSettings() { snapshot = await api('/execution-settings'); render(snapshot.tasks[0]?.id); }
   return { showSettings };
