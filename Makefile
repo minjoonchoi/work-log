@@ -9,8 +9,8 @@ export NODE NPM HARNESS_BUNDLE_NODE HARNESS_NODE_CACHE HARNESS_NODE_DOWNLOAD
 build:
 	@./scripts/with-node.sh build
 
-install: build
-	@./scripts/with-node.sh --existing node scripts/install.mjs --apply $(INSTALL_ARGS)
+install:
+	@./scripts/with-node.sh install $(INSTALL_ARGS)
 
 install-plan:
 	@./scripts/with-node.sh --existing node scripts/install.mjs $(INSTALL_ARGS)

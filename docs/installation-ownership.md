@@ -1,6 +1,16 @@
 # 설치 소유권과 제거
 
-`make install`은 의존성 설치·macOS 앱 빌드·사용자 설치를 수행하고 `make uninstall`은 설치 소유 기록을 확인한 뒤 해당 항목만 제거한다. `make install-plan`, `make uninstall-plan`은 사용자 설정을 바꾸지 않고 대상을 출력한다. ZIP에도 각각의 설치·제거 명령이 포함된다.
+`make install`은 의존성 설치·임시 macOS 앱 빌드·사용자 설치를 수행한다. 앱의 설치 위치는 현재 사용자의 `~/Applications/WorkLog.app`이다. `make uninstall`은 설치 소유 기록을 확인한 뒤 해당 항목만 제거한다. `make install-plan`, `make uninstall-plan`은 사용자 설정을 바꾸지 않고 대상을 출력한다. ZIP에도 각각의 설치·제거 명령이 포함된다.
+
+## 설치용 빌드와 개발·배포용 빌드
+
+`make install`은 `scripts/with-node.sh install`에서 Node 선택과 `npm ci`를 수행한 뒤 `scripts/install-source.mjs`를 실행한다. 앱을 임시 폴더에 빌드하고 ZIP 생성 없이 설치한다. 임시 빌드 폴더는 빌드 또는 설치의 성공·실패와 관계없이 정리한다. 정상 설치가 이미 있으면 소유 기록을 확인하고 `already_installed`로 유지하며 앱을 다시 빌드하지 않는다. 이 경우에도 앞 단계의 Node 준비와 `npm ci`는 수행될 수 있다.
+
+설치 성공 또는 정상 기존 설치 확인 후에는 이 저장소의 `dist/WorkLog.app`, `dist/package/WorkLog/WorkLog.app` 두 경로만 중복 정리 후보로 확인한다. 설치 소유 기록의 앱과 전체 파일 목록·종류·내용·권한·심링크 대상이 일치하는 복사본만 제거한다. 수정·추가 파일, 앱 또는 상위 경로의 심링크, 다른 버전, 확인 실패가 있으면 해당 앱을 보존하고 결과의 `build_cleanup.preserved` 목록에 경로와 이유를 남긴다. 다른 앱을 검색하거나 `dist/package/WorkLog` 폴더 전체를 지우지 않는다. 예전 `dist/Work Log.app`도 정리 대상이 아니다. 설치가 실패하면 기존 빌드 산출물은 정리하지 않는다.
+
+`make install INSTALL_ARGS='--source-app /path/to/WorkLog.app'`은 미리 빌드된 앱을 설치한다. 기존 Node만 사용하며 Node 다운로드·`npm ci`·앱 빌드를 건너뛴다. 명시한 원본 앱은 중복 정리 후보 경로에 있더라도 보존한다. ZIP의 설치 명령이나 `scripts/install.mjs`를 직접 실행하는 경우에도 원본 앱을 소비하거나 삭제하지 않는다.
+
+`make build`는 개발·배포용 `dist/WorkLog.app`과 `dist/WorkLog-macos-arm64.zip`을 남긴다. ZIP에는 앱과 설치·제거 명령이 포함되며 포장용 임시 폴더는 정리한다. 설치용 빌드는 `dist`에 새 앱이나 ZIP을 만들지 않는다. 과거 ZIP, Node 캐시, 업무 데이터는 중복 앱 정리 대상이 아니다.
 
 ## 빌드용 Node 선택과 준비
 
@@ -14,7 +24,7 @@ Node는 빌드하는 앱 안에 복사한다. 기존 시스템·nvm 설치본을
 
 `make install-plan`, `make uninstall-plan`, `make uninstall`, `make test`는 `--existing` 모드로 기존 Node만 사용하고 다운로드하지 않는다. 이 모드는 자동 탐색 시 nvm 다음으로 설치된 앱과 `dist/WorkLog.app`의 Node를 확인한 뒤 캐시를 찾으며, 버전과 `node:sqlite` 지원을 검사한다. `make test`에는 선택한 Node와 함께 사용할 npm도 필요하다. 제거 명령은 빌드가 필요 없으며 셸에 Node가 없어도 설치된 앱의 실행 파일을 후보로 사용할 수 있다. 필요한 Node를 찾지 못하면 사용자 설정을 바꾸지 않고 실패한다.
 
-`npm run build:mac`을 직접 실행하는 경우에는 `HARNESS_BUNDLE_NODE` 또는 실행 중인 `process.execPath`를 사용한다. 번들 후보 검증은 기존 `dist/WorkLog.app`을 교체하기 전에 수행한다. Node 자동 준비와 의존성 설치까지 필요하면 `make build`를 사용한다. Node 선택 개선은 설치 갱신 정책을 바꾸지 않으므로, 정상 설치에 `make install`을 다시 실행하면 여전히 `already_installed`를 반환한다.
+`npm run build:mac`을 직접 실행하는 경우에는 `HARNESS_BUNDLE_NODE` 또는 실행 중인 `process.execPath`를 사용한다. 번들 후보 검증은 기존 `dist/WorkLog.app`을 교체하기 전에 수행한다. Node 자동 준비와 의존성 설치까지 필요하면 `make build`를 사용한다. 설치용 임시 빌드와 중복 정리는 설치 갱신 정책을 바꾸지 않으므로, 정상 설치에 `make install`을 다시 실행하면 여전히 `already_installed`를 반환한다.
 
 ## 단일 요청 스킬
 
@@ -57,6 +67,8 @@ Node는 빌드하는 앱 안에 복사한다. 기존 시스템·nvm 설치본을
 CLI는 완료/이미 제거/미설치에 0, 보존된 충돌·미관리 설치에 2, 잘못된 인자·기록 등 실행 실패에 1을 반환한다. 설치·제거 후 기존 에이전트 세션이 이미 읽은 지시문까지 회수했다고 주장하지 않는다.
 
 ## 검증
+
+`tests/e2e/source-install.test.mjs`는 실제 설치 코드를 임시 홈에서 실행해 임시 빌드 정리, 재설치 시 빌드 생략, 실패 시 원본 보존, 동일한 과거 앱 복사본 제거, 수정·추가 파일·심링크·명시적 원본 보존을 확인한다. 설치·Node 준비·소스 설치 관련 E2E 72개를 통과했다. 별도로 네이티브 `make install`을 격리된 홈에서 실행해 설치 앱 하나와 번들 Node·서명을 확인했고, 배포용 ZIP의 내용·무결성 및 포장용 임시 폴더 정리를 검증했다. 현재 사용자의 실제 앱·훅·LaunchAgent는 이 검증에서 변경하지 않았다.
 
 `tests/e2e/node-bootstrap.test.mjs`는 Node가 없는 PATH에서 시작한 `make install`, 기존 Node·nvm·사용자 지정 경로·캐시 재사용, npm과 하위 프로세스의 PATH 전달, 구버전·다른 아키텍처·외부 라이브러리·SQLite 미지원, 체크섬 불일치·다운로드 실패·오프라인 실행을 격리된 환경에서 검증한다. 다운로드 도구는 대역을 사용하고 실제 버전·SQLite·라이브러리 검사 코드를 실행한다. 별도로 공식 22.23.2 배포본의 실제 다운로드·체크섬 검사·캐시 재사용과 기존 nvm Node를 사용한 `make build`, 번들 설치·서비스 시작·제거를 확인했다. 실제 사용자 설치는 변경하지 않았다.
 

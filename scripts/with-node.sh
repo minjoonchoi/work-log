@@ -6,7 +6,14 @@ repo_dir=$(dirname -- "$script_dir")
 existing_only=0
 if [ "${1:-}" = '--existing' ]; then existing_only=1; shift; fi
 action=${1:-}
-case "$action" in node|npm|build) shift ;; *) echo 'Usage: with-node.sh [--existing] node|npm|build [arguments...]' >&2; exit 1 ;; esac
+case "$action" in node|npm|build|install) shift ;; *) echo 'Usage: with-node.sh [--existing] node|npm|build|install [arguments...]' >&2; exit 1 ;; esac
+need_npm=0
+case "$action" in npm|build|install) need_npm=1 ;; esac
+if [ "$action" = install ]; then
+  for argument do
+    case "$argument" in --source-app|--source-app=*) existing_only=1; need_npm=0 ;; esac
+  done
+fi
 
 node_release='node-v22.23.2-darwin-arm64'
 node_sha256='61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6'
@@ -22,7 +29,7 @@ if [ "$existing_only" -eq 0 ]; then
   fi
   command -v otool >/dev/null 2>&1 || { echo 'WorkLog: Xcode Command Line Tools의 otool이 필요합니다.' >&2; exit 1; }
 fi
-if { [ "$action" = npm ] || [ "$action" = build ]; } && [ -n "${NPM:-}" ]; then
+if [ "$need_npm" -eq 1 ] && [ -n "${NPM:-}" ]; then
   npm_override=$(command -v "$NPM" 2>/dev/null) || { printf '%s\n' "WorkLog: NPM 실행 파일을 찾을 수 없습니다: $NPM" >&2; exit 1; }
   [ -x "$npm_override" ] || { printf '%s\n' "WorkLog: NPM 실행 파일을 실행할 수 없습니다: $NPM" >&2; exit 1; }
 fi
@@ -38,7 +45,7 @@ try_node() {
   fi
   [ -x "$checked" ] || { last_error="Node 검사 결과가 올바르지 않습니다: $candidate"; return 1; }
   npm_candidate=''
-  if [ "$action" = npm ] || [ "$action" = build ]; then
+  if [ "$need_npm" -eq 1 ]; then
     if [ -n "${NPM:-}" ]; then
       npm_candidate=$npm_override
     else
@@ -124,6 +131,10 @@ printf '%s\n' "WorkLog: Node 재사용 $selected_node" >&2
 if [ "$action" = build ]; then
   "$selected_npm" ci
   exec "$selected_npm" run build:mac
+fi
+if [ "$action" = install ]; then
+  if [ "$need_npm" -eq 1 ]; then "$selected_npm" ci; fi
+  exec "$selected_node" "$script_dir/install-source.mjs" "$@"
 fi
 if [ "$action" = npm ]; then exec "$selected_npm" "$@"; fi
 exec "$selected_node" "$@"

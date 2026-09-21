@@ -274,9 +274,9 @@ test('existing-only mode with no runtime fails without attempting a download', t
   assert.equal(fs.existsSync(f.cachedNode), false);
 });
 
-test('make install bootstraps before npm ci and build, then runs installation with the same cached Node', t => {
+test('make install bootstraps before npm ci and delegates temporary build/installation to the same cached Node', t => {
   const f = fixture(t); f.download();
-  fs.writeFileSync(path.join(f.root, 'scripts/install.mjs'), `import {createRequire} from 'node:module';
+  fs.writeFileSync(path.join(f.root, 'scripts/install-source.mjs'), `import {createRequire} from 'node:module';
     const require=createRequire(import.meta.url);
     ${report.replace('process.argv.slice(1)', 'process.argv.slice(2)')}
   `);
@@ -285,7 +285,7 @@ test('make install bootstraps before npm ci and build, then runs installation wi
   });
   assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
   const calls = result.stdout.trim().split('\n').map(line => JSON.parse(line));
-  assert.deepEqual(calls.map(call => call.args), [['ci'], ['run', 'build:mac'], ['--apply', '--no-activate']]);
+  assert.deepEqual(calls.map(call => call.args), [['ci'], ['--no-activate']]);
   for (const call of calls) selected(call, f.cachedNode);
   assert.equal(f.calls().filter(value => value === archiveUrl).length, 1);
 });

@@ -132,7 +132,9 @@ make install
 make uninstall
 ```
 
-`make install`은 기존 Node를 재사용해 프로젝트 의존성을 설치하고 앱을 빌드한 뒤 사용자 홈에 설치합니다. Node는 `HARNESS_BUNDLE_NODE` → `NODE` 명시값을 우선하며, 지정하지 않으면 현재 `PATH`의 `node`, `NVM_BIN`, `${NVM_DIR:-$HOME/.nvm}/versions/node/`의 설치본, 프로젝트 캐시 순서로 찾습니다. 버전·아키텍처·`node:sqlite` 지원과 독립 실행 가능 여부를 검사합니다. Homebrew의 외부 동적 라이브러리에 의존하는 Node는 번들에 넣지 않고 다른 후보를 찾습니다. 명시한 Node가 부적합하면 다른 버전으로 바꾸지 않고 오류를 냅니다.
+`make install`은 프로젝트 의존성을 설치하고 임시 폴더에서 앱을 빌드한 뒤 현재 사용자의 `~/Applications/WorkLog.app`에 설치합니다. 설치용 빌드는 `dist`에 앱이나 ZIP을 만들지 않으며, 임시 앱은 성공·실패 모두 정리합니다. 정상 설치가 이미 있으면 앱 빌드를 건너뛰고 기존 설치를 유지합니다. 이 경우에도 Node 준비와 `npm ci`는 수행될 수 있습니다.
+
+Node는 `HARNESS_BUNDLE_NODE` → `NODE` 명시값을 우선하며, 지정하지 않으면 현재 `PATH`의 `node`, `NVM_BIN`, `${NVM_DIR:-$HOME/.nvm}/versions/node/`의 설치본, 프로젝트 캐시 순서로 찾습니다. 버전·아키텍처·`node:sqlite` 지원과 독립 실행 가능 여부를 검사합니다. Homebrew의 외부 동적 라이브러리에 의존하는 Node는 번들에 넣지 않고 다른 후보를 찾습니다. 명시한 Node가 부적합하면 다른 버전으로 바꾸지 않고 오류를 냅니다.
 
 적합한 Node가 없으면 [공식 Node.js 22.23.2 배포본](https://nodejs.org/en/download/archive/v22.23.2)의 macOS arm64 압축 파일을 내려받아 SHA-256을 확인한 후 `.data/node/node-v22.23.2-darwin-arm64/`에 준비합니다. `HARNESS_NODE_CACHE`로 캐시 경로를 바꾸거나 `HARNESS_NODE_DOWNLOAD=0`으로 다운로드를 끌 수 있습니다. 준비한 Node는 앱 안에 복사합니다. 시스템 Node·nvm 설치본·셸 설정은 변경하지 않습니다.
 
@@ -152,7 +154,11 @@ HARNESS_NODE_DOWNLOAD=0 make build
 
 설치·제거 대상을 먼저 보려면 `make install-plan`, `make uninstall-plan`을 사용합니다. 이 두 명령과 `make uninstall`, `make test`는 기존 Node만 사용하며 다운로드하지 않습니다. 제거는 빌드를 요구하지 않고, 셸에서 Node를 찾지 못하면 설치된 앱의 Node도 사용합니다.
 
-설치 후에는 `~/Applications/WorkLog.app`을 실행합니다. 일반 실행은 업무 목록 창을 열고 메뉴 막대 아이콘은 빠른 패널을 엽니다. 예전 `dist/Work Log.app`은 다른 데이터 경로를 사용하는 이전 빌드일 수 있으므로 설치본과 혼동하지 마세요. `make install`을 다시 실행해도 기존 설치본은 자동 교체되지 않습니다.
+설치 후에는 `~/Applications/WorkLog.app`을 실행합니다. 일반 실행은 업무 목록 창을 열고 메뉴 막대 아이콘은 빠른 패널을 엽니다. `make install`을 다시 실행해도 기존 설치본은 자동 교체되지 않습니다.
+
+설치가 성공했거나 정상 설치를 확인한 뒤에는 과거 빌드가 남긴 `dist/WorkLog.app`, `dist/package/WorkLog/WorkLog.app`을 확인합니다. 설치 소유 기록과 전체 파일 목록·내용·권한이 일치하는 복사본만 정리합니다. 수정·추가 파일, 앱이나 상위 경로의 심링크, 다른 버전이 있으면 보존하고 결과의 `build_cleanup.preserved` 목록에 알립니다. 예전 `dist/Work Log.app`이나 다른 위치의 앱은 자동 정리 대상이 아닙니다.
+
+미리 빌드한 앱을 설치하려면 `make install INSTALL_ARGS='--source-app /path/to/WorkLog.app'`을 사용합니다. 이 경우 기존 Node로 설치하고 Node 다운로드·의존성 설치·앱 빌드를 건너뛰며, 지정한 원본 앱은 보존합니다.
 
 새 에이전트 창을 열었다는 사실만으로 현재 작업 수가 증가하지는 않습니다. 입력 후 응답을 기다리는 동안 현재 작업에 표시되며, `Stop`으로 응답이 끝나면 최근 업무에서 이력을 확인합니다. 서비스 연결 대기나 빈 화면이 지속되면 `node bin/harness.mjs doctor`로 서비스 상태를 확인하고 실행한 앱 경로도 확인하세요.
 
@@ -161,9 +167,9 @@ make build
 make install-plan
 ```
 
-`make build`는 Node 준비·의존성 설치·앱 빌드까지만 수행합니다. 위의 `node` CLI 예시는 셸에 Node가 있을 때 사용할 수 있습니다. `HARNESS_GUI_DATA_DIR` 없이 빌드하면 일반 사용자 데이터 경로를 사용하는 배포용 앱을 만듭니다. `npm run build:mac`을 직접 실행하면 `HARNESS_BUNDLE_NODE` 또는 빌드 스크립트를 실행 중인 Node를 번들 후보로 검사하며, 검사 실패 시 기존 `dist/WorkLog.app`을 덮어쓰지 않습니다. Node 자동 준비는 `make build`를 사용하세요.
+`make build`는 개발·배포용 Node 준비·의존성 설치·앱 빌드·ZIP 생성을 수행합니다. 위의 `node` CLI 예시는 셸에 Node가 있을 때 사용할 수 있습니다. `HARNESS_GUI_DATA_DIR` 없이 빌드하면 일반 사용자 데이터 경로를 사용하는 배포용 앱을 만듭니다. `npm run build:mac`을 직접 실행하면 `HARNESS_BUNDLE_NODE` 또는 빌드 스크립트를 실행 중인 Node를 번들 후보로 검사하며, 검사 실패 시 기존 `dist/WorkLog.app`을 덮어쓰지 않습니다. Node 자동 준비는 `make build`를 사용하세요.
 
-결과는 `dist/WorkLog.app`과 `dist/WorkLog-macos-arm64.zip`입니다. ZIP에는 앱과 `Install WorkLog.command`, `Uninstall WorkLog.command`가 들어 있습니다. 개발용 ad-hoc 서명이며 Apple 공증은 적용하지 않았습니다.
+결과는 `dist/WorkLog.app`과 `dist/WorkLog-macos-arm64.zip`입니다. ZIP에는 앱과 `Install WorkLog.command`, `Uninstall WorkLog.command`가 들어 있습니다. ZIP 포장에 사용한 임시 폴더는 정리하며 `dist/package`에 새 앱 복사본을 남기지 않습니다. 개발용 ad-hoc 서명이며 Apple 공증은 적용하지 않았습니다.
 
 **설치 계획 생성은 사용자 설정을 변경하지 않습니다.** 실제 설치는 ZIP의 설치 명령을 사용하거나 `node scripts/install.mjs --apply`를 명시해 수행합니다. 다음 변경을 만듭니다.
 

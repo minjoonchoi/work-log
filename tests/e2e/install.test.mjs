@@ -275,7 +275,7 @@ test('an already registered service blocks installation before hooks or owned fi
 
 test('make install/uninstall uses real CLI entrypoints against an isolated home; repeated removal is safe', t => {
   const f = setup(t);
-  const install = spawnSync('make', ['-o', 'build', 'install', `NODE=${process.execPath}`,
+  const install = spawnSync('make', ['install', `NODE=${process.execPath}`,
     `INSTALL_ARGS=--home-dir ${quote(f.homeDir)} --source-app ${quote(f.sourceApp)} --no-activate --output ${quote(path.join(f.dir, 'make-plan'))}`], { cwd: ROOT, encoding: 'utf8', timeout: 15000 });
   assert.equal(install.status, 0, install.stderr); assert.ok(present(f.loc.app));
   const command = ['uninstall', `NODE=${process.execPath}`, `UNINSTALL_ARGS=--home-dir ${quote(f.homeDir)} --no-deactivate`];

@@ -12,8 +12,12 @@ import { OWNER, quote, locations, stat, safePath, locked, readManifest, saveMani
 const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const plist = object => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>${Object.entries(object).map(([k, v]) => `<key>${xml(k)}</key>${typeof v === 'boolean' ? `<${v}/>` : Array.isArray(v) ? `<array>${v.map(s => `<string>${xml(s)}</string>`).join('')}</array>` : typeof v === 'object' ? `<dict>${Object.entries(v).map(([a, b]) => `<key>${xml(a)}</key>${typeof b === 'boolean' ? `<${b}/>` : `<string>${xml(b)}</string>`}`).join('')}</dict>` : `<string>${xml(v)}</string>`}`).join('')}</dict></plist>`;
 
-export function prepareInstall({ output, homeDir = os.homedir(), sourceApp = fs.existsSync(path.join(ROOT, 'dist/WorkLog.app')) ? path.join(ROOT, 'dist/WorkLog.app') : path.resolve(ROOT, '../../..') }) {
+export function prepareInstall({ output, homeDir = os.homedir(), sourceApp }) {
   const loc = locations(homeDir), installationId = crypto.randomUUID();
+  const buildApp = path.join(ROOT, 'dist/WorkLog.app'), packagedApp = path.resolve(ROOT, '../../..');
+  sourceApp ||= fs.existsSync(buildApp) ? buildApp
+    : fs.existsSync(path.join(packagedApp, 'Contents/MacOS/WorkLogKeychain')) ? packagedApp
+    : fs.existsSync(loc.app) ? loc.app : buildApp;
   const skills = ['work'];
   const version = `0.3.1-${digest(fs.readFileSync(path.join(ROOT, 'harness/jobs.json'))).slice(0, 12)}`;
   const runtimeRoot = path.join(loc.data, 'versions', version), node = path.join(runtimeRoot, 'node'), harness = path.join(runtimeRoot, 'harness');
