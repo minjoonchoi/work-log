@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">WorkLog — work history and recorded time</title>
+  <rect x="64" y="72" width="896" height="888" rx="200" fill="#e5e7eb"/>
+  <rect x="64" y="64" width="896" height="888" rx="200" fill="#ffffff"/>
+  <rect data-role="mark" x="248" y="276" width="528" height="80" rx="40" fill="#2563eb"/>
+  <rect data-role="mark" x="248" y="452" width="352" height="80" rx="40" fill="#2563eb"/>
+  <rect data-role="mark" x="248" y="628" width="224" height="80" rx="40" fill="#2563eb"/>
+  <circle data-role="mark" cx="696" cy="664" r="116" fill="#2563eb"/>
+  <rect data-role="cutout" x="682" y="588" width="28" height="90" rx="14" fill="#ffffff"/>
+  <rect data-role="cutout" x="682" y="650" width="76" height="28" rx="14" fill="#ffffff"/>
+</svg>

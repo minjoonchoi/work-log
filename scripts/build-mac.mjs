@@ -11,12 +11,14 @@ fs.mkdirSync(path.join(contents, 'MacOS'), { recursive: true }); fs.mkdirSync(re
 const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const plist = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>local.worklog.harness</string><key>CFBundleName</key><string>WorkLog</string><key>CFBundleDisplayName</key><string>WorkLog</string>
+<key>CFBundleIconFile</key><string>WorkLog.icns</string>
 <key>CFBundleExecutable</key><string>WorkLog</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>4</string><key>CFBundleShortVersionString</key><string>0.3.1</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string><key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 ${process.env.HARNESS_GUI_DATA_DIR ? `<key>HarnessDataRoot</key><string>${xml(path.resolve(process.env.HARNESS_GUI_DATA_DIR))}</string>` : ''}
 </dict></plist>`;
 atomic(path.join(contents, 'Info.plist'), plist);
+run('swift', [path.join(ROOT, 'scripts/build-icons.swift'), path.join(ROOT, 'apps/macos/assets/worklog.svg'), path.join(resources, 'WorkLog.icns')]);
 run('swiftc', ['-O', '-target', 'arm64-apple-macos13.0', '-framework', 'Cocoa', '-framework', 'WebKit', path.join(ROOT, 'apps/macos/main.swift'), '-o', path.join(contents, 'MacOS/WorkLog')]);
 run('swiftc', ['-O', '-target', 'arm64-apple-macos13.0', '-framework', 'Security', '-framework', 'LocalAuthentication', path.join(ROOT, 'apps/macos/keychain.swift'), '-o', path.join(contents, 'MacOS/WorkLogKeychain')]);
 const node = process.env.HARNESS_BUNDLE_NODE || path.join(os.homedir(), '.nvm/versions/node/v22.17.0/bin/node');
@@ -29,7 +31,7 @@ for (const folder of ['src', 'bin', 'harness', 'contracts', 'apps/web', 'skills'
 // Recreate only this build's generated scripts directory; do not ship development fixture launchers.
 fs.rmSync(path.join(bundled, 'scripts'), { recursive: true, force: true });
 fs.mkdirSync(path.join(bundled, 'scripts'), { recursive: true });
-for (const file of ['install.mjs', 'uninstall.mjs', 'install-state.mjs']) fs.copyFileSync(path.join(ROOT, 'scripts', file), path.join(bundled, 'scripts', file));
+for (const file of ['install.mjs', 'uninstall.mjs', 'install-state.mjs', 'service-control.mjs']) fs.copyFileSync(path.join(ROOT, 'scripts', file), path.join(bundled, 'scripts', file));
 fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(bundled, 'package.json'));
 fs.copyFileSync(path.join(ROOT, 'package-lock.json'), path.join(bundled, 'package-lock.json'));
 for (const pkg of ['playwright', 'playwright-core', 'ajv', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'require-from-string']) fs.cpSync(path.join(ROOT, 'node_modules', pkg), path.join(bundled, 'node_modules', pkg), { recursive: true });

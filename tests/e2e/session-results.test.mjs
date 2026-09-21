@@ -42,7 +42,7 @@ test('late input resolves an unlinked result; duplicate input turn remains unres
 test('legacy deterministic CLI check results retain their session through the original input event ID', async t => {
   const h = await setup(t);
   const run = await h.finish(await h.run({ task: 'checks.run', input: { profile: 'fixture.mixed' } }));
-  const items = await eventually(() => h.manager('/items'), rows => rows[0]?.state === 'attention'), item = items[0];
+  const items = await eventually(() => h.manager('/items'), rows => rows[0]?.notification_count > 0), item = items[0];
   const before = await h.manager(`/items/${item.id}`), { origin, ...legacy } = run;
   assert.ok(before.runs[0].session_id); assert.equal(before.events.filter(e => e.parent?.run_id === run.id).length, 0);
   await h.ingest([event(origin.agent_session_id, 'run.updated', '09:00:00', undefined, { engine: origin.engine, run: legacy, work_item_id: item.id })]);

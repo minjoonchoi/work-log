@@ -6,6 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { prepareInstall, applyInstall } from '../../scripts/install.mjs';
 import { prepareUninstall, applyUninstall } from '../../scripts/uninstall.mjs';
+import { controlServices } from '../../scripts/service-control.mjs';
 import { quote, locations } from '../../scripts/install-state.mjs';
 import { ROOT } from '../../src/shared.mjs';
 import { Harness, eventually } from '../helpers.mjs';
@@ -179,6 +180,91 @@ test('a service reusing the label with other program arguments is not stopped an
   assert.ok(present(f.loc.app)); assert.equal(f.read('claude').hooks.Stop.length, 2);
 });
 
+function serviceFixture(f, { delayed = 0, neverStops = false } = {}) {
+  const receipt = JSON.parse(fs.readFileSync(f.loc.manifest));
+  for (const file of receipt.files) file.activation = 'registered';
+  fs.writeFileSync(f.loc.manifest, JSON.stringify(receipt));
+  const registered = new Map(f.plan.files.map(file => [file.label, { file, pid: 999999999 }])), calls = [];
+  const launchctl = (command, args) => {
+    assert.equal(command, 'launchctl'); calls.push(args);
+    if (args[0] === 'bootstrap') {
+      const file = f.plan.files.find(file => file.target === args[2]);
+      registered.set(file.label, { file, pid: 999999999 }); return { status: 0 };
+    }
+    const label = args[1].split('/').at(-1), service = registered.get(label);
+    if (!service) return { status: 113, stderr: 'Could not find service' };
+    if (args[0] === 'bootout') { service.pending = delayed; if (!delayed && !neverStops) registered.delete(label); return { status: 0 }; }
+    if (args[0] === 'kickstart') { service.pid = 999999999; return { status: 0 }; }
+    assert.equal(args[0], 'print');
+    if ('pending' in service && !neverStops && service.pending-- === 0) { registered.delete(label); return { status: 113, stderr: 'Could not find service' }; }
+    return { status: 0, stdout: `program = ${service.file.argv[0]}\narguments = {\n${service.file.argv.join('\n')}\n}\n${service.pid ? `pid = ${service.pid}\n` : ''}` };
+  };
+  return { registered, calls, launchctl, control: (action, options) => controlServices(action, {
+    homeDir: f.homeDir, appPath: f.loc.app, dataDir: f.loc.data, launchctl, ...options
+  }) };
+}
+
+test('uninstall waits for asynchronous launchd removal instead of treating the first pending print as a failure', t => {
+  const f = setup(t); f.install(); const service = serviceFixture(f, { delayed: 2 });
+  const result = f.uninstall({ deactivate: true, launchctl: service.launchctl });
+  assert.equal(result.status, 'uninstalled', JSON.stringify(result));
+  assert.equal(service.calls.filter(args => args[0] === 'bootout').length, 3);
+  assert.equal(service.registered.size, 0); assert.equal(present(f.loc.app), false);
+  assert.deepEqual(f.read('codex'), f.config);
+});
+
+test('uninstall timeout preserves files and hooks until a later confirmed service stop', t => {
+  const f = setup(t); f.install(); const service = serviceFixture(f, { neverStops: true });
+  const result = f.uninstall({ deactivate: true, launchctl: service.launchctl, stopTimeoutMs: 1 });
+  assert.equal(result.status, 'needs_attention'); assert.deepEqual(result.removed, []);
+  assert.ok(result.preserved.every(row => row.reason.includes('대기 시간이 초과')));
+  assert.ok(present(f.loc.app)); assert.equal(f.read('codex').hooks.Stop.length, 2);
+  service.registered.clear();
+  assert.equal(f.uninstall({ deactivate: true, launchctl: service.launchctl }).status, 'uninstalled');
+});
+
+test('GUI quit preserves user work and runtime while stopping the manager; reopening cancels draining without duplicate services', async t => {
+  const f = setup(t); f.install(); const service = serviceFixture(f);
+  let release; const pending = new Promise(resolve => { release = resolve; });
+  const stopping = service.control('stop', { runtimeRequest: async (dir, role, endpoint) => {
+    assert.equal(dir, f.loc.data); assert.equal(role, 'runtime'); assert.equal(endpoint, '/lifecycle/quit');
+    await pending; return { status: 'draining', remaining_user_runs: 2 };
+  } });
+  assert.throws(() => f.uninstall(), /이미 실행 중/, 'async lifecycle retains the installation lock');
+  release(); assert.equal((await stopping).status, 'user_work_continues');
+  assert.deepEqual(service.calls.filter(args => args[0] === 'bootout').map(args => args[1].split('/').at(-1)), ['local.worklog.manager']);
+  assert.ok(service.registered.has('local.worklog.runtime')); assert.ok(service.registered.has('local.worklog.gui'));
+  assert.ok(present(f.loc.app)); assert.equal(f.read('codex').hooks.Stop.length, 2);
+  let resumed = 0;
+  assert.equal((await service.control('start', { runtimeRequest: async (_, __, endpoint) => {
+    assert.equal(endpoint, '/lifecycle/start'); resumed++; return { status: 'running' };
+  } })).status, 'started');
+  assert.equal(resumed, 1); assert.equal(service.registered.size, 3);
+  assert.equal(service.calls.filter(args => args[0] === 'bootstrap').length, 1);
+});
+
+test('GUI quit without user work stops backend services but preserves installation; dormant runtime is restarted on open', async t => {
+  const f = setup(t); f.install(); const service = serviceFixture(f, { delayed: 1 });
+  assert.equal((await service.control('stop', { runtimeRequest: async () => ({ status: 'draining', remaining_user_runs: 0 }) })).status, 'stopped');
+  assert.deepEqual([...service.registered.keys()], ['local.worklog.gui']);
+  assert.ok(present(f.loc.app)); assert.equal(f.read('codex').hooks.Stop.length, 2);
+  assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).state, 'installed');
+  service.registered.set('local.worklog.runtime', { file: f.plan.files[0], pid: null });
+  assert.equal((await service.control('start', { runtimeRequest: async () => ({ status: 'running' }) })).status, 'started');
+  assert.ok(service.calls.some(args => args[0] === 'kickstart' && args[1].endsWith('/local.worklog.runtime')));
+  assert.match(f.plan.files[0].content, /<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
+});
+
+test('reopening recovers when a draining runtime exits after its PID was observed', async t => {
+  const f = setup(t); f.install(); const service = serviceFixture(f); let attempts = 0;
+  const result = await service.control('start', { runtimeRequest: async () => {
+    if (++attempts === 1) { service.registered.get('local.worklog.runtime').pid = null; throw new Error('connection closed during draining'); }
+    assert.ok(service.registered.get('local.worklog.runtime').pid); return { status: 'running' };
+  } });
+  assert.equal(result.status, 'started'); assert.equal(attempts, 2);
+  assert.equal(service.calls.filter(args => args[0] === 'kickstart').length, 1);
+});
+
 test('an already registered service blocks installation before hooks or owned files are changed', t => {
   const f = setup(t);
   assert.throws(() => f.install({ activate: true, launchctl: (command, args) => {
@@ -214,7 +300,7 @@ test('installed request skill delegates natural language to classification and a
   t.after(() => h.close(false)); await h.start('runtime'); await h.start('manager');
   const requestFile = path.join(f.dir, 'request.json'); fs.writeFileSync(requestFile, JSON.stringify({ prompt: '초대 기능 PRD를 작성해 주세요.' }));
   const helper = path.join(f.plan.links[0].target, 'scripts/harness');
-  const child = spawnSync(helper, ['run', '--input', requestFile, '--wait'], { encoding: 'utf8', timeout: 15000 });
+  const child = spawnSync(helper, ['run', '--input', requestFile, '--wait'], { cwd: f.dir, encoding: 'utf8', timeout: 15000 });
   assert.equal(child.status, 0, child.stderr); const run = JSON.parse(child.stdout);
   assert.equal(run.status, 'completed'); assert.equal(run.task, 'prd.create'); assert.equal(run.engine, 'codex'); assert.ok(present(run.artifact.file));
   const hook = f.read('claude').hooks.UserPromptSubmit[0].hooks[0].command;

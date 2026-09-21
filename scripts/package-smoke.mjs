@@ -23,6 +23,15 @@ try {
   assert.equal(helper.status, 0, helper.stderr); assert.ok(JSON.parse(helper.stdout).usage);
   report.checks.push('packaged app installs into an isolated home with one request skill and owned links');
   assert.ok(!fs.readFileSync(path.join(app, 'Contents/Info.plist'), 'utf8').includes('HarnessDataRoot')); report.checks.push('release app contains no development data-root override');
+  assert.match(fs.readFileSync(path.join(app, 'Contents/Info.plist'), 'utf8'), /<key>CFBundleIconFile<\/key><string>WorkLog.icns<\/string>/);
+  assert.equal(fs.readFileSync(path.join(app, 'Contents/Resources/WorkLog.icns')).subarray(0, 4).toString(), 'icns');
+  for (const name of ['WorkLogStatusTemplate.png', 'WorkLogStatusTemplate@2x.png']) {
+    assert.equal(fs.readFileSync(path.join(app, 'Contents/Resources', name)).subarray(1, 4).toString(), 'PNG');
+  }
+  report.checks.push('native app icon is packaged and registered');
+  const serviceHelper = spawnSync(h.executable, [path.join(h.serviceRoot, 'scripts/service-control.mjs'), 'invalid'], { encoding: 'utf8' });
+  assert.equal(serviceHelper.status, 1); assert.match(JSON.parse(serviceHelper.stdout).error, /start.*stop/);
+  report.checks.push('packaged service helper keeps structured errors separate from Node diagnostics');
   const node = spawnSync(h.executable, ['--version'], { encoding: 'utf8' }); assert.equal(node.status, 0); report.node = node.stdout.trim();
   await h.start('runtime'); await h.start('manager');
   assert.equal((await h.runtime('/health')).role, 'execution'); assert.equal((await h.manager('/health')).role, 'management');
@@ -38,7 +47,8 @@ try {
   const catalog = await h.runtime('/catalog');
   assert.ok(['test.scenarios.plan', 'checks.run', 'verification.report'].every(id => catalog.jobs.some(j => j.id === id)));
   assert.equal(catalog.jobs.find(j => j.id === 'prd.create').execution_profile, 'document');
-  assert.equal(catalog.execution_profiles.document.stages.produce.codex.model, 'gpt-5.6');
+  assert.equal(catalog.execution_profiles.document.stages.produce.codex.model, 'gpt-5.6-terra');
+  assert.equal(catalog.execution_profiles.metadata.stages.produce.codex.model, 'gpt-5.6-luna');
   assert.equal(catalog.execution_profiles.document.stages.produce.claude.effort, 'medium');
   const executionSettings = await h.runtime('/execution-settings');
   assert.equal(executionSettings.tasks.find(task => task.id === 'prd.create').backend, 'codex');

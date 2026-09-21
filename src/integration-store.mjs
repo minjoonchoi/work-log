@@ -77,9 +77,9 @@ export function integrationStore(store) {
     }
   }
   function closedWindows() {
-    const sessions = store.sessionList(), latest = new Map();
+    const sessions = store.sessionList(null, { includeDeleted: true }), latest = new Map();
     for (const s of sessions) latest.set(s.agent_id, s.id);
-    return sessions.filter(s => latest.get(s.agent_id) !== s.id && !s.pending);
+    return sessions.filter(s => !store.isDeleted(s.work_item_id) && latest.get(s.agent_id) !== s.id && !s.pending);
   }
   function sessionSnapshots(sessions = store.sessionList()) {
     return sessions.map(s => {
@@ -88,12 +88,17 @@ export function integrationStore(store) {
       const lastOutput = outputs.at(-1);
       // Work item rename/merge must not regenerate an unchanged conversation summary.
       const source = { title: '작업 세션', events: messages.map(e => ({ kind: e.kind, event_at: e.event_at, text: e.text ?? null })) };
-      return { ...s, source, source_digest: digest(json(source)), origin: input && { engine: s.engine, agent_session_id: s.agent_session_id, turn_id: input.turn_id },
+      return { ...s, visibility_revision: store.visibilityRevision(s.work_item_id), source, source_digest: digest(json(source)), origin: input && { engine: s.engine, agent_session_id: s.agent_session_id, turn_id: input.turn_id },
         started: input?.event_at, ended: lastOutput?.event_at,
         seconds: input && lastOutput ? Math.floor((Date.parse(lastOutput.event_at) - Date.parse(input.event_at)) / 1000) : 0 };
     });
   }
   const closedSessions = () => sessionSnapshots(closedWindows());
+  function isSessionCurrent(session) {
+    const current = one('SELECT work_item_id,active FROM work_item_sessions WHERE id=?', session.id);
+    return !!current?.active && !store.isDeleted(current.work_item_id)
+      && (session.visibility_revision === undefined || store.visibilityRevision(current.work_item_id) === session.visibility_revision);
+  }
   function ensureSummary(session) {
     const current = one('SELECT * FROM session_summaries WHERE session_id=?', session.id);
     if (current?.source_digest === session.source_digest) return current;
@@ -107,6 +112,7 @@ export function integrationStore(store) {
       accepted_digest=CASE WHEN ?='completed' THEN source_digest ELSE accepted_digest END WHERE session_id=? AND source_digest=?`,
     state, run_id, text, message, now(), state, session.id, session.source_digest);
   function beginWorklog(session, link, text) {
+    assert(isSessionCurrent(session), '업무가 삭제되거나 변경되어 동기화를 중단했습니다.', 409);
     const payload = { started: session.started, seconds: session.seconds, comment: text };
     const source = digest(json(payload)), current = one('SELECT * FROM jira_worklogs WHERE session_id=?', session.id);
     if (current && ['sending', 'unknown'].includes(current.state)) return current;
@@ -125,13 +131,14 @@ export function integrationStore(store) {
       worklog_alerts: all("SELECT session_id,issue_operation_id,message FROM jira_worklogs WHERE state='needs_review'").filter(w => itemLinks.some(l => l.operation_id === w.issue_operation_id)),
       sessions: detail.sessions.map(s => ({ ...s, closed: closed.has(s.id),
         summary: one('SELECT state,run_id,text,message,updated_at FROM session_summaries WHERE session_id=?', s.id) || null,
-        worklog: one('SELECT state,worklog_id,message,payload FROM jira_worklogs WHERE session_id=?', s.id) || null })) };
+        worklog: one('SELECT state,worklog_id,issue_operation_id,message,payload FROM jira_worklogs WHERE session_id=?', s.id) || null })) };
   }
-  return { links, beginIssue, finishIssue, checkExistingLink, linkExisting, updateLinkedIssue, closedSessions, sessionSnapshots, ensureSummary, finishSummary, beginWorklog, finishWorklog, decorate,
+  return { links, beginIssue, finishIssue, checkExistingLink, linkExisting, updateLinkedIssue, closedSessions, sessionSnapshots, isSessionCurrent, ensureSummary, finishSummary, beginWorklog, finishWorklog, decorate,
     summary: sid => one('SELECT * FROM session_summaries WHERE session_id=?', sid),
     invalidateOpenWorklogs: closedIds => {
       let changed = false;
-      const rows = all("SELECT w.*,s.agent_id FROM jira_worklogs w LEFT JOIN work_item_sessions s ON s.id=w.session_id WHERE w.state!='needs_review'");
+      const rows = all("SELECT w.*,s.agent_id,s.work_item_id FROM jira_worklogs w LEFT JOIN work_item_sessions s ON s.id=w.session_id WHERE w.state!='needs_review'")
+        .filter(row => !row.work_item_id || !store.isDeleted(row.work_item_id));
       const affectedAgents = new Set(rows.filter(r => !closedIds.has(r.session_id)).map(r => r.agent_id));
       // A collapsed window may now overlap another already-published worklog. Freeze both;
       // never expand one log while silently retaining the other log's counted time.

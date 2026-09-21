@@ -10,7 +10,7 @@ import { OWNER, quote, locations, stat, safePath, locked, readManifest, saveMani
   inventory, matches, readConfig, writeConfig, hookPositions, skillLinks } from './install-state.mjs';
 
 const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-const plist = object => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>${Object.entries(object).map(([k, v]) => `<key>${xml(k)}</key>${typeof v === 'boolean' ? `<${v}/>` : Array.isArray(v) ? `<array>${v.map(s => `<string>${xml(s)}</string>`).join('')}</array>` : typeof v === 'object' ? `<dict>${Object.entries(v).map(([a, b]) => `<key>${xml(a)}</key><string>${xml(b)}</string>`).join('')}</dict>` : `<string>${xml(v)}</string>`}`).join('')}</dict></plist>`;
+const plist = object => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>${Object.entries(object).map(([k, v]) => `<key>${xml(k)}</key>${typeof v === 'boolean' ? `<${v}/>` : Array.isArray(v) ? `<array>${v.map(s => `<string>${xml(s)}</string>`).join('')}</array>` : typeof v === 'object' ? `<dict>${Object.entries(v).map(([a, b]) => `<key>${xml(a)}</key>${typeof b === 'boolean' ? `<${b}/>` : `<string>${xml(b)}</string>`}`).join('')}</dict>` : `<string>${xml(v)}</string>`}`).join('')}</dict></plist>`;
 
 export function prepareInstall({ output, homeDir = os.homedir(), sourceApp = fs.existsSync(path.join(ROOT, 'dist/WorkLog.app')) ? path.join(ROOT, 'dist/WorkLog.app') : path.resolve(ROOT, '../../..') }) {
   const loc = locations(homeDir), installationId = crypto.randomUUID();
@@ -22,7 +22,7 @@ export function prepareInstall({ output, homeDir = os.homedir(), sourceApp = fs.
     const label = `local.worklog.${role}`, target = path.join(loc.home, 'Library/LaunchAgents', `${label}.plist`);
     const argv = [node, path.join(harness, 'bin/harness.mjs'), 'serve', role];
     files.push({ target, label, argv, content: plist({ Label: label, ProgramArguments: argv,
-      RunAtLoad: true, KeepAlive: true, ProcessType: 'Background',
+      RunAtLoad: true, KeepAlive: role === 'runtime' ? { SuccessfulExit: false } : true, ProcessType: 'Background',
       EnvironmentVariables: { HARNESS_DATA_DIR: loc.data, PATH: `${runtimeRoot}:${process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'}` },
       StandardOutPath: path.join(loc.data, `${role}.log`), StandardErrorPath: path.join(loc.data, `${role}.log`) }) });
   }

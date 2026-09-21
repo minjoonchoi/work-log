@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomic, assert } from './shared.mjs';
+import { defaultTaskInstruction } from './task-instruction.mjs';
 
 const efforts = { codex: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'] };
 const engines = ['codex', 'claude'];
@@ -42,17 +43,19 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
       if (override.backends[engine].model) stage[engine].model = override.backends[engine].model;
       if (override.backends[engine].effort) stage[engine].effort = override.backends[engine].effort;
     }
-    return { instruction: override?.instruction || job.persona, backend: override?.backend || 'codex', profile };
+    return { instruction: override?.instruction || defaultTaskInstruction(job), backend: override?.backend || 'codex', profile };
   }
   function snapshot() {
     const data = read();
     return { revision: data.revision, efforts, tasks: Object.entries(jobs).filter(([, job]) => workflows[job.workflow].mode === 'artifact').map(([id, job]) => {
       const override = data.tasks[id], profile = profiles[job.execution_profile];
-      return { id, label: job.label, profile: job.execution_profile, instruction: override?.instruction || job.persona,
+      const stages = new Set(Object.values(workflows[job.workflow].nodes).map(node => node.task));
+      return { id, label: job.label, category: job.category, boundary: structuredClone(job.boundary),
+        profile: job.execution_profile, instruction: override?.instruction || defaultTaskInstruction(job),
         backend: override?.backend || 'codex', overridden: !!override,
         backends: Object.fromEntries(engines.map(engine => [engine, {
           model: override?.backends[engine].model || null, effort: override?.backends[engine].effort || null,
-          defaults: Object.fromEntries(Object.entries(profile.stages).map(([stage, choices]) => [stage, choices[engine]]))
+          defaults: Object.fromEntries(Object.entries(profile.stages).filter(([stage]) => stages.has(stage)).map(([stage, choices]) => [stage, choices[engine]]))
         }])) };
     }) };
   }

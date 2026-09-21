@@ -6,6 +6,8 @@ import { checkScenarios } from './scenarios.mjs';
 import { validateSchema } from './schema.mjs';
 import { parseSessionSummary } from './session-summary.mjs';
 import { parseTextRewrite } from './text-rewrite.mjs';
+import { parseWorkReport } from './work-report.mjs';
+import { checkCodeBundle } from './code-bundle.mjs';
 
 export function artifact(cwd, file) {
   const candidate = path.resolve(cwd, file), root = fs.realpathSync(cwd);
@@ -26,13 +28,18 @@ export async function verify(cwd, job, input, evidenceDir) {
     catch (e) { checks.push({ rule: 'OUTPUT-001', check: 'artifact schema', passed: false, error: e.message }); }
   }
   if (job.kind === 'scenario_plan') checks.push(...checkScenarios(text, input));
+  if (job.kind === 'code_bundle') checks.push(...await checkCodeBundle(text, input));
   if (job.kind === 'session_summary') {
-    try { parseSessionSummary(text); checks.push({ rule: 'SUMMARY-001', check: 'one title and at most five summary lines', passed: true }); }
+    try { parseSessionSummary(text, { requireBullets: job.summary_format === 'session-bullets-v1' }); checks.push({ rule: 'SUMMARY-001', check: 'one title and at most five summary lines', passed: true }); }
     catch (e) { checks.push({ rule: 'SUMMARY-001', check: 'one title and at most five summary lines', passed: false, error: e.message }); }
   }
   if (job.kind === 'text_rewrite') {
-    try { parseTextRewrite(text, input.format); checks.push({ rule: 'REWRITE-001', check: input.format, passed: true }); }
+    try { parseTextRewrite(text, input.format, { requireStructuredDescription: job.metadata_format === 'work-item-v1', requireBulletSummary: job.summary_format === 'session-bullets-v1' }); checks.push({ rule: 'REWRITE-001', check: input.format, passed: true }); }
     catch (e) { checks.push({ rule: 'REWRITE-001', check: input.format, passed: false, error: e.message }); }
+  }
+  if (job.kind === 'work_report') {
+    try { parseWorkReport(text, input); checks.push({ rule: 'WORK-REPORT-001', check: 'report format and selected session references', passed: true }); }
+    catch (e) { checks.push({ rule: 'WORK-REPORT-001', check: 'report format and selected session references', passed: false, error: e.message }); }
   }
   if (job.kind === 'html') {
     let browser, deadline;

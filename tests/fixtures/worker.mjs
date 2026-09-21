@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 const [output, stage] = process.argv.slice(2);
-const fixture = JSON.parse(process.env.HARNESS_FIXTURE || '{}');
+const fixture = JSON.parse(fs.readFileSync(process.env.HARNESS_FIXTURE_FILE, 'utf8'));
 const { job, round = 0, scenario = 'success' } = fixture;
 let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
 if (scenario === 'slow' || scenario === 'child') {
@@ -21,16 +21,25 @@ if (scenario === 'illegal-transition') { fs.writeFileSync(output, JSON.stringify
 let result;
 if (scenario === 'blocked') result = { status: 'blocked', result: { message: '필수 대상 고객 정보가 필요합니다.' } };
 else if (stage === 'review') {
+  if (scenario === 'tamper-input-snapshot') {
+    const references = JSON.parse(prompt.match(/\n자료 파일 참조[^:]+: ([^\n]+)\n/)[1]);
+    fs.chmodSync(references[0].path, 0o600); fs.appendFileSync(references[0].path, '\nworker changed read-only source');
+  }
   if (scenario === 'tamper') fs.appendFileSync(job.file, '\n검토 중 변경');
   if (scenario === 'always-revise' || (scenario === 'revise-once' && round === 0)) result = { status: 'revise', result: { issues: [{ rule: job.rules[0], detail: '거절 상태의 수용 기준을 추가하세요.' }] } };
   else {
     const promptedRules = scenario === 'prompted-rules' ? Object.keys(JSON.parse(prompt.match(/\n규칙: ([^\n]+)\n/)[1])) : job.rules;
-    const evaluatedRules = scenario === 'missing-evidence' ? [] : scenario === 'omit-common-rule' ? promptedRules.filter(rule => rule !== 'SCOPE-001') : promptedRules;
+    const evaluatedRules = scenario === 'missing-evidence' ? [] : scenario === 'omit-common-rule' ? promptedRules.filter(rule => rule !== 'SCOPE-001')
+      : scenario === 'omit-boundary-rule' ? promptedRules.filter(rule => rule !== 'JOB-BOUNDARY-001') : promptedRules;
     result = { status: 'done', result: { evaluations: evaluatedRules.map(rule => ({ rule, passed: true, evidence: `고정된 ${job.file}에서 ${rule} 조건을 확인했습니다.` })) } };
   }
 } else {
   let text = job.kind === 'html' ? `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>검증용 목업</title></head><body><h1>권한 신청</h1><button id="save">저장</button><p id="result" hidden>저장되었습니다</p><script>document.querySelector('#save').onclick=()=>{document.querySelector('#result').hidden=false}</script></body></html>`
     : `# ${job.label}\n\n${job.requiredSections.map(s => `## ${s}\nREQ-001: 사용자 요청에 따른 ${s}입니다.\n`).join('\n')}\n${round > 0 ? '거절 상태의 수용 기준: 거절 결과를 표시합니다.' : ''}\n`;
+  if (fixture.copyInputSnapshot) {
+    const references = JSON.parse(prompt.match(/\n자료 파일 참조[^:]+: ([^\n]+)\n/)[1]);
+    text += `\n# 제공된 원문\n${references.map(reference => fs.readFileSync(reference.path, 'utf8')).join('\n')}`;
+  }
   if (job.kind === 'scenario_plan') {
     const categories = fixture.input.categories.filter(c => !(scenario === 'scenario-missing-recovery-once' && round === 0 && c === 'recovery'));
     text = JSON.stringify({ scenarios: categories.map((category, i) => ({
@@ -40,20 +49,52 @@ else if (stage === 'review') {
       steps: [{ action: '정해진 시각의 입력과 출력을 제출함', expected: '원본 시각과 세션 연결이 보존됨' }]
     })) });
   }
+  if (job.kind === 'code_bundle') {
+    const sources = new Map(fixture.input.source_files.map(file => [file.path, file.content]));
+    let files = fixture.input.allowed_paths.map(file => ({ path: file,
+      content: file.endsWith('.json') ? JSON.stringify({ implemented: true })
+        : `${sources.get(file) || 'export const implemented = true;'}\n// requested change\n` }));
+    if (scenario === 'code-invalid-syntax-once' && round === 0) files[0].content = 'export const = ;';
+    if (scenario === 'code-disallowed-path') files[0].path = 'unrequested/extra.mjs';
+    if (scenario === 'code-no-change') files = fixture.input.source_files.filter(file => fixture.input.allowed_paths.includes(file.path));
+    if (scenario === 'code-delete') files[0].operation = 'delete';
+    if (scenario === 'code-duplicate') files.push(files[0]);
+    if (scenario === 'code-extra-file') fs.writeFileSync('unrequested.txt', 'outside bundle');
+    text = JSON.stringify({ summary: '요청된 범위의 소스를 작성했습니다. 프로젝트 실행 검사는 수행하지 않았습니다.', files });
+  }
   if (job.kind === 'session_summary') {
-    text = `${fixture.input.title}\n${fixture.input.events.filter(e => e.text).slice(-5).map(e => e.text.replace(/\s+/g, ' ').slice(0, 400)).join('\n') || '응답 본문 미확인'}`;
+    text = `${fixture.input.title}\n${fixture.input.events.filter(e => e.text).slice(-5).map(e => `- ${e.text.replace(/\s+/g, ' ').slice(0, 400)}`).join('\n') || '- 응답 본문 미확인'}`;
     if (scenario === 'summary-too-long') text += '\n추가 설명\n추가 설명\n추가 설명\n추가 설명\n추가 설명\n추가 설명';
+    if (scenario === 'summary-plain') text = `${fixture.input.title}\n검토한 변경 사항을 일반 문장으로 정리했습니다.`;
+  }
+  if (job.kind === 'work_report') {
+    const values = fixture.input.sessions || fixture.input.parts, type = fixture.input.stage === 'consolidate' ? 'part' : 'session';
+    const headings = ['업무 개요', '수행 내용', '미완료·확인 사항'];
+    const value = { title: '선택 기간 업무 요약',
+      body: headings.map((heading, index) => `## ${heading}\n${index === 0 ? `- ${fixture.input.dates.join(', ')} (${fixture.input.timezone})의 업무 기록` : '- 제공된 기록의 행동과 결과를 구분합니다. 미확인 성과와 지표는 미확인으로 유지합니다.'}`).join('\n\n'),
+      source_refs: values.map(value => `${type}:${value.id}`) };
+    if (scenario === 'report-invalid') value.body = '형식이 없는 본문';
+    if (scenario === 'report-missing-source') value.source_refs.shift();
+    if (scenario === 'report-unknown-source') value.source_refs[0] = 'session:invented-session';
+    if (scenario === 'report-duplicate-source') value.source_refs.push(value.source_refs[0]);
+    if (scenario === 'report-body-source-leak') value.body += `\n- [${type}:${values[0].id}]`;
+    if (scenario === 'report-body-evidence-section') value.body += '\n\n### 근거 세션\n- 내부 세션 목록';
+    text = JSON.stringify(value);
   }
   if (job.kind === 'text_rewrite') {
     const events = fixture.input.sessions.flatMap(s => s.events), messages = events.filter(e => e.text).map(e => e.text.replace(/\s+/g, ' ').slice(0, 400));
     const value = {
       title: (messages[0] || '작업 세션').slice(0, 200),
-      description: fixture.input.format === 'session-summary' ? messages.slice(-5).join('\n') || '응답 본문 미확인'
-        : `${fixture.input.sessions.length}개 세션 이력\n${messages.slice(-5).join('\n') || '응답 본문 미확인'}`
+      description: fixture.input.format === 'session-summary' ? messages.slice(-5).map(message => `- ${message}`).join('\n') || '- 응답 본문 미확인'
+        : `## 작업 배경\n- ${fixture.input.sessions.length}개 세션 이력\n\n## 목적\n- ${messages[0] || '목적 미확인'}\n\n## 범위\n${messages.slice(-5).map(message => `- ${message}`).join('\n') || '- 요청 범위 미확인'}\n\n## 결과\n- ${events.some(event => event.kind === 'output' && event.text) ? '수집된 응답을 확인했습니다. 실제 완료 여부는 원문 기준으로 확인해야 합니다.' : '미완료: 확인된 응답이 없어 결과 미확인입니다.'}`
     };
     if (fixture.rewriteVariant) value.title = `${value.title.slice(0, 180)} · 작업 기록`;
     if (scenario === 'rewrite-six-lines') value.description = Array.from({ length: 6 }, () => '형식 오류').join('\n');
+    if (scenario === 'rewrite-empty-bullet') value.description = '- ';
+    if (scenario === 'rewrite-summary-plain') value.description = '검토한 변경 사항을 일반 문장으로 정리했습니다.';
+    if (scenario === 'rewrite-legacy-paragraph') value.description = '버전 1.2.3과 비율 3.14를 확인했습니다. 자료는 https://example.test/docs/v1.2?rate=3.14 입니다. Dr. Smith reviewed the API. 요구사항을 정리했습니다. 화면 흐름을 확인했습니다. <img src=x onerror=alert(1)>를 기록했습니다. 다음 검토가 남아 있습니다.';
     if (scenario === 'rewrite-blank') value.title = '   ';
+    if (scenario === 'rewrite-empty-section') value.description = '## 작업 배경\n배경\n\n## 목적\n목적\n\n## 범위\n범위\n\n## 결과';
     text = JSON.stringify(value);
   }
   if (scenario === 'bad-html') text = text.replace("document.querySelector('#result').hidden=false", "throw new Error('broken button')");

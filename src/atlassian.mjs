@@ -3,46 +3,54 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { assert, atomic, digest, json } from './shared.mjs';
-import { OnePasswordCredentials, KeychainTokens } from './credentials.mjs';
+import { KeychainClientCredentials, KeychainTokens } from './credentials.mjs';
+import { jiraDescription, plainTextADF } from './jira-adf.mjs';
+export { jiraDescription } from './jira-adf.mjs';
 
 export const ATLASSIAN_CALLBACK = 'http://127.0.0.1:47831/oauth/atlassian/callback';
-export const ATLASSIAN_SCOPES = ['offline_access', 'read:jira-work', 'write:jira-work', 'read:page:confluence'];
+export const ATLASSIAN_SCOPES = ['offline_access', 'read:jira-work', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'];
+const clientId = value => {
+  assert(typeof value === 'string' && value.trim() && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value), 'Client ID를 확인하세요.');
+  return value.trim();
+};
 const configuration = input => {
-  assert(input && Object.keys(input).every(k => ['vault', 'item'].includes(k)), '설정에는 vault와 item 이름만 저장할 수 있습니다.');
-  for (const key of ['vault', 'item']) assert(typeof input[key] === 'string' && input[key].trim().length > 0 && input[key].length <= 200 && !/[\u0000-\u001f]/.test(input[key]) && !input[key].startsWith('-'), `${key} 이름을 확인하세요.`);
-  return { vault: input.vault.trim(), item: input.item.trim() };
+  assert(input && typeof input === 'object' && !Array.isArray(input)
+    && Object.keys(input).every(k => ['client_id', 'credential_version'].includes(k))
+    && typeof input.credential_version === 'string' && /^[a-f0-9]{32}$/.test(input.credential_version), 'Atlassian 연결 설정을 다시 저장하세요.');
+  return { client_id: clientId(input.client_id), credential_version: input.credential_version };
 };
 const sameState = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const error = (message, status = 400, code) => Object.assign(new Error(message), { status, code });
-export function jiraDescription(text) {
-  const content = [];
-  String(text).split('\n').forEach((line, i) => {
-    if (i) content.push({ type: 'hardBreak' });
-    if (line) content.push({ type: 'text', text: line });
-  });
-  return { version: 1, type: 'doc', content: [{ type: 'paragraph', content }] };
-}
-
 export class AtlassianClient {
-  constructor({ dir, credentials = new OnePasswordCredentials(), tokens = new KeychainTokens(dir), onChange = () => {},
+  constructor({ dir, credentials = new KeychainClientCredentials(dir), tokens = new KeychainTokens(dir), onChange = () => {},
     authOrigin = 'https://auth.atlassian.com', apiOrigin = 'https://api.atlassian.com', callback = ATLASSIAN_CALLBACK }) {
     this.file = path.join(dir, 'integrations', 'atlassian.json');
     this.credentials = credentials; this.tokens = tokens; this.onChange = onChange;
     this.authOrigin = authOrigin; this.apiOrigin = apiOrigin; this.callback = callback;
-    this.mutations = Promise.resolve(); this.refreshing = null; this.flow = null; this.listener = null; this.flowError = null;
+    this.mutations = Promise.resolve(); this.flow = null; this.listener = null; this.flowError = null; this.legacyConfig = false;
+    this.authorizationGeneration = 0;
   }
   config() {
-    try { return configuration(JSON.parse(fs.readFileSync(this.file, 'utf8'))); }
+    this.legacyConfig = false;
+    try {
+      const value = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      if (value && typeof value === 'object' && ('vault' in value || 'item' in value)) { this.legacyConfig = true; return null; }
+      return configuration(value);
+    }
     catch (e) { if (e.code === 'ENOENT') return null; throw error('Atlassian 연결 설정을 확인하세요.'); }
   }
   exclusive(fn) {
     const next = this.mutations.then(fn, fn); this.mutations = next.catch(() => {}); return next;
   }
-  async status() {
+  status() { return this.exclusive(() => this.statusValue()); }
+  async statusValue() {
     const config = this.config();
-    const result = { config, callback_url: this.callback, connected: false, connecting: !!this.flow, scopes: ATLASSIAN_SCOPES, message: this.flowError };
+    const result = { config: config ? { client_id: config.client_id } : null, has_client_secret: false,
+      callback_url: this.callback, connected: false, connecting: !!this.flow && json(this.flow.config) === json(config), scopes: ATLASSIAN_SCOPES,
+      message: this.legacyConfig ? '기존 1Password 설정은 더 이상 사용하지 않습니다. Client ID와 Client Secret을 입력해 다시 저장하세요.' : this.flowError };
     if (!config) return result;
     try {
+      await this.credentials.read(config); result.has_client_secret = true;
       const record = await this.tokens.read();
       result.connected = !!record?.refresh_token && record.config_digest === digest(json(config));
       result.expires_at = result.connected ? new Date(record.expires_at).toISOString() : null;
@@ -52,15 +60,48 @@ export class AtlassianClient {
   }
   save(input) {
     return this.exclusive(async () => {
-      const value = configuration(input);
-      this.close(); this.flowError = null;
-      atomic(this.file, JSON.stringify(value, null, 2)); this.onChange();
-      return { config: value };
+      assert(input && typeof input === 'object' && !Array.isArray(input)
+        && Object.keys(input).every(k => ['client_id', 'client_secret'].includes(k)), 'Client ID와 Client Secret만 입력하세요.');
+      const client_id = clientId(input.client_id);
+      assert(input.client_secret === undefined || (typeof input.client_secret === 'string' && input.client_secret.length <= 4096
+        && !/[\u0000-\u001f\u007f]/.test(input.client_secret)), 'Client Secret을 확인하세요.');
+      const supplied = input.client_secret?.trim() ? input.client_secret : null, current = this.config();
+      assert(supplied || current?.client_id === client_id, '처음 저장하거나 Client ID를 변경할 때는 Client Secret을 입력하세요.');
+      const previous = await this.credentials.stored();
+      const matches = current && previous?.client_id === current.client_id && previous.credential_version === current.credential_version
+        && typeof previous.client_secret === 'string' && previous.client_secret.trim() && previous.client_secret.length <= 4096
+        && !/[\u0000-\u001f\u007f]/.test(previous.client_secret);
+      assert(supplied || matches, '저장된 Client Secret을 확인할 수 없습니다. 다시 입력하세요.');
+      const client_secret = supplied || previous.client_secret;
+      if (current?.client_id === client_id && matches && sameState(previous.client_secret, client_secret)) {
+        return { config: { client_id }, has_client_secret: true };
+      }
+      const value = { client_id, credential_version: crypto.randomBytes(16).toString('hex') };
+      try {
+        await this.credentials.write({ ...value, client_secret });
+        atomic(this.file, JSON.stringify(value, null, 2));
+      } catch {
+        try { if (previous) await this.credentials.write(previous); else await this.credentials.remove(); }
+        catch { this.close(); throw error('Keychain 자격증명 저장 상태를 확인할 수 없습니다. Client ID와 Client Secret을 다시 저장하세요.', 503); }
+        throw error('Atlassian 연결 설정을 저장하지 못했습니다. Keychain 접근 권한과 로컬 저장 경로를 확인하세요.', 503);
+      }
+      this.close(); this.flowError = null; this.onChange();
+      return { config: { client_id }, has_client_secret: true };
+    });
+  }
+  clientSecret(input) {
+    return this.exclusive(async () => {
+      assert(input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).length === 1
+        && Object.hasOwn(input, 'client_id'), '확인할 Client ID를 입력하세요.');
+      const requested = clientId(input.client_id), config = this.config();
+      assert(config && requested === config.client_id, '저장된 Client ID와 일치하지 않습니다. 설정을 다시 확인하세요.', 409);
+      const credentials = await this.credentials.read(config);
+      return { client_secret: credentials.client_secret };
     });
   }
   async begin() {
     return this.exclusive(async () => {
-      const config = this.config(); assert(config, '먼저 1Password vault와 item 이름을 저장하세요.');
+      const config = this.config(); assert(config, '먼저 Client ID와 Client Secret을 입력해 저장하세요.');
       this.close(); this.flowError = null;
       const credentials = await this.credentials.read(config);
       const callback = new URL(this.callback);
@@ -83,7 +124,7 @@ export class AtlassianClient {
     });
   }
   async receiveCallback(req, res) {
-    const listener = this.listener;
+    const listener = this.listener, generation = this.authorizationGeneration;
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     try {
@@ -94,13 +135,22 @@ export class AtlassianClient {
       if (url.searchParams.has('error')) throw error('Atlassian 연결이 취소되었거나 거부되었습니다.');
       const code = url.searchParams.get('code'); assert(code && code.length < 10000, '인증 코드가 없습니다.');
       await this.exclusive(async () => {
+        // A disconnect or replacement flow can run while this callback waits for
+        // the mutation queue. Its unchanged client configuration is not consent.
+        const current = () => assert(this.authorizationGeneration === generation, '취소되었거나 대체된 OAuth 연결입니다. 다시 연결하세요.', 409);
+        current();
         assert(json(this.config()) === json(flow.config), '연결 중 설정이 변경되었습니다. 다시 연결하세요.');
+        const saved = await this.credentials.read(flow.config);
+        current();
+        assert(sameState(saved.client_secret, flow.credentials.client_secret), '연결 중 자격증명이 변경되었습니다. 다시 연결하세요.', 409);
         const response = await this.tokenRequest({ grant_type: 'authorization_code', ...flow.credentials, code, redirect_uri: flow.callback });
+        current();
         await this.saveTokens(response, flow.config, flow.credentials.client_id);
       });
-      this.flowError = null; res.end('Atlassian 연결이 완료되었습니다. WorkLog로 돌아가세요.');
+      if (this.authorizationGeneration === generation) this.flowError = null;
+      res.end('Atlassian 연결이 완료되었습니다. WorkLog로 돌아가세요.');
     } catch (e) {
-      this.flowError = e.message;
+      if (this.authorizationGeneration === generation) this.flowError = e.message;
       res.statusCode = e.status || 502; res.end(e.message);
     } finally {
       if (!this.flow && this.listener === listener) { listener?.close(); this.listener = null; }
@@ -122,32 +172,29 @@ export class AtlassianClient {
     // Access and rotating refresh tokens are replaced together, in one Keychain item.
     await this.tokens.write(record); this.onChange(); return record;
   }
-  async accessToken(rejectedToken) {
-    const config = this.config(); assert(config, 'Atlassian 연결 설정이 필요합니다.', 401);
-    const record = await this.tokens.read();
-    assert(record?.refresh_token && record.config_digest === digest(json(config)), 'Atlassian OAuth를 연결하세요.', 401);
-    if (rejectedToken ? record.access_token !== rejectedToken : record.expires_at > Date.now() + 60000) return record.access_token;
-    if (!this.refreshing) {
-      this.refreshing = this.exclusive(async () => {
-        const current = await this.tokens.read();
-        assert(current?.refresh_token && current.config_digest === digest(json(this.config())), 'Atlassian OAuth를 다시 연결하세요.', 401);
-        if (current.access_token !== record.access_token && current.expires_at > Date.now() + 60000) return current.access_token;
-        const credentials = await this.credentials.read(this.config());
-        assert(digest(credentials.client_id) === current.client_digest, 'OAuth 앱이 변경되었습니다. 다시 연결하세요.', 401);
-        try {
-          const data = await this.tokenRequest({ grant_type: 'refresh_token', ...credentials, refresh_token: current.refresh_token });
-          return (await this.saveTokens(data, this.config(), credentials.client_id)).access_token;
-        } catch (e) {
-          if (e.code === 'reauth_required') { await this.tokens.remove(); this.flowError = e.message; this.onChange(); }
-          throw e;
-        }
-      }).finally(() => { this.refreshing = null; });
-    }
-    return this.refreshing;
+  accessToken(rejectedToken) {
+    // Serialize credential snapshots, token refreshes and configuration updates.
+    // A queued concurrent caller observes the refreshed token instead of rotating twice.
+    return this.exclusive(async () => {
+      const config = this.config(); assert(config, 'Client ID와 Client Secret을 저장하고 Atlassian OAuth를 연결하세요.', 401);
+      const credentials = await this.credentials.read(config), record = await this.tokens.read();
+      assert(record?.refresh_token && record.config_digest === digest(json(config))
+        && record.client_digest === digest(credentials.client_id), 'Atlassian OAuth를 다시 연결하세요.', 401);
+      if (rejectedToken ? record.access_token !== rejectedToken : record.expires_at > Date.now() + 60000) return record.access_token;
+      try {
+        const data = await this.tokenRequest({ grant_type: 'refresh_token', ...credentials, refresh_token: record.refresh_token });
+        return (await this.saveTokens(data, config, credentials.client_id)).access_token;
+      } catch (e) {
+        if (e.code === 'reauth_required') { await this.tokens.remove(); this.flowError = e.message; this.onChange(); }
+        throw e;
+      }
+    });
   }
-  async request(apiPath, { method = 'GET', body } = {}) {
+  async request(apiPath, { method = 'GET', body, beforeSend } = {}) {
     assert(apiPath.startsWith('/') && !apiPath.startsWith('//') && !apiPath.includes('..'), 'API 경로가 올바르지 않습니다.');
     const send = async token => {
+      // Recheck local snapshots after token/site I/O, immediately before a write.
+      try { beforeSend?.(); } catch (e) { e.not_sent = true; throw e; }
       try { return await fetch(new URL(apiPath, this.apiOrigin), { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: json(body) } : {}), redirect: 'error', signal: AbortSignal.timeout(15000) }); }
       catch { throw error('Atlassian API 응답을 확인하지 못했습니다.', 502, 'unconfirmed'); }
@@ -183,6 +230,13 @@ export class AtlassianClient {
   async jiraIssue(cloudId, key) {
     await this.site(cloudId, 'jira'); assert(/^[a-zA-Z][a-zA-Z0-9_]*-\d+$/.test(key), 'Jira 티켓 키를 확인하세요.');
     return this.request(`/ex/jira/${cloudId}/rest/api/3/issue/${encodeURIComponent(key)}`);
+  }
+  async issueContent(issue) {
+    await this.site(issue.cloud_id, 'jira');
+    const raw = await this.request(`${this.issuePath(issue.cloud_id, issue.id)}?fields=summary,description,updated`);
+    assert(raw?.id === issue.id && typeof raw.fields?.summary === 'string'
+      && Object.hasOwn(raw.fields, 'description'), 'Jira 제목·설명 응답을 확인하세요.', 502);
+    return raw;
   }
   issuePath(cloudId, identifier) {
     assert(typeof cloudId === 'string' && /^[a-zA-Z0-9-]+$/.test(cloudId) && typeof identifier === 'string' && /^(?:\d+|[a-zA-Z][a-zA-Z0-9_]*-\d+)$/.test(identifier), 'Jira 이슈 식별자를 확인하세요.');
@@ -258,13 +312,74 @@ export class AtlassianClient {
     } else transition_message = 'Jira 쓰기 권한으로 OAuth를 다시 연결하면 상태를 변경할 수 있습니다.';
     return { issue: current, transitions, transition_message, can_write };
   }
-  async transitionIssue(issue, transitionId) {
+  async transitionIssue(issue, transitionId, { beforeSend } = {}) {
     assert(typeof transitionId === 'string' && /^\d+$/.test(transitionId), 'Jira 상태 변경 항목을 확인하세요.');
-    return this.request(`${this.issuePath(issue.cloud_id, issue.id)}/transitions`, { method: 'POST', body: { transition: { id: transitionId } } });
+    return this.request(`${this.issuePath(issue.cloud_id, issue.id)}/transitions`, { method: 'POST', beforeSend, body: { transition: { id: transitionId } } });
   }
   async confluencePage(cloudId, id) {
     await this.site(cloudId, 'confluence'); assert(/^\d+$/.test(id), 'Confluence 페이지 ID를 확인하세요.');
     return this.request(`/ex/confluence/${cloudId}/wiki/api/v2/pages/${id}?body-format=storage`);
+  }
+  confluenceUrl(site, pageId) {
+    assert(typeof pageId === 'string' && /^\d+$/.test(pageId), 'Confluence 페이지 ID를 확인하세요.', 502);
+    const url = new URL(site.url);
+    assert(url.protocol === 'https:' && !url.username && !url.password && url.hostname.endsWith('.atlassian.net'), 'Confluence 사이트 주소를 확인하세요.', 502);
+    return new URL(`/wiki/pages/viewpage.action?pageId=${pageId}`, url).href;
+  }
+  async confluenceSpaces(cloudId, cursor = null) {
+    assert(cursor === null || (typeof cursor === 'string' && cursor.length > 0 && cursor.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(cursor)), 'Confluence 공간 페이지를 다시 불러오세요.');
+    const site = await this.site(cloudId, 'confluence');
+    assert(site.scopes.includes('read:space:confluence'), 'Confluence 공간 읽기 권한으로 OAuth를 다시 연결하세요.', 403);
+    const base = `/ex/confluence/${cloudId}/wiki/api/v2/spaces`, params = new URLSearchParams({ status: 'current', limit: '50' });
+    if (cursor) params.set('cursor', cursor);
+    const result = await this.request(`${base}?${params}`);
+    assert(Array.isArray(result?.results) && result.results.length <= 50, 'Confluence 공간 목록 응답을 확인하세요.', 502);
+    const spaces = result.results.map(row => {
+      assert(typeof row.id === 'string' && /^\d+$/.test(row.id) && typeof row.name === 'string' && typeof row.key === 'string', 'Confluence 공간 정보를 확인하세요.', 502);
+      return { id: row.id, key: row.key, name: row.name };
+    });
+    let next_cursor = null;
+    if (result._links?.next) {
+      // Treat the server link only as a cursor source, never as a request destination.
+      let next; try { next = new URL(result._links.next, this.apiOrigin); } catch { assert(false, 'Confluence 공간 페이지 정보를 확인하세요.', 502); }
+      assert([new URL(this.apiOrigin).origin, new URL(site.url).origin].includes(next.origin) && !next.username && !next.password
+        && [base, '/wiki/api/v2/spaces'].includes(next.pathname) && !next.hash
+        && [...next.searchParams.keys()].every(k => ['cursor', 'limit', 'status'].includes(k))
+        && next.searchParams.getAll('cursor').length === 1, 'Confluence 공간 페이지 정보를 확인하세요.', 502);
+      next_cursor = next.searchParams.get('cursor');
+      assert(next_cursor && next_cursor.length <= 4096 && next_cursor !== cursor && !/[\u0000-\u001f\u007f]/.test(next_cursor), 'Confluence 공간 페이지 정보를 확인하세요.', 502);
+    }
+    return { spaces, next_cursor };
+  }
+  async createConfluencePage({ cloud_id, space_id, title, storage }, { beforeSend } = {}) {
+    let site;
+    try {
+      site = await this.site(cloud_id, 'confluence');
+      assert(site.scopes.includes('write:page:confluence') && site.scopes.includes('read:space:confluence'), 'Confluence 공간 읽기·페이지 쓰기 권한으로 OAuth를 다시 연결하세요.', 403);
+      assert(typeof space_id === 'string' && /^\d+$/.test(space_id) && typeof title === 'string' && title.trim() && title.length <= 255
+        && typeof storage === 'string' && storage.length > 0, '게시할 Confluence 공간과 보고서를 확인하세요.');
+      // Validate the accessible target before initiating the irreversible POST.
+      const space = await this.request(`/ex/confluence/${cloud_id}/wiki/api/v2/spaces/${space_id}`);
+      assert(space?.id === space_id && space.status === 'current', '현재 사용할 수 있는 Confluence 공간을 선택하세요.', 409);
+      this.confluenceUrl(site, '0');
+    } catch (e) { e.not_sent = true; throw e; }
+    let result;
+    try {
+      result = await this.request(`/ex/confluence/${cloud_id}/wiki/api/v2/pages`, { method: 'POST', beforeSend,
+        body: { spaceId: space_id, status: 'current', title, body: { representation: 'storage', value: storage } } });
+      assert(typeof result?.id === 'string' && /^\d+$/.test(result.id) && result.spaceId === space_id
+        && result.title === title && result.status === 'current', 'Confluence 페이지 생성 결과를 확인하지 못했습니다.', 502);
+    } catch (e) {
+      if (e.status === 400) e.message = 'Confluence 페이지 제목·본문과 공간 설정을 확인하세요.';
+      throw e;
+    }
+    return { page_id: result.id, url: this.confluenceUrl(site, result.id) };
+  }
+  async confluencePageForPublication(cloudId, pageId) {
+    const site = await this.site(cloudId, 'confluence');
+    assert(typeof pageId === 'string' && /^\d+$/.test(pageId), 'Confluence 페이지 ID를 확인하세요.');
+    const page = await this.request(`/ex/confluence/${cloudId}/wiki/api/v2/pages/${pageId}?body-format=storage`);
+    return { page, url: this.confluenceUrl(site, pageId) };
   }
   async jiraProjects(cloudId) {
     await this.site(cloudId, 'jira');
@@ -286,18 +401,27 @@ export class AtlassianClient {
     }
     throw error('Jira 목록 조회 한도를 초과했습니다.', 409);
   }
-  async createJiraIssue({ cloud_id, project, issue_type, title, description, operation_id, work_item_id }) {
+  async createJiraIssue({ cloud_id, project, issue_type, title, description, operation_id, work_item_id }, { beforeSend } = {}) {
     let site;
     try { site = await this.site(cloud_id, 'jira'); } catch (e) { e.not_sent = true; throw e; }
     assert(site.scopes.includes('write:jira-work'), 'Jira 쓰기 권한으로 OAuth를 다시 연결하세요.', 403);
     assert(/^[a-zA-Z0-9_]+$/.test(project) && /^\d+$/.test(issue_type), 'Jira 프로젝트와 티켓 유형을 선택하세요.');
-    const result = await this.request(`/ex/jira/${cloud_id}/rest/api/3/issue`, { method: 'POST', body: {
+    const result = await this.request(`/ex/jira/${cloud_id}/rest/api/3/issue`, { method: 'POST', beforeSend, body: {
       fields: { project: { key: project }, issuetype: { id: issue_type }, summary: title, description: jiraDescription(description) },
       properties: [{ key: 'work-log', value: { operation_id, work_item_id } }]
     } });
     assert(typeof result.id === 'string' && /^[a-zA-Z][a-zA-Z0-9_]*-\d+$/.test(result.key), 'Jira 티켓 생성 결과를 확인하지 못했습니다.', 502);
     const url = new URL(site.url); assert(url.protocol === 'https:' || this.apiOrigin.startsWith('http://127.0.0.1:'), 'Jira 사이트 주소를 확인하세요.', 502);
     return { id: result.id, key: result.key, url: new URL(`/browse/${result.key}`, url).href, cloud_id };
+  }
+  async updateJiraIssue(issue, { title, description }, { beforeSend } = {}) {
+    assert(typeof title === 'string' && title.trim() && title.length <= 200
+      && typeof description === 'string' && description.length <= 5000, 'Jira에 반영할 제목과 설명을 확인하세요.');
+    let site;
+    try { site = await this.site(issue.cloud_id, 'jira'); } catch (e) { e.not_sent = true; throw e; }
+    assert(site.scopes.includes('write:jira-work'), 'Jira 쓰기 권한으로 OAuth를 다시 연결하세요.', 403);
+    return this.request(this.issuePath(issue.cloud_id, issue.id), { method: 'PUT', beforeSend,
+      body: { fields: { summary: title, description: jiraDescription(description) } } });
   }
   async resolveIssue(link, key) {
     const issue = await this.jiraIssue(link.request.cloud_id, key);
@@ -323,7 +447,7 @@ export class AtlassianClient {
     }
     throw error('업무 로그 조회 한도를 초과했습니다. 직접 확인하세요.', 409);
   }
-  async writeWorklog(issue, row) {
+  async writeWorklog(issue, row, { beforeSend } = {}) {
     const payload = JSON.parse(row.payload), base = this.worklogPath(issue);
     assert(Number.isInteger(payload.seconds) && payload.seconds > 0 && Number.isFinite(Date.parse(payload.started)), '관측된 작업 시간과 시작 시각이 필요합니다.');
     if (row.worklog_id) {
@@ -332,9 +456,9 @@ export class AtlassianClient {
       assert(current.properties?.some(p => p.key === 'work-log' && p.value?.operation_id === row.operation_id), '기존 업무 로그의 출처를 확인할 수 없습니다.', 409);
     }
     const result = await this.request(`${base}${row.worklog_id ? `/${row.worklog_id}` : ''}?adjustEstimate=leave&notifyUsers=false`, {
-      method: row.worklog_id ? 'PUT' : 'POST', body: {
+      method: row.worklog_id ? 'PUT' : 'POST', beforeSend, body: {
         started: new Date(payload.started).toISOString().replace('Z', '+0000'), timeSpentSeconds: payload.seconds,
-        comment: jiraDescription(payload.comment), properties: [{ key: 'work-log', value: { operation_id: row.operation_id, session_id: row.session_id, source_digest: row.source_digest } }]
+        comment: plainTextADF(payload.comment), properties: [{ key: 'work-log', value: { operation_id: row.operation_id, session_id: row.session_id, source_digest: row.source_digest } }]
       }
     });
     assert(typeof result.id === 'string' && /^\d+$/.test(result.id), '업무 로그 생성 결과를 확인하지 못했습니다.', 502);
@@ -343,7 +467,7 @@ export class AtlassianClient {
   disconnect() {
     return this.exclusive(async () => { this.close(); await this.tokens.remove(); this.flowError = null; this.onChange(); return { connected: false }; });
   }
-  close() { this.flow = null; clearTimeout(this.flowTimer); this.listener?.close(); this.listener = null; }
+  close() { this.authorizationGeneration++; this.flow = null; clearTimeout(this.flowTimer); this.listener?.close(); this.listener = null; }
 }
 
 export function atlassianClient(dir, onChange) {
@@ -351,7 +475,7 @@ export function atlassianClient(dir, onChange) {
   // Local protocol simulators are only reachable in explicit E2E mode with isolated credential helpers.
   if (process.env.HARNESS_TEST_MODE === '1' && process.env.HARNESS_ATLASSIAN_TEST_ORIGIN) {
     const origin = new URL(process.env.HARNESS_ATLASSIAN_TEST_ORIGIN);
-    assert(origin.protocol === 'http:' && origin.hostname === '127.0.0.1' && process.env.HARNESS_OP_BIN && process.env.HARNESS_KEYCHAIN_BIN, 'Atlassian 테스트 환경은 로컬 모의 서버와 격리된 자격증명 도우미가 필요합니다.');
+    assert(origin.protocol === 'http:' && origin.hostname === '127.0.0.1' && process.env.HARNESS_KEYCHAIN_BIN, 'Atlassian 테스트 환경은 로컬 모의 서버와 격리된 Keychain 도우미가 필요합니다.');
     Object.assign(options, { authOrigin: origin.origin, apiOrigin: origin.origin, callback: 'http://127.0.0.1:0/oauth/atlassian/callback' });
   }
   return new AtlassianClient(options);

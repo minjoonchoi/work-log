@@ -23,7 +23,7 @@ function sample(agent, name, start = '09:00:00', end = '09:30:00', turn = 't1') 
 test('failed local checks expose observed outcomes and a report remains distinct from test success', async ({ page }) => {
   const checked = await h.finish(await h.run({ task: 'checks.run', prompt: 'E2E 검사 실행', input: { profile: 'fixture.mixed' } }));
   expect(checked.status).toBe('failed');
-  const items = await eventually(() => h.manager('/items'), rows => rows[0]?.state === 'attention');
+  const items = await eventually(() => h.manager('/items'), rows => rows[0]?.notification_count === 1);
   await open(page); await page.locator('.item-open').click();
   await page.locator('.session-card > summary').click();
   await page.locator('.session-results > summary').click();
@@ -91,6 +91,29 @@ test('month/day/week overflow opens all hidden entries; count follows selected d
   await page.locator('[data-view=month]').click(); await page.getByLabel('캘린더 표시 단위').selectOption('items');
   await expect(monthDay.locator('.calendar-event')).toHaveCount(1); await expect(monthDay.locator('.more')).toHaveCount(0);
   await page.getByLabel('캘린더 표시 단위').selectOption('sessions'); await expect(monthDay.locator('.more')).toHaveText('+3개 더보기');
+});
+test('timed overflow lists the entire date including sessions outside the overlapping cluster', async ({ page }) => {
+  for (let i = 0; i < 3; i++) await h.ingest(sample(`overlap-${i}`, `오전 업무 ${i}`));
+  await h.ingest(sample('afternoon', '오후 별도 작업', '14:00:00', '14:30:00'));
+  await h.ingest(pair('other-day', '2026-09-18T09:00:00+09:00', '2026-09-18T09:30:00+09:00', 't1', { text: '다음 날 작업' }));
+  await open(page); await calendar(page, 'sessions', 'day');
+  for (const view of ['day', 'week']) {
+    await page.locator(`[data-view=${view}]`).click();
+    await page.locator('.time-header').getByRole('button', { name: '세션 4개 더보기', exact: true }).click();
+    await expect(page.getByRole('dialog').locator('.dialog-entry')).toHaveCount(4);
+    await expect(page.getByRole('dialog')).toContainText('오후 별도 작업');
+    await expect(page.getByRole('dialog')).not.toContainText('다음 날 작업');
+    await page.getByRole('button', { name: '닫기', exact: true }).click();
+    await page.locator('.time-day[data-date="2026-09-17"] .time-more').click();
+    await expect(page.getByRole('dialog').locator('.dialog-entry')).toHaveCount(4);
+    await page.getByRole('button', { name: '닫기', exact: true }).click();
+  }
+  await page.locator('.time-header').getByRole('button', { name: '세션 4개 더보기', exact: true }).click();
+  await page.screenshot({ path: 'output/screenshots/calendar-day-sessions-modal.png', fullPage: true });
+  await page.getByRole('dialog').getByRole('button', { name: /오후 별도 작업/ }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.locator('.work-item-title')).toHaveText('오후 별도 작업');
+  await expect(page.locator('.session-card')).toHaveAttribute('open', '');
 });
 test('cross-midnight clips one session into both calendar days, without creating a second session', async ({ page }) => {
   await h.ingest(pair('night', '2026-09-17T23:50:00+09:00', '2026-09-18T00:10:00+09:00', 'night', { text: '야간 작업' }));

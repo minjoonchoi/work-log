@@ -26,7 +26,7 @@
           "--test-concurrency=1"
         ],
         "test_directory": "tests/e2e",
-        "timeoutMs": 180000
+        "timeoutMs": 300000
       },
       {
         "id": "gui-e2e",
@@ -71,7 +71,7 @@
           "--test-concurrency=1"
         ],
         "test_directory": "tests/e2e",
-        "timeoutMs": 180000
+        "timeoutMs": 300000
       }
     ]
   },

@@ -4,7 +4,7 @@
 
 ## 사용자 흐름
 
-Work item 상세의 **Jira 이슈** 영역에서 **새 이슈 만들기** 또는 **기존 이슈 연결**을 선택한다. 새 이슈는 저장된 work item 제목·설명을 그대로 사용한다. 기존 이슈는 사이트를 선택하고 **완전한 이슈 키(`TEAM-123`) 또는 제목**으로 검색한다. 같은 사이트의 `/browse/TEAM-123` URL도 지원한다. 결과 목록에서 키·제목·상태를 비교해 하나를 선택한 뒤 **이슈 연결**을 누른다. 검색·선택만으로 연결하거나 업무 로그를 전송하지 않는다. 연결은 기존 Jira 이슈의 제목·설명과 work item 메타데이터를 수정하지 않는다.
+Work item 상세의 **Jira 이슈** 영역에서 **새 이슈 만들기** 또는 **기존 이슈 연결**을 선택한다. 새 이슈는 저장된 work item 제목·설명을 사용하며 설명의 Markdown 구조를 Jira 서식으로 변환한다. 기존 이슈는 사이트를 선택하고 **완전한 이슈 키(`TEAM-123`) 또는 제목**으로 검색한다. 같은 사이트의 `/browse/TEAM-123` URL도 지원한다. 결과 목록에서 키·제목·상태를 비교해 하나를 선택한 뒤 **이슈 연결**을 누른다. 검색·선택만으로 연결하거나 업무 로그를 전송하지 않는다. 연결은 기존 Jira 이슈의 제목·설명과 work item 메타데이터를 수정하지 않는다.
 
 제목 검색은 관리 서비스의 `AtlassianClient.searchIssues`가 Jira REST API를 감싸 처리한다. GUI에는 JQL·인증 토큰·외부 API 주소를 전달하지 않는다. 제목의 단어마다 접두어 검색 조건을 결합하며, 구두점은 단어 경계로 처리한다. 실제 검색 일치는 Jira 색인·언어 분석에 따른다. 사용자 문자열을 JQL로 직접 실행하지 않는다. 한 번에 최대 20개를 반환하고 Jira의 `nextPageToken`으로 **더 보기**를 제공한다. 검색 총건수는 추정하지 않는다.
 
@@ -12,9 +12,34 @@ GUI에서 검색어·사이트를 변경하면 기존 선택과 다음 페이지
 
 연결된 카드에는 클릭 가능한 이슈 키, Jira 제목, 현재 상태, 상태 새로고침, 변경할 상태 선택과 **상태 변경** 버튼을 제공한다. 링크는 macOS 앱의 기본 브라우저에서 열리고, 웹 GUI에서는 새 창으로 열린다. 키가 변경되어도 숫자 issue ID로 조회·전환·업무 로그 대상을 유지하고 새 키와 URL을 반영한다.
 
+**제목·설명 반영**을 누르면 현재 work item 내용과 대상 Jira 이슈를 미리 보여 준다. **Jira에 반영**을 누른 경우에만 저장된 제목·설명을 전송한다. Work item을 편집·재생성하거나 상세 화면을 여는 동작은 기존 이슈를 자동으로 수정하지 않는다. 이전에 연결한 이슈에도 같은 명시적 반영 절차를 적용한다.
+
 여러 work item을 병합하면 각 Jira 연결을 보존한다. 서로 다른 이슈는 별도 카드로 표시하고 같은 이슈의 카드는 중복 표시하지 않는다. 원래 세션의 업무 로그 연결은 유지한다. 하나의 미병합 work item에 연결을 추가하거나 교체하는 기능은 이번 범위에 포함하지 않는다.
 
 연결 완료 후 종료 세션의 요약·시작 시각·관측 시간은 기존 [업무 로그 동기화](atlassian-worklogs.md) 규칙을 따른다. 이 점을 연결 확인 화면에도 표시한다. Jira 상태는 하네스 작업 상태와 별개이며, 이슈를 완료로 변경해도 로컬 work item이나 실행을 완료 처리하지 않는다.
+
+## 설명 형식과 Jira 문서 변환
+
+Work item의 설명은 계속 문자열로 저장한다. 생성·재작성 결과는 `## 작업 배경`, `## 목적`, `## 범위`, `## 결과`의 Markdown 제목 아래에 근거 있는 내용과 필요한 목록을 둔다. 이전 설명을 자동으로 재작성하거나 이미 연결된 Jira 이슈를 조회만으로 변경하지 않는다.
+
+Jira REST v3의 이슈 `description`은 문자열을 그대로 보내는 대신 Atlassian Document Format(ADF)으로 전송한다. 생성과 제목·설명 반영은 같은 `jiraDescription` 변환기를 사용한다. ADF는 `doc` 아래에 제목·문단·목록을 순서대로 담는 JSON 문서다. [Jira REST v3](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro), [ADF 구조](https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/)
+
+| 설명 원문 | Jira 표현 |
+|---|---|
+| `#`~`######` 제목 | `heading`, 해당 `attrs.level` |
+| 일반 문장·줄바꿈 | `paragraph`, `text`, `hardBreak` |
+| `-`, `*`, `+`의 연속된 한 단계 목록 | `bulletList` 안의 `listItem` |
+| `1.` 또는 `1)` 형식의 연속된 한 단계 목록 | 시작 번호를 보존하는 `orderedList` |
+| `**강조**` | `strong` 텍스트 mark |
+| `[표시](https://example.com)` | `http`·`https` 주소만 허용하는 `link` mark |
+
+제목과 목록의 문법은 [heading](https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/heading/), [bulletList](https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/bulletList/), [orderedList](https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/orderedList/) 규약을 따른다. 링크는 [link mark](https://developer.atlassian.com/cloud/jira/platform/apis/document/marks/link/)로 표현한다.
+
+HTML·이미지·중첩 목록·표 등 지원하지 않는 구문은 문자로 남긴다. 코드 펜스 안의 내용도 제목·목록으로 재해석하지 않는다. `javascript:`·`data:` 링크나 인증 정보가 포함된 URL은 링크로 만들지 않는다. 기존 일반 텍스트 설명은 문장과 개행을 유지한다. Markdown 전체를 지원하는 편집기나 HTML 변환기로 취급하지 않는다.
+
+세션 업무 로그의 댓글은 별도의 `plainTextADF`를 사용한다. 제목 한 줄과 최대 다섯 줄 요약이라는 기존 계약, 문자와 줄바꿈을 보존하며 설명의 Markdown 서식 변환을 적용하지 않는다.
+
+반영 요청은 로컬 work item의 버전과 미리보기 시점 Jira의 `updated`를 보낸다. 서비스는 최신 원격 버전을 조회하고 실제 전송 직전에도 로컬 식별자·버전을 확인한다. 중간 편집이나 병합, 이미 확인된 원격 변경이 있으면 전송을 거절한다. Jira 읽기와 PUT은 하나의 원자적 비교·교환이 아니므로, 원격 조회 뒤 PUT 직전 다른 사용자가 수정하는 경우까지 배제하지는 못한다.
 
 ## 상태 조회와 전환
 
@@ -24,6 +49,7 @@ GUI에서 검색어·사이트를 변경하면 기존 선택과 다음 페이지
 |---|---|
 | 제목 검색·다음 페이지 | `GET /rest/api/3/search/jql`, `jql`, `maxResults=20`, `nextPageToken` |
 | 제목·상태·수정 버전 | `GET /rest/api/3/issue/{id}?fields=summary,status,updated` |
+| 제목·구조화 설명 반영 | `PUT /rest/api/3/issue/{id}`, `fields.summary`, `fields.description`(ADF), 성공 `204` |
 | 현재 사용자가 수행할 수 있는 전환 | `GET /rest/api/3/issue/{id}/transitions?expand=transitions.fields` |
 | 선택한 전환 수행 | `POST /rest/api/3/issue/{id}/transitions`, `{"transition":{"id":"…"}}` |
 
@@ -47,6 +73,7 @@ Jira 읽기·연결·상태 변경은 관리 계층의 명시적인 API 명령�
 | `POST /api/items/:id/jira/link` | 조회한 기존 이슈에 연결 |
 | `POST /api/jira-links/:operation/refresh` | 상태·허용 전환 새로고침 |
 | `POST /api/jira-links/:operation/transition` | 선택한 전환 수행 |
+| `POST /api/jira-links/:operation/content` | 확인한 work item 제목·설명을 연결된 Jira에 반영 |
 
 기존 이슈 연결 요청:
 
@@ -71,6 +98,18 @@ Jira 읽기·연결·상태 변경은 관리 계층의 명시적인 API 명령�
 }
 ```
 
+제목·설명 반영 요청:
+
+```json
+{
+  "operation_id": "unique-content-update-id",
+  "version": 3,
+  "expected_updated": "2026-09-17T00:00:00.000Z"
+}
+```
+
+제목·설명은 위 요청을 접수할 때 서비스가 해당 work item에서 읽고 고정한다. 클라이언트에서 별도의 문구를 덧붙이지 않는다. `jira_content_changes`에 요청 스냅샷과 전송 상태를 기록하며 같은 operation ID를 다시 받아도 PUT을 재전송하지 않는다.
+
 허용 필드·타입·식별자·등록된 연결을 검증한다. 연결은 네트워크 조회 후 work item 버전과 기존 연결을 트랜잭션 안에서 다시 검사한다. 동시 편집·연결·병합으로 대상을 바꾸지 않는다. 같은 operation ID는 원래 결과를 재사용하며 다른 대상이나 전환 내용으로 재사용하면 거부한다.
 
 기존 `jira_links`를 연결의 기준으로 사용한다. `jira_issue_views`는 `(cloud_id, issue_id)` 기준의 마지막 상태·전환 목록·관측 시각·조회 오류를 보관하고 `jira_changes`는 상태 변경 intent와 결과를 보관한다. 같은 이슈에 대한 조회와 쓰기는 직렬화한다. 여러 work item이 같은 이슈를 가리켜도 같은 캐시·잠금을 사용한다.
@@ -81,12 +120,18 @@ Jira 읽기·연결·상태 변경은 관리 계층의 명시적인 API 명령�
 
 새로고침에서 현재 상태가 요청 대상과 일치하면 `observed`로 기록하며 **현재 이슈가 요청한 상태이나 이전 전송 응답은 확인하지 못했다**고 표시한다. 이 요청이 상태 변경의 원인이었다고 추정하지 않는다. 대상과 다르면 `unknown`을 유지하고 추가 앱 전환을 막는다. 이 경우 이슈 링크로 Jira에서 현재 상황을 확인·처리할 수 있다.
 
-204 성공 뒤 후속 조회만 실패하면 `applied`는 유지하고 이전 상태를 최신 미확인으로 표시한다. 성공한 POST를 다시 보내지 않는다. 1Password·OAuth·Keychain의 기존 보관 정책과 범위는 그대로 적용한다.
+204 성공 뒤 후속 조회만 실패하면 `applied`는 유지하고 이전 상태를 최신 미확인으로 표시한다. 성공한 POST를 다시 보내지 않는다. [Atlassian 연결 설정](atlassian-worklogs.md)의 Client ID·Secret 직접 입력과 앱 자격증명·OAuth 토큰의 Keychain 분리 보관 정책을 적용한다.
+
+제목·설명 PUT도 전송 전 실패는 `failed`, 성공 확인은 `applied`, 응답 유실이나 전송 중 서비스 중단은 `unknown`으로 기록한다. `unknown`에서는 새 반영을 막고 새로고침을 요청한다. 숫자 이슈 ID로 현재 제목·설명을 읽어 요청 스냅샷과 같으면 `observed`, 다르면 `different`로 기록한다. 객체 키의 순서는 ADF 내용 차이로 보지 않는다. 두 상태 모두 이전 전송의 성공 여부를 확정한 것으로 표현하지 않는다. 현재 내용을 확인한 뒤 새 operation ID로 다시 반영할 수 있고, 이전 operation ID 재요청은 기록만 반환한다.
 
 ## 검증 범위
 
 서비스 E2E는 `tests/e2e/jira-issues.test.mjs`, 브라우저 E2E는 `tests/ui/jira-issues.spec.mjs`, `tests/ui/jira-search.spec.mjs`에 있다. 키/URL 조회, 제목 검색·페이지 이동·접근 범위·특수문자, 연결의 동시성·멱등성, 제목 보존, 204 전환, 낡은 선택 거절, 추가 입력·권한 부족, 실패 조회·키 이동, 중복 클릭, 응답 유실·서비스 강제 종료·재개, 성공 후 조회 실패, 병합 후 독립 상태·업무 로그를 검증한다. GUI는 실제 링크의 href와 브라우저 열기 bridge, 검색 결과 선택·더 보기, 지연된 이전 응답 무시, 선택 보존, 상태 갱신, 실패 표시와 좁은 화면을 확인한다.
 
-Atlassian·op·Keychain·요약 모델은 격리된 테스트 대역을 사용한다. 실제 계정의 권한·워크플로·외부 쓰기는 이번 검증 결과에 포함하지 않는다. macOS의 기본 브라우저 실행은 기존 NSWorkspace bridge를 재사용하며 브라우저 E2E는 bridge에 전달한 URL까지 확인한다.
+Atlassian·Keychain·요약 모델은 격리된 테스트 대역을 사용한다. 실제 계정의 권한·워크플로·외부 쓰기는 이 검증 결과에 포함하지 않는다. 이전 `op` 기반 자격증명 조회의 결과는 [과거 연동 검증 기록](verification-atlassian.md)으로 구분한다. macOS의 기본 브라우저 실행은 기존 NSWorkspace bridge를 재사용하며 브라우저 E2E는 bridge에 전달한 URL까지 확인한다.
 
-Jira 검색·세션별 작업 결과 연결을 구현한 2026-09-17 회귀 결과는 **서비스 95/95, GUI 27/27, 합계 122개 통과**였다. 기존 112개에 서비스 6개·GUI 4개를 추가했으며 [당시 검사 근거](../output/self-verification/2026-09-17T09-19-45.302Z/verification.md)를 보존한다. 이후 세션 입출력 무한 스크롤을 추가한 **서비스 99/99·GUI 32/32**의 최신 검사와 GUI 재검증 결과는 [세션 입출력 레코드](session-record-history.md)에 있다. Jira 상태 선택이 실시간 기록 추가 중 유지되는 시나리오도 실제 세션을 펼친 상태로 확인했다. macOS 앱 빌드·서명·ZIP 및 번들 서비스 smoke 검증도 통과했다. [패키지 검증](../output/package-validation.json), [Jira 검색 화면](../output/screenshots/jira-issue-search.png)은 Git에서 제외되는 로컬 산출물이다.
+`tests/e2e/jira-description.test.mjs`는 실제 로컬 관리 서비스와 모의 Jira HTTP API를 연결해 생성·수정의 ADF 제목·목록·강조·링크, 기존 일반 텍스트, HTML과 위험한 링크의 문자 보존, 업무 로그 댓글의 원문 보존, 쓰기 권한·204·거절·응답 유실을 검증한다.
+
+`tests/e2e/jira-content.test.mjs`는 명시적 반영 전 외부 수정 없음, 동시·재시작 후 멱등성, 로컬·원격 버전 충돌, 검사·인증 중 편집과 병합, 응답 유실의 동일/상이 판정, 이슈 키 이동, 후속 읽기 실패, 전송 중 서비스 종료 복구를 검증한다.
+
+Jira 검색·세션별 작업 결과 연결을 구현한 2026-09-17 회귀 결과는 **서비스 95/95, GUI 27/27, 합계 122개 통과**였다. 기존 112개에 서비스 6개·GUI 4개를 추가했으며 [당시 검사 근거](../output/self-verification/2026-09-17T09-19-45.302Z/verification.md)를 보존한다. 이후 같은 날 세션 입출력 무한 스크롤을 추가한 **서비스 99/99·GUI 32/32**의 검사와 GUI 재검증 결과는 [세션 입출력 레코드](session-record-history.md)에 있다. Jira 상태 선택이 실시간 기록 추가 중 유지되는 시나리오도 실제 세션을 펼친 상태로 확인했다. macOS 앱 빌드·서명·ZIP 및 번들 서비스 smoke 검증도 통과했다. [패키지 검증](../output/package-validation.json), [Jira 검색 화면](../output/screenshots/jira-issue-search.png)은 Git에서 제외되는 로컬 산출물이다. 현재 전체 검증 안내는 [README](../README.md)를 따른다.

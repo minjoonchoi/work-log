@@ -48,8 +48,12 @@ export function locked(homeDir, fn) {
     assert(fs.readFileSync(lock, 'utf8') === previous, '설치 잠금이 변경되었습니다.');
     fs.unlinkSync(lock); fs.writeFileSync(lock, contents, { flag: 'wx', mode: 0o600 });
   }
-  try { return fn(loc); }
-  finally { if (stat(lock) && fs.readFileSync(lock, 'utf8') === contents) fs.unlinkSync(lock); }
+  const release = () => { if (stat(lock) && fs.readFileSync(lock, 'utf8') === contents) fs.unlinkSync(lock); };
+  try {
+    const result = fn(loc);
+    if (result && typeof result.then === 'function') return Promise.resolve(result).finally(release);
+    release(); return result;
+  } catch (error) { release(); throw error; }
 }
 
 export function saveManifest(loc, receipt) { safePath(loc.home, loc.manifest); atomic(loc.manifest, JSON.stringify(receipt, null, 2)); }

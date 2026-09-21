@@ -8,11 +8,17 @@ import { integrationCoordinator } from './integration-coordinator.mjs';
 import { writingStore } from './writing-store.mjs';
 import { writingCoordinator } from './writing-coordinator.mjs';
 import { jiraService } from './jira-service.mjs';
+import { stopCredentialProcesses } from './credentials.mjs';
+import { notificationStore } from './notifications.mjs';
+import { reportStore } from './reports.mjs';
+import { reportsCoordinator } from './reports-coordinator.mjs';
+import { confluenceReports } from './confluence-reports.mjs';
 
 const dir = dataRoot(); lockService(dir, 'manager');
+let writings;
 const store = managerStore(dir);
 const spoolDir = path.join(dir, 'spool'); fs.mkdirSync(spoolDir, { recursive: true, mode: 0o700 });
-let collecting = false, runtimeConnected = false, lastError = null, timer;
+let collecting = false, runtimeConnected = false, lastError = null, timer, stopping = false;
 const subscribers = new Set();
 let revision = 0;
 function notify() {
@@ -23,11 +29,42 @@ function notify() {
 const integrations = integrationStore(store), atlassian = atlassianClient(dir, notify);
 const jira = jiraService({ store, integrations, client: atlassian, notify });
 const automaticSummaries = process.env.HARNESS_TEST_MODE !== '1' || process.env.HARNESS_TEST_SESSION_SUMMARIES === '1';
-const writings = writingStore(store, integrations);
-const writer = writingCoordinator({ dir, writings, notify, automatic: automaticSummaries, fixture: process.env.HARNESS_TEST_MODE === '1' });
+writings = writingStore(store, integrations);
+const writer = writingCoordinator({ dir, writings, notify, automatic: automaticSummaries,
+  automaticMetadata: process.env.HARNESS_TEST_MODE !== '1' || process.env.HARNESS_TEST_AUTOMATIC_METADATA === '1', fixture: process.env.HARNESS_TEST_MODE === '1' });
 const coordinator = integrationCoordinator({ integrations, client: atlassian, notify, writings: writer, enabled: automaticSummaries });
+const reports = reportStore(store, integrations);
+const reportWriter = reportsCoordinator({ dir, reports, notify, fixture: process.env.HARNESS_TEST_MODE === '1' });
+const reportPublisher = confluenceReports({ store, reports, client: atlassian, notify });
+const notifications = notificationStore({ store, writings, integrations });
+const notificationCounts = rows => {
+  const counts = new Map(); for (const row of rows) counts.set(row.work_item_id, (counts.get(row.work_item_id) || 0) + 1); return counts;
+};
+// List/calendar views need accepted summary labels, not source snapshots or complete histories.
+const sessionSummaries = () => new Map(store.db.prepare('SELECT session_id,state,text FROM session_summaries').all().map(s => [s.session_id, s]));
+function itemListing(params) {
+  assert([...params.keys()].every(key => ['q', 'jira', 'trash', 'tag', 'untagged'].includes(key))
+    && ['q', 'jira', 'trash', 'tag', 'untagged'].every(key => params.getAll(key).length <= 1), '업무 조회 조건이 잘못되었습니다.');
+  const q = params.get('q') || '', jiraFilter = params.get('jira') || 'all', trash = params.get('trash') || 'false';
+  const untagged = params.get('untagged') ?? 'false';
+  assert(q.length <= 500 && ['all', 'unlinked', 'linked'].includes(jiraFilter)
+    && ['true', 'false'].includes(trash) && ['true', 'false'].includes(untagged), '업무 조회 조건이 잘못되었습니다.');
+  const links = new Map();
+  const counts = notificationCounts(notifications.list());
+  for (const link of integrations.links()) {
+    const itemId = store.canonical(link.work_item_id);
+    if (!links.has(itemId)) links.set(itemId, []);
+    links.get(itemId).push(link);
+  }
+  return store.items(q, { trash: trash === 'true', tag: params.get('tag'), untagged: untagged === 'true' }).map(item => {
+    const group = links.get(item.id) || [];
+    const keys = [...new Set(group.filter(link => link.state === 'linked' && link.issue?.key).map(link => link.issue.key))];
+    const jiraState = keys.length ? 'linked' : group.some(link => ['sending', 'unknown'].includes(link.state)) ? 'unknown' : 'unlinked';
+    return { ...item, jira_state: jiraState, jira_keys: keys, notification_count: counts.get(item.id) || 0 };
+  }).filter(item => jiraFilter === 'all' || item.jira_state === jiraFilter);
+}
 async function collect() {
-  if (collecting) return; collecting = true;
+  if (collecting || stopping) return; collecting = true;
   const wasConnected = runtimeConnected, previousError = lastError;
   let changed = false;
   try {
@@ -56,7 +93,8 @@ function health() {
   return { role: 'management', version: '0.3.1', runtime_connected: runtimeConnected,
     last_error: lastError || (fs.existsSync(path.join(dir, 'hook-error.json')) ? JSON.parse(fs.readFileSync(path.join(dir, 'hook-error.json'))).message : null),
     quarantined: fs.existsSync(path.join(dir, 'quarantine')) ? fs.readdirSync(path.join(dir, 'quarantine')).filter(f => f.endsWith('.json')).length : 0,
-    ...store.stats() };
+    ...store.stats(), visible_items: store.db.prepare(`SELECT COUNT(*) AS n FROM work_items w
+      WHERE w.merged_into IS NULL AND NOT EXISTS (SELECT 1 FROM work_item_deletions d WHERE d.work_item_id=w.id AND d.deleted_at IS NOT NULL)`).get().n };
 }
 const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(process.env.HARNESS_MANAGER_PORT || 0),
   streamHandler: (req, res, url) => {
@@ -71,6 +109,7 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
   },
   publicHandler: async (req, res, url) => {
     const routes = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/history.js': ['history.js', 'text/javascript'], '/integrations.js': ['integrations.js', 'text/javascript'], '/jira.js': ['jira.js', 'text/javascript'], '/writing.js': ['writing.js', 'text/javascript'], '/execution-settings.js': ['execution-settings.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
+      '/description.js': ['description.js', 'text/javascript'], '/automation-settings.js': ['automation-settings.js', 'text/javascript'], '/item-tags.js': ['item-tags.js', 'text/javascript'], '/reports.js': ['reports.js', 'text/javascript'], '/report-body.js': ['report-body.js', 'text/javascript'],
       '/quick': ['quick.html', 'text/html; charset=utf-8'], '/quick.js': ['quick.js', 'text/javascript'], '/quick.css': ['quick.css', 'text/css'] };
     if (req.method !== 'GET' || !routes[url.pathname]) return false;
     const [file, type] = routes[url.pathname];
@@ -82,9 +121,11 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     const p = url.pathname;
     if (p === '/api/integrations/atlassian' && req.method === 'GET') return atlassian.status();
     if (p === '/api/integrations/atlassian' && req.method === 'PUT') return atlassian.save(await body(req));
+    if (p === '/api/integrations/atlassian/client-secret' && req.method === 'POST') return atlassian.clientSecret(await body(req));
     if (p === '/api/integrations/atlassian' && req.method === 'DELETE') return atlassian.disconnect();
     if (p === '/api/integrations/atlassian/authorize' && req.method === 'POST') return atlassian.begin();
     if (p === '/api/integrations/atlassian/sites' && req.method === 'GET') return atlassian.resources();
+    if (p === '/api/integrations/atlassian/confluence-spaces' && req.method === 'GET') return atlassian.confluenceSpaces(url.searchParams.get('cloud_id'), url.searchParams.get('cursor'));
     if (p === '/api/integrations/atlassian/projects' && req.method === 'GET') return atlassian.jiraProjects(url.searchParams.get('cloud_id'));
     if (p === '/api/integrations/atlassian/issue-types' && req.method === 'GET') return atlassian.jiraIssueTypes(url.searchParams.get('cloud_id'), url.searchParams.get('project'));
     if (p === '/api/integrations/atlassian/jira-issue' && req.method === 'GET') return atlassian.jiraIssue(url.searchParams.get('cloud_id'), url.searchParams.get('key'));
@@ -94,10 +135,49 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (p === '/api/execution-settings' && req.method === 'GET') return request(dir, 'runtime', '/execution-settings');
     let executionSetting = p.match(/^\/api\/execution-settings\/([^/]+)$/);
     if (executionSetting && ['PUT', 'DELETE'].includes(req.method)) return request(dir, 'runtime', `/execution-settings/${executionSetting[1]}`, { method: req.method, body: await body(req) });
+    if (req.method === 'GET' && p === '/api/automation/settings') return writings.automationSettings();
+    if (req.method === 'PATCH' && p === '/api/automation/settings') { const result = writings.saveAutomationSettings(await body(req)); notify(); return result; }
     if (req.method === 'GET' && p === '/api/health') return health();
-    if (req.method === 'GET' && p === '/api/quick') return { ...store.quickOverview(), health: health(), observed_at: now() };
-    if (req.method === 'GET' && p === '/api/items') return store.items(url.searchParams.get('q') || '');
-    if (req.method === 'GET' && p === '/api/calendar') return store.calendar(Object.fromEntries(url.searchParams));
+    if (req.method === 'GET' && p === '/api/quick') {
+      const overview = store.quickOverview(), rows = notifications.list(), counts = notificationCounts(rows);
+      const decorate = item => ({ ...item, notification_count: counts.get(item.id) || 0 });
+      return { ...overview, counts: { ...overview.counts, notifications: rows.length }, current: overview.current.map(decorate), recent: overview.recent.map(decorate),
+        notifications: rows.slice(0, 3), health: health(), observed_at: now() };
+    }
+    if (req.method === 'GET' && p === '/api/notifications') {
+      assert([...url.searchParams].length === 0, '알림 조회 조건이 잘못되었습니다.'); return notifications.list();
+    }
+    const notificationRoute = p.match(/^\/api\/notifications\/([^/]+)\/dismiss$/);
+    if (req.method === 'POST' && notificationRoute) {
+      const result = notifications.dismiss(notificationRoute[1], await body(req)); if (!result.repeated) notify(); return result;
+    }
+    if (req.method === 'GET' && p === '/api/reports') return reports.list().map(report => ({ ...report, publication_revision: digest(json(reportPublisher.publications(report.id))) }));
+    if (req.method === 'POST' && p === '/api/reports') { const result = reports.create(await body(req)); notify(); return result; }
+    const reportRoute = p.match(/^\/api\/reports\/([^/]+)$/);
+    if (reportRoute && req.method === 'GET') {
+      assert([...url.searchParams.keys()].every(key => key === 'view') && url.searchParams.getAll('view').length <= 1
+        && (!url.searchParams.has('view') || url.searchParams.get('view') === 'summary'), '보고서 조회 조건이 잘못되었습니다.');
+      return { ...reports.detail(reportRoute[1], { summary: url.searchParams.get('view') === 'summary' }), publications: reportPublisher.publications(reportRoute[1]) };
+    }
+    const reportPartRoute = p.match(/^\/api\/reports\/([^/]+)\/parts\/([^/]+)$/);
+    if (reportPartRoute && req.method === 'GET') return reports.partDetail(reportPartRoute[1], reportPartRoute[2]);
+    const publishRoute = p.match(/^\/api\/reports\/([^/]+)\/publish$/);
+    if (publishRoute && req.method === 'POST') return reportPublisher.publish(publishRoute[1], await body(req));
+    const publicationResolve = p.match(/^\/api\/reports\/([^/]+)\/publications\/([^/]+)\/resolve$/);
+    if (publicationResolve && req.method === 'POST') return reportPublisher.resolve(publicationResolve[1], publicationResolve[2], await body(req));
+    if (req.method === 'GET' && p === '/api/items') return itemListing(url.searchParams);
+    if (req.method === 'GET' && p === '/api/tags') {
+      assert([...url.searchParams.keys()].every(key => key === 'trash') && url.searchParams.getAll('trash').length <= 1,
+        '태그 조회 조건이 잘못되었습니다.');
+      const trash = url.searchParams.get('trash') ?? 'false';
+      assert(['true', 'false'].includes(trash), '태그 조회 조건이 잘못되었습니다.');
+      return store.tagList({ trash: trash === 'true' });
+    }
+    if (req.method === 'GET' && p === '/api/sessions') {
+      assert([...url.searchParams.keys()].every(key => key === 'q') && url.searchParams.getAll('q').length <= 1, '세션 조회 조건이 잘못되었습니다.');
+      return store.sessionEntries(Object.fromEntries(url.searchParams), sessionSummaries());
+    }
+    if (req.method === 'GET' && p === '/api/calendar') return store.calendar(Object.fromEntries(url.searchParams), sessionSummaries());
     if (req.method === 'POST' && p === '/api/events') {
       const data = await body(req); assert(Array.isArray(data.events) && data.events.length <= 500, '이벤트 배열이 필요합니다.');
       const result = store.ingestMany(data.events); if (result.inserted) notify(); return result;
@@ -105,16 +185,32 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (req.method === 'POST' && p === '/api/merge') {
       const result = store.merge(await body(req)); if (!result.repeated) notify(); return result;
     }
+    if (req.method === 'POST' && ['/api/items/delete', '/api/items/restore'].includes(p)) {
+      const result = p.endsWith('/delete') ? store.deleteItems(await body(req)) : store.restoreItems(await body(req));
+      if (!result.repeated) notify(); return result;
+    }
     let m = p.match(/^\/api\/items\/([^/]+)$/);
     if (m && req.method === 'GET') {
       const detail = jira.decorate(writings.decorate(integrations.decorate(store.detail(m[1], { summary: url.searchParams.get('view') === 'summary' }))));
+      detail.notifications = notifications.list().filter(row => row.work_item_id === detail.item.id);
+      detail.item.notification_count = detail.notifications.length;
       jira.refreshItem(detail.item.id); return detail;
     }
     if (m && req.method === 'PATCH') { const result = store.edit(m[1], await body(req)); notify(); return result; }
+    m = p.match(/^\/api\/items\/([^/]+)\/tags$/);
+    if (m && req.method === 'PUT') { const result = store.editTags(m[1], await body(req)); notify(); return result; }
     m = p.match(/^\/api\/items\/([^/]+)\/history$/);
     if (m && req.method === 'GET') return store.history(m[1], Object.fromEntries(url.searchParams));
     m = p.match(/^\/api\/items\/([^/]+)\/runs\/([^/]+)\/events$/);
-    if (m && req.method === 'GET') return { records: store.runEvents(m[1], m[2]) };
+    if (m && req.method === 'GET') {
+      const records = store.runEvents(m[1], m[2]);
+      let attempts = [];
+      try {
+        const run = await request(dir, 'runtime', `/runs/${m[2]}`, { signal: AbortSignal.timeout(1000) });
+        attempts = run.attempts.map(({ id, stage, started_at, ended_at }) => ({ id, stage, started_at, ended_at }));
+      } catch { /* Stored diagnostics remain available while the execution service is stopped. */ }
+      return { records, attempts };
+    }
     m = p.match(/^\/api\/items\/([^/]+)\/metadata\/regenerate$/);
     if (m && req.method === 'POST') {
       const result = writings.enqueue('work-item-metadata', m[1], await body(req)); notify(); return writings.publicView(result);
@@ -129,11 +225,14 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     }
     m = p.match(/^\/api\/items\/([^/]+)\/jira$/);
     if (m && req.method === 'POST') {
+      const owner = store.canonical(m[1]), visibility = store.visibilityRevision(m[1]);
       const intent = integrations.beginIssue(m[1], await body(req));
       if (intent.repeated) return intent;
       notify();
       try {
-        const issue = await atlassian.createJiraIssue(intent.request);
+        const issue = await atlassian.createJiraIssue(intent.request, { beforeSend: () => {
+          assert(!store.isDeleted(m[1]) && store.canonical(m[1]) === owner && store.visibilityRevision(m[1]) === visibility, '업무 목록 상태가 변경되었습니다. 다시 확인하세요.', 409);
+        } });
         integrations.finishIssue(intent.operation_id, 'linked', issue); notify(); jira.refreshItem(m[1]); return { state: 'linked', issue };
       } catch (e) {
         integrations.finishIssue(intent.operation_id, !e.not_sent && (e.code === 'unconfirmed' || e.status >= 500) ? 'unknown' : 'failed', null, e.message); notify(); throw e;
@@ -145,11 +244,16 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (m && req.method === 'POST') return jira.refresh(m[1], true);
     m = p.match(/^\/api\/jira-links\/([^/]+)\/transition$/);
     if (m && req.method === 'POST') return jira.transition(m[1], await body(req));
+    m = p.match(/^\/api\/jira-links\/([^/]+)\/content$/);
+    if (m && req.method === 'POST') return jira.updateContent(m[1], await body(req));
     m = p.match(/^\/api\/jira-links\/([^/]+)\/resolve$/);
     if (m && req.method === 'POST') {
       const link = integrations.links().find(l => l.operation_id === m[1]);
       assert(link?.state === 'unknown', '결과 확인이 필요한 Jira 생성 요청이 없습니다.', 409);
+      assert(!store.isDeleted(link.work_item_id), '삭제된 업무입니다. 복원 후 확인하세요.', 404);
+      const visibility = store.visibilityRevision(link.work_item_id);
       const issue = await atlassian.resolveIssue(link, (await body(req)).key);
+      assert(!store.isDeleted(link.work_item_id) && store.visibilityRevision(link.work_item_id) === visibility, '업무 목록 상태가 변경되었습니다. 다시 확인하세요.', 409);
       integrations.finishIssue(link.operation_id, 'linked', issue); notify(); jira.refreshItem(link.work_item_id); return { state: 'linked', issue };
     }
     m = p.match(/^\/api\/sessions\/([^/]+)\/worklog\/retry$/);
@@ -179,9 +283,13 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
 console.log(json({ ready: true, role: 'manager', ...endpoint }));
 timer = setInterval(collect, 200); void collect();
 const integrationTimer = setInterval(() => void coordinator.tick().catch(() => {}), 1000);
-function stop() {
-  clearInterval(timer); clearInterval(integrationTimer); atlassian.close();
+const reportTimer = setInterval(() => void reportWriter.tick().catch(() => {}), 1000);
+async function stop() {
+  if (stopping) return; stopping = true;
+  clearInterval(timer); clearInterval(integrationTimer); clearInterval(reportTimer); atlassian.close();
   for (const res of subscribers) res.end();
-  server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref();
+  server.close();
+  await stopCredentialProcesses();
+  server.closeAllConnections(); process.exit(0);
 }
 process.on('SIGTERM', stop); process.on('SIGINT', stop);

@@ -88,9 +88,10 @@ test('independent review accepts exactly the effective rules supplied in its pro
   assert.equal(result.status, 'completed', result.message);
   const review = result.attempts.find(a => a.stage === 'review');
   const response = JSON.parse(fs.readFileSync(path.join(review.directory, 'result.json')));
-  assert.deepEqual(response.result.evaluations.map(e => e.rule), ['REQ-001', 'PRD-AC-001', 'OUTPUT-001', 'SCOPE-001']);
   const prompt = fs.readFileSync(path.join(review.directory, 'prompt.txt'), 'utf8');
-  assert.match(prompt, /모든 규칙 REQ-001, PRD-AC-001, OUTPUT-001, SCOPE-001/);
+  const effectiveRules = Object.keys(JSON.parse(prompt.match(/\n규칙: ([^\n]+)\n/)[1]));
+  assert.deepEqual(response.result.evaluations.map(e => e.rule), effectiveRules);
+  assert.ok(['REQ-001', 'PRD-AC-001', 'OUTPUT-001', 'SCOPE-001', 'JOB-BOUNDARY-001'].every(rule => effectiveRules.includes(rule)));
 });
 
 test('common review evidence is mandatory even after automatic file checks pass', async t => {

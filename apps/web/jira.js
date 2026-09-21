@@ -1,10 +1,12 @@
+import { descriptionHTML } from './description.js';
+
 export function jiraUI({ api, esc, modal, toast, refresh, absoluteTime, openExternal, showSettings, createIssue }) {
   const $ = s => document.querySelector(s), selections = new Map(), pending = new Set(), errors = new Map();
   const icon = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 7a6.5 6.5 0 0 0-11-2L3 7m0-4v4h4M4 13a6.5 6.5 0 0 0 11 2l2-2m0 4v-4h-4"/></svg>';
   const statusHTML = status => `<span class="jira-status ${status?.category === 'indeterminate' ? 'is-progress' : ''}">${esc(status?.name || '상태 조회 중')}</span>`;
   function card(link) {
-    const { operation_id: op, view, change } = link, data = view?.data, issue = data?.issue || link.issue;
-    const busy = pending.has(op) || ['preparing', 'sending'].includes(change?.state);
+    const { operation_id: op, view, change, content_change: contentChange } = link, data = view?.data, issue = data?.issue || link.issue;
+    const busy = pending.has(op) || ['preparing', 'sending'].includes(change?.state) || ['preparing', 'sending'].includes(contentChange?.state);
     const blocked = busy || !!view?.error || !data || !data.can_write || !!data.transition_message || change?.state === 'unknown';
     const transitions = data?.transitions || [], version = `${issue.status?.id}:${issue.updated}`;
     let selected = selections.get(op);
@@ -14,6 +16,9 @@ export function jiraUI({ api, esc, modal, toast, refresh, absoluteTime, openExte
       <div class="jira-card-heading"><a class="jira-link" href="${esc(issue.url)}" target="_blank" rel="noopener noreferrer" data-jira-url="${esc(issue.url)}" aria-label="${esc(issue.key)} Jira에서 열기">${esc(issue.key)} <span aria-hidden="true">↗</span></a>
         ${statusHTML(issue.status)}<button class="jira-refresh writing-action" data-refresh-jira="${esc(op)}" aria-label="${esc(issue.key)} 상태 새로고침" title="Jira 상태 새로고침" ${busy ? 'disabled' : ''} aria-busy="${busy}">${icon}</button></div>
       <p class="jira-issue-title">${esc(issue.title || '이슈 정보를 불러오는 중입니다.')}</p>
+      <button class="writing-action jira-content-button" data-update-jira-content="${esc(op)}" aria-label="${esc(issue.key)} 제목·설명 반영"
+        ${busy || !data?.can_write || view?.error || contentChange?.state === 'unknown' ? 'disabled' : ''}>제목·설명 반영</button>
+      ${contentChange?.message ? `<p class="jira-message jira-content-message" role="status">${esc(contentChange.message)}</p>` : ''}
       <div class="jira-transition"><select id="jira-transition-${esc(op)}" data-jira-transition="${esc(op)}" aria-label="${esc(issue.key)} 변경할 상태" ${blocked || !transitions.some(t => !t.required_fields.length) ? 'disabled' : ''}>
         <option value="">변경할 상태 선택</option>${transitions.map(t => `<option value="${esc(t.id)}" ${t.required_fields.length ? 'disabled' : ''} ${selected?.id === t.id ? 'selected' : ''}>${esc(t.to.name)} · ${esc(t.name)}${t.required_fields.length ? ' (추가 입력 필요)' : ''}</option>`).join('')}</select>
         <button class="writing-action writing-action-accent" data-change-jira="${esc(op)}" aria-label="${esc(issue.key)} 상태 변경" ${blocked || !selected ? 'disabled' : ''} aria-busy="${busy}">${busy ? '확인 중…' : '상태 변경'}</button></div>
@@ -32,8 +37,8 @@ export function jiraUI({ api, esc, modal, toast, refresh, absoluteTime, openExte
     }).map(l => l.state === 'linked' ? card(l)
       : `<p class="sync-message">${esc(l.message || '티켓 생성 중')}${l.state === 'unknown' ? ` <button class="secondary" data-resolve-jira="${esc(l.operation_id)}">생성 결과 확인</button>` : ''}</p>`).join('');
     return `<section class="detail-section jira-section"><h3>Jira 이슈</h3>${cards}
-      ${!blocked ? `<div class="jira-connect"><p>이 업무를 Jira 이슈와 연결하세요.</p><div class="jira-connect-actions" role="group" aria-label="Jira 이슈 연결">
-        <button id="create-jira" class="writing-action writing-action-accent">＋ 새 이슈 만들기</button><button id="link-jira" class="writing-action">기존 이슈 연결</button></div></div>` : '<p class="help jira-sync-note">종료된 세션의 요약과 관측 시간을 업무 로그로 동기화합니다.</p>'}
+      ${!blocked ? `<div class="jira-connect"><p>로컬 업무로 사용할 수 있습니다. Jira에서도 추적하려면 이슈를 만들거나 연결하세요.</p><div class="jira-connect-actions" role="group" aria-label="Jira 이슈 연결">
+        <button id="create-jira" class="writing-action writing-action-accent">＋ 새 이슈 만들기</button><button id="link-jira" class="writing-action">기존 이슈 연결</button></div></div>` : '<p class="help jira-sync-note">종료된 세션마다 업무 로그 하나를 연결합니다. 재요약하면 기존 로그를 갱신합니다.</p>'}
       ${(data.worklog_alerts || []).map(w => `<p class="sync-message" role="status">${esc(w.message)} · ${esc(w.session_id)}</p>`).join('')}</section>`;
   }
   async function existing(data) {
@@ -124,6 +129,27 @@ export function jiraUI({ api, esc, modal, toast, refresh, absoluteTime, openExte
       finally { pending.delete(op); await refresh(data.item.id); }
     }
     panel.querySelectorAll('[data-refresh-jira]').forEach(b => b.onclick = () => action(b.dataset.refreshJira, () => api(`/jira-links/${b.dataset.refreshJira}/refresh`, { method: 'POST', body: {} })));
+    panel.querySelectorAll('[data-update-jira-content]').forEach(button => button.onclick = () => {
+      const op = button.dataset.updateJiraContent, issue = data.jira_links.find(link => link.operation_id === op)?.view?.data?.issue;
+      if (!issue || pending.has(op)) return;
+      const operationId = crypto.randomUUID();
+      modal(`<h2>Jira 제목·설명 반영</h2><p>${esc(issue.key)}의 제목·설명을 현재 work item 내용으로 변경합니다.</p>
+        <div id="dialog-error" class="error" role="alert" hidden></div>
+        <section class="jira-content-preview"><h3>${esc(data.item.title)}</h3><div class="work-item-description">${descriptionHTML(data.item.description, esc)}</div></section>
+        <div class="dialog-actions"><button data-close>취소</button><button id="confirm-jira-content" class="primary">Jira에 반영</button></div>`);
+      const dialog = $('#modal'), confirm = $('#confirm-jira-content'), error = $('#dialog-error');
+      confirm.onclick = async () => {
+        confirm.disabled = true; pending.add(op); error.hidden = true;
+        try {
+          const result = await api(`/jira-links/${op}/content`, { method: 'POST', body: {
+            operation_id: operationId, version: data.item.version, expected_updated: issue.updated
+          } });
+          if (['applied', 'observed'].includes(result.state)) { dialog.close(); toast('Jira에 제목·설명을 반영했습니다.'); }
+          else { error.textContent = result.message || '반영 상태를 새로고침하여 확인하세요.'; error.hidden = false; }
+        } catch (failure) { error.textContent = failure.message; error.hidden = false; }
+        finally { pending.delete(op); await refresh(data.item.id); }
+      };
+    });
     panel.querySelectorAll('[data-change-jira]').forEach(b => b.onclick = () => {
       const op = b.dataset.changeJira, selected = selections.get(op), issue = data.jira_links.find(l => l.operation_id === op).view.data.issue;
       if (!selected?.id || pending.has(op)) return;

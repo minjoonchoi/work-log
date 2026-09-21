@@ -3,15 +3,15 @@
   "description": "PRD와 일반 문서 생성·검토·수정",
   "stages": {
     "produce": {
-      "codex": { "model": "gpt-5.6", "effort": "medium" },
+      "codex": { "model": "gpt-5.6-terra", "effort": "medium" },
       "claude": { "model": "sonnet", "effort": "medium" }
     },
     "review": {
-      "codex": { "model": "gpt-5.6", "effort": "high" },
+      "codex": { "model": "gpt-5.6-terra", "effort": "high" },
       "claude": { "model": "sonnet", "effort": "high" }
     },
     "repair": {
-      "codex": { "model": "gpt-5.6", "effort": "high" },
+      "codex": { "model": "gpt-5.6-terra", "effort": "high" },
       "claude": { "model": "sonnet", "effort": "high" }
     }
   }

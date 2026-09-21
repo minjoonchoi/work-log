@@ -1,4 +1,15 @@
 {
+  "create-checked": {
+    "mode": "artifact",
+    "review_required": false,
+    "initial": "produce",
+    "max_steps": 3,
+    "nodes": {
+      "produce": { "task": "produce", "on": { "done": "verify", "blocked": "$blocked", "failed": "$failed" } },
+      "verify": { "task": "verify", "on": { "done": "render", "revise": "$failed", "blocked": "$blocked", "failed": "$failed" } },
+      "render": { "task": "render", "on": { "done": "$completed", "blocked": "$blocked", "failed": "$failed" } }
+    }
+  },
   "create-reviewed": {
     "mode": "artifact",
     "initial": "produce",

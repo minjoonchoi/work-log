@@ -12,6 +12,7 @@ export function integrationCoordinator({ integrations, client, notify, writings,
       const sessions = integrations.closedSessions();
       if (integrations.invalidateOpenWorklogs(new Set(sessions.map(s => s.id)))) notify();
       for (const session of sessions) {
+        if (!integrations.isSessionCurrent(session)) continue;
         const summary = integrations.summary(session.id);
         if (summary?.state !== 'completed' || summary.accepted_digest !== session.source_digest) continue;
         const prior = integrations.worklog(session.id), links = integrations.links(session.work_item_id).filter(l => l.state === 'linked');
@@ -33,19 +34,23 @@ export function integrationCoordinator({ integrations, client, notify, writings,
           } catch (e) { integrations.finishWorklog(session.id, 'unknown', null, e.message); }
           notify(); continue;
         }
-        if (!(await client.status()).connected) continue;
+        if (!(await client.status()).connected || !integrations.isSessionCurrent(session)) continue;
         integrations.finishWorklog(session.id, 'sending'); notify();
         try {
-          const result = await client.writeWorklog(link.issue, row);
+          const result = await client.writeWorklog(link.issue, row, { beforeSend: () => {
+            assert(integrations.isSessionCurrent(session), '업무가 삭제되거나 변경되어 동기화를 중단했습니다.', 409);
+          } });
           integrations.finishWorklog(session.id, 'synced', result.id);
         } catch (e) {
-          integrations.finishWorklog(session.id, !e.not_sent && (e.code === 'unconfirmed' || e.status >= 500) ? 'unknown' : 'failed', null, e.message);
+          integrations.finishWorklog(session.id, e.not_sent && !integrations.isSessionCurrent(session) ? 'pending'
+            : !e.not_sent && (e.code === 'unconfirmed' || e.status >= 500) ? 'unknown' : 'failed', null, e.message);
         }
         notify();
       }
     } finally { busy = false; }
   }
   return { tick, retry: sid => {
+    assert(integrations.isSessionCurrent({ id: sid }), '업무를 찾을 수 없습니다.', 404);
     const row = integrations.worklog(sid); assert(row, '동기화할 업무 로그가 없습니다.', 404);
     checkedUnknown.delete(row.operation_id); integrations.retryWorklog(sid); notify();
   } };

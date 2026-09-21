@@ -84,7 +84,7 @@ export async function executeChecks({ profile, evidence, limits, createAttempt, 
       // Do not forward model API keys or live-model opt-in flags to registered tests.
       Object.assign(env, { CI: '1', HARNESS_CHECK_ACTIVE: '1', HARNESS_CHECK_ATTEMPT_DIR: directory });
       const processRun = runProcess({ ...commands[i], cwd: ROOT, env, attemptDir: directory,
-        limits: { ...limits, timeoutMs: Math.min(check.timeoutMs || limits.timeoutMs, limits.timeoutMs) }, onSpawn });
+        limits: { ...limits, timeoutMs: Math.min(check.timeoutMs || limits.checkTimeoutMs || limits.timeoutMs, limits.checkTimeoutMs || limits.timeoutMs) }, onSpawn });
       setProcess(processRun);
       const observed = await processRun.promise;
       result.observation = observed.observation; result.ended_at = observed.observation.ended_at;

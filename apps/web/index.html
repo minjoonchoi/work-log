@@ -5,8 +5,9 @@
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark">w</span><div>WorkLog<small>LOCAL AGENT HARNESS</small></div></div>
     <div class="nav-label">WORKSPACE</div>
-    <nav aria-label="주 탐색"><button id="nav-items" class="active" aria-label="업무 목록"><span aria-hidden="true">▤</span> 업무 목록 <b id="item-count">0</b></button><button id="nav-calendar" aria-label="캘린더"><span aria-hidden="true">▦</span> 캘린더</button><button id="nav-waiting-user" aria-label="사용자 답변 필요"><span aria-hidden="true">?</span> 사용자 답변 필요</button><button id="nav-attention" aria-label="확인이 필요한 작업"><span aria-hidden="true">◷</span> 확인이 필요한 작업</button></nav>
+    <nav aria-label="주 탐색"><button id="nav-items" class="active" aria-label="업무 목록"><span aria-hidden="true">▤</span> 업무 목록 <b id="item-count">0</b></button><button id="nav-calendar" aria-label="캘린더"><span aria-hidden="true">▦</span> 캘린더</button><button id="nav-reports" aria-label="업무 요약"><span aria-hidden="true">▧</span> 업무 요약</button><button id="nav-notifications" aria-label="알림"><span aria-hidden="true">◷</span> 알림 <b id="notification-count" hidden>0</b></button></nav>
     <div class="sidebar-note"><span class="live-dot"></span> 이 컴퓨터에 보관됨<p>에이전트의 작업은 백그라운드에서 계속됩니다.</p></div>
+    <button id="automation-settings" class="settings">⚙ 자동 작성 설정</button>
     <button id="execution-settings" class="settings">⚙ 작업 실행 설정</button>
     <button id="settings" class="settings">⚙ 연결 설정</button>
   </aside>
@@ -14,16 +15,26 @@
     <header><div><div class="eyebrow" id="eyebrow">YOUR WORK, CONNECTED</div><h1 id="page-title">업무 목록</h1><p id="page-description">여러 에이전트의 작업과 대화를 한곳에서 이어 보세요.</p></div><span class="connection" id="connection" role="status">연결 중</span></header>
     <div id="error" class="error" role="alert" hidden></div>
     <section id="items-view">
-      <div class="toolbar"><div class="search-wrap"><span>⌕</span><input id="search" type="search" placeholder="업무 제목과 설명 검색" aria-label="업무 검색"></div><button id="refresh" class="secondary">새로고침</button><button id="merge" class="primary" disabled>선택한 업무 병합</button></div>
-      <div class="section-heading"><span id="list-label">모든 업무</span><span id="selection-label">업무를 선택해 이력을 확인하세요</span></div>
+      <div class="toolbar"><label class="view-unit" id="list-mode-control"><span>보기</span><select id="list-mode" aria-label="목록 표시 단위"><option value="items">업무별 보기</option><option value="sessions">세션별 보기</option></select></label><div class="search-wrap"><span>⌕</span><input id="search" type="search" maxlength="500" placeholder="업무 제목과 설명 검색" aria-label="업무 검색"></div><label class="view-unit" id="jira-filter-control"><select id="jira-filter" aria-label="Jira 연결 필터"><option value="all">Jira 전체</option><option value="unlinked">Jira 미연결</option><option value="linked">Jira 연결됨</option></select></label><button id="refresh" class="secondary">새로고침</button></div>
+      <div class="section-heading"><span id="list-label">모든 업무</span><span id="list-order">최근 활동순</span></div>
+      <div class="list-filters"><label class="view-unit"><span>업무 유형</span><select id="tag-filter" aria-label="업무 유형 필터"><option value="all">전체 유형</option><option value="untagged">미분류</option></select></label><span>태그로 분류 · Jira 연결 없이 사용</span></div>
+      <div class="list-actions"><label class="select-visible" id="select-all-control"><input type="checkbox" id="select-all" aria-label="표시된 업무 전체 선택"><span>전체 선택</span></label><span id="selection-label">업무를 선택해 이력을 확인하세요</span><div class="bulk-actions"><button id="merge" class="secondary" disabled>선택한 업무 병합</button><button id="delete-items" class="secondary" disabled>선택한 업무 삭제</button><button id="restore-items" class="secondary" disabled hidden>선택한 업무 복원</button></div><button id="trash-view">휴지통</button><button id="active-items" hidden>업무 목록으로</button></div>
       <div id="item-list" class="item-list" aria-label="업무 목록"></div>
     </section>
+    <section id="notifications-view" hidden aria-label="알림 목록">
+      <div class="notification-toolbar"><p>해결되면 자동으로 사라집니다. 알림을 지워도 원본 기록과 작업 상태는 보존됩니다.</p><button id="refresh-notifications" class="secondary">새로고침</button></div>
+      <div class="section-heading"><span id="notification-list-label">알림</span><span>최근 발생순</span></div>
+      <div id="notification-list" class="notification-list"></div>
+    </section>
     <section id="calendar-view" hidden>
-      <div class="calendar-toolbar"><div class="date-navigation"><button id="previous" aria-label="이전 기간">‹</button><button id="today">오늘</button><button id="next" aria-label="다음 기간">›</button><input type="date" id="calendar-date" aria-label="캘린더 날짜"></div><div class="calendar-options"><select id="calendar-mode" aria-label="캘린더 표시 단위"><option value="sessions">세션 단위</option><option value="items">업무 단위</option></select><div class="segmented" role="group" aria-label="캘린더 보기"><button data-view="day">일</button><button data-view="week">주</button><button data-view="month" class="active">월</button></div></div></div>
-      <div class="section-heading"><strong id="calendar-title"></strong><span id="timezone-label"></span></div>
+      <div class="calendar-toolbar"><div class="date-navigation"><button id="previous" aria-label="이전 기간">‹</button><button id="today">오늘</button><button id="next" aria-label="다음 기간">›</button><input type="date" id="calendar-date" aria-label="캘린더 날짜"></div><div class="calendar-options"><label class="view-unit"><span>보기</span><select id="calendar-mode" aria-label="캘린더 표시 단위"><option value="items">업무별 보기</option><option value="sessions" selected>세션별 보기</option></select></label><div class="segmented" role="group" aria-label="캘린더 보기"><button data-view="day" aria-pressed="false" aria-keyshortcuts="d" title="일 보기 (D)">일 <kbd aria-hidden="true">D</kbd></button><button data-view="week" aria-pressed="false" aria-keyshortcuts="w" title="주 보기 (W)">주 <kbd aria-hidden="true">W</kbd></button><button data-view="month" class="active" aria-pressed="true" aria-keyshortcuts="m" title="월 보기 (M)">월 <kbd aria-hidden="true">M</kbd></button></div></div></div>
+      <div class="section-heading"><strong id="calendar-title"></strong><span><span id="calendar-unit-label"></span> · <span id="timezone-label"></span></span></div>
+      <div class="calendar-clock"><time id="calendar-now"></time></div>
+      <div class="calendar-report-toolbar"><div><strong id="report-selection-count">선택한 날짜 없음</strong><p>주·월 보기에서 날짜를 선택하세요. 선택한 현지 날짜에 시작된 세션을 한 번씩 모읍니다.</p></div><div class="report-actions"><button id="clear-report-dates" class="secondary" disabled>선택 해제</button><button id="create-calendar-report" class="primary" disabled>선택 날짜 업무 요약</button></div><details id="report-selected-dates" hidden><summary>선택한 날짜 확인</summary><p></p></details></div>
       <div id="calendar" aria-label="작업 캘린더"></div>
       <p class="calendar-note">관측된 입력부터 출력까지의 기록 구간입니다. 사람의 실작업 시간이나 모델 사용 시간을 뜻하지 않습니다.</p>
     </section>
+    <section id="reports-view" hidden aria-label="업무 요약 목록"><div class="report-toolbar"><p>선택한 기간의 이력으로 작성한 업무 요약입니다. 로컬에 보관하고 원할 때 Confluence에 게시하세요.</p><button id="create-period-report" class="primary">기간 업무 요약 작성</button></div><div class="section-heading"><span>작성한 업무 요약</span><span>생성일 · 최신순</span></div><div id="report-list"></div><article id="report-detail" hidden></article></section>
   </main>
   <aside id="detail" class="detail" aria-label="업무 상세" hidden></aside>
   <dialog id="modal"><div id="modal-content"></div></dialog>

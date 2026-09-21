@@ -1,0 +1,36 @@
+{
+  "title": "document.share.create 입력",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source_text",
+    "audience",
+    "purpose"
+  ],
+  "properties": {
+    "source_text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "공유할 업무의 원본 본문 또는 실행기가 제공한 input_files·depends_on 자료 중 무엇을 기준으로 작성할지 명시한 내용. 제공 파일·선행 산출물의 본문을 중복해서 붙여 넣을 필요는 없다. 경로나 의뢰 문구 자체는 사실 근거가 아니며 실제로 접근 가능한 고정 자료의 본문을 확인해야 한다."
+    },
+    "audience": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "팀 내부 또는 유관 부서 등 문서를 읽을 대상과 알려진 사전 지식 수준. 개인 이름이나 직책을 추측하지 않는다."
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "독자가 이해하거나 확인해야 할 내용 등 공유 목적. 새로운 업무·결정 생성이나 외부 발송 권한을 부여하지 않는다."
+    },
+    "constraints": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "담당 범위 안의 추가 길이·문체·공유 범위·포함 또는 제외 사항. 원본 사실과 기술 계약의 의미를 변경할 수 없다."
+    }
+  }
+}

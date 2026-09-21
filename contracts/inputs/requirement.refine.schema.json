@@ -1,0 +1,34 @@
+{
+  "title": "requirement.refine 입력",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "requirements"
+  ],
+  "properties": {
+    "requirements": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "담당 업무의 목표와 필요한 기준 자료를 포함한 요청. 입력 전제: 기존 요구사항; 변경 요청 또는 정제 목적"
+    },
+    "instructions": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "담당 범위 안의 추가 제약 또는 형식 지시"
+    },
+    "source_text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "source_text에 해당하는 고정된 기준 자료의 본문. 경로만 적는 경우 실행 전에 접근 가능한 자료로 해석해야 한다."
+    },
+    "change_request": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "change_request에 해당하는 고정된 기준 자료의 본문. 경로만 적는 경우 실행 전에 접근 가능한 자료로 해석해야 한다."
+    }
+  }
+}

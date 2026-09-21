@@ -1,0 +1,40 @@
+{
+  "title": "performance.review 입력",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "requirements"
+  ],
+  "properties": {
+    "requirements": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "담당 업무의 목표와 필요한 기준 자료를 포함한 요청. 입력 전제: 성능 대상; 측정 자료와 목표"
+    },
+    "instructions": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "담당 범위 안의 추가 제약 또는 형식 지시"
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "subject에 해당하는 고정된 기준 자료의 본문. 경로만 적는 경우 실행 전에 접근 가능한 자료로 해석해야 한다."
+    },
+    "measurements": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "measurements에 해당하는 고정된 기준 자료의 본문. 경로만 적는 경우 실행 전에 접근 가능한 자료로 해석해야 한다."
+    },
+    "targets": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "targets에 해당하는 고정된 기준 자료의 본문. 경로만 적는 경우 실행 전에 접근 가능한 자료로 해석해야 한다."
+    }
+  }
+}

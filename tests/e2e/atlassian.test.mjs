@@ -3,17 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Harness, pair, event, eventually } from '../helpers.mjs';
-import { atlFixture, authorize, createIssue, adfText } from '../fixtures/atlassian.mjs';
+import { atlFixture, authorize, createIssue, adfText, oauthClient } from '../fixtures/atlassian.mjs';
 
 async function setup(t) {
   const h = new Harness(), f = await atlFixture(h);
   t.after(async () => { await h.close(); await f.close(); });
   await h.start('runtime'); await h.start('manager'); return { h, f };
 }
-test('OAuth settings persist references only; state, rotating refresh, concurrent API clients, revoke and restart', async t => {
+test('OAuth settings persist only client metadata; state, rotating refresh, concurrent API clients, revoke and restart', async t => {
   const { h, f } = await setup(t);
   await assert.rejects(h.manager('/integrations/atlassian', { method: 'PUT', body: { vault: 'Team Vault', item: 'Atlassian App', client_secret: 'wrong' } }));
-  await h.manager('/integrations/atlassian', { method: 'PUT', body: { vault: 'Team Vault', item: 'Atlassian App' } });
+  await h.manager('/integrations/atlassian', { method: 'PUT', body: oauthClient });
   const start = await h.manager('/integrations/atlassian/authorize', { method: 'POST', body: {} }), u = new URL(start.authorization_url);
   const callback = new URL(u.searchParams.get('redirect_uri'));
   callback.search = new URLSearchParams({ state: 'wrong-state', code: 'fixture-code' });
@@ -21,8 +21,9 @@ test('OAuth settings persist references only; state, rotating refresh, concurren
   callback.searchParams.set('state', u.searchParams.get('state'));
   assert.equal((await fetch(callback)).status, 200);
   assert.equal((await h.manager('/integrations/atlassian')).connected, true);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.dir, 'integrations/atlassian.json'))), { vault: 'Team Vault', item: 'Atlassian App' });
-  assert.match(fs.readFileSync(f.opCalls, 'utf8'), /label=client_id,label=client_secret/);
+  const settings = JSON.parse(fs.readFileSync(path.join(h.dir, 'integrations/atlassian.json')));
+  assert.equal(settings.client_id, oauthClient.client_id); assert.ok(settings.credential_version);
+  assert.equal(settings.client_secret, undefined); assert.equal(fs.existsSync(f.opCalls), false);
   f.expire();
   const resources = await Promise.all(Array.from({ length: 6 }, () => h.manager('/integrations/atlassian/sites')));
   assert.equal(resources[0][0].id, 'cloud-test'); assert.equal(f.state.tokenCalls.length, 2);
@@ -135,10 +136,9 @@ test('merged work items preserve each agent window and original Jira issue mappi
   assert.equal(f.state.worklogs.find(w => w.issueId === '2').timeSpentSeconds, 600);
 });
 
-test('missing op, locked credential store and denied scopes surface actionable errors without creating Jira issues', async t => {
+test('missing client credentials, locked Keychain and denied scopes surface actionable errors without creating Jira issues', async t => {
   const { h, f } = await setup(t);
-  await h.manager('/integrations/atlassian', { method: 'PUT', body: { vault: 'wrong vault', item: 'Atlassian App' } });
-  await assert.rejects(h.manager('/integrations/atlassian/authorize', { method: 'POST', body: {} }), /접근 실패/);
+  await assert.rejects(h.manager('/integrations/atlassian/authorize', { method: 'POST', body: {} }), /Client|입력|설정/i);
   await authorize(h);
   fs.writeFileSync(f.record + '.locked', 'fixture locked');
   const status = await h.manager('/integrations/atlassian'); assert.equal(status.connected, false); assert.match(status.message, /접근 실패/);
@@ -147,7 +147,7 @@ test('missing op, locked credential store and denied scopes surface actionable e
   assert.equal((await h.manager(`/items/${item.id}`)).jira_links[0].state, 'failed');
   fs.unlinkSync(f.record + '.locked'); f.state.scopes = ['read:jira-work'];
   await assert.rejects(createIssue(h, item, 'denied-scope-operation'), /쓰기 권한/); assert.equal(f.state.issues.length, 0);
-  await h.stop('manager'); h.env.HARNESS_OP_BIN = path.join(h.dir, 'missing-op'); await h.start('manager');
+  await h.stop('manager'); h.env.HARNESS_KEYCHAIN_BIN = path.join(h.dir, 'missing-keychain'); await h.start('manager');
   await assert.rejects(h.manager('/integrations/atlassian/authorize', { method: 'POST', body: {} }), /실행 파일/);
 });
 

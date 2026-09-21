@@ -8,6 +8,7 @@
     "nodes"
   ],
   "properties": {
+    "review_required": { "type": "boolean" },
     "mode": {
       "enum": [
         "artifact",

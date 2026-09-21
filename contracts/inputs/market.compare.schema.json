@@ -1,0 +1,40 @@
+{
+  "title": "market.compare 입력",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "requirements"
+  ],
+  "properties": {
+    "requirements": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "담당 업무의 목표와 필요한 기준 자료를 포함한 요청. 입력 전제: 비교 대상 시장 또는 경쟁 제품; 판단 기준; 제공 자료 또는 접근 가능한 출처"
+    },
+    "instructions": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "담당 범위 안의 추가 제약 또는 형식 지시"
+    },
+    "candidates": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "candidates에 해당하는 고정된 기준 자료의 본문. 경로만 적는 경우 실행 전에 접근 가능한 자료로 해석해야 한다."
+    },
+    "criteria": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "criteria에 해당하는 고정된 기준 자료의 본문. 경로만 적는 경우 실행 전에 접근 가능한 자료로 해석해야 한다."
+    },
+    "sources": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "sources에 해당하는 고정된 기준 자료의 본문. 경로만 적는 경우 실행 전에 접근 가능한 자료로 해석해야 한다."
+    }
+  }
+}

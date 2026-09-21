@@ -25,9 +25,10 @@ main.quick-content { flex: 1; min-height: 0; width: auto; margin: 0; overflow: a
 .quick-item:hover, .quick-item:focus-visible { background: var(--surface-muted); border-radius: 5px; }
 .quick-item-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: 12px; font-weight: 550; line-height: 1.5; }
 .quick-item-meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 10px; color: var(--muted); }
-.quick-item-meta .running, .quick-item-meta .agent_response_pending, .quick-item-meta .waiting_for_user { color: var(--accent-strong); }
+.quick-item-meta .running, .quick-item-meta .agent_response_pending, .quick-notification-action { color: var(--accent-strong); }
 .quick-secondary { display: block; font-size: 10px; line-height: 1.5; color: var(--muted); margin-top: 4px; }
-.quick-item-meta .attention { color: var(--text); font-weight: 600; }
+.quick-notification-owner { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+.quick-notification-message { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; color: var(--text-secondary); margin-top: 4px; }
 .quick-item-meta time { margin-left: auto; font-variant-numeric: tabular-nums; }
 .quick-empty { font-size: 11px; line-height: 1.7; color: var(--muted); margin: 0; padding: 10px 8px; }
 .quick-footer { flex: none; display: flex; gap: 3px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--surface); }

@@ -45,6 +45,7 @@ test('GUI command API snapshots all merged sessions and accepted summaries into 
   assert.deepEqual(run.request.input.sessions.flatMap(s => s.events).map(e => e.text), originalEvents.map(e => e.text));
   detail = await h.manager(`/items/${item.id}`);
   assert.equal(detail.item.version, item.version + 1); assert.match(detail.item.description, /2개 세션/);
+  assert.deepEqual([...detail.item.description.matchAll(/^## (.+)$/gm)].map(match => match[1]), ['작업 배경', '목적', '범위', '결과']);
   assert.equal(detail.item.manual, 1); assert.equal((await h.manager('/items')).length, 1);
   assert.deepEqual(detail.events.filter(e => e.role === 'user'), originalEvents);
   assert.equal((await rewriteItem(h, item, queued.operation_id)).run_id, done.run_id);
@@ -84,10 +85,55 @@ test('invalid output preserves accepted summary and metadata; deliberate retry s
   let detail = await h.manager(`/items/${item.id}`);
   assert.equal(detail.item.title, item.title); assert.equal(detail.item.description, item.description);
   assert.equal(detail.sessions[0].summary.text, accepted); assert.equal(detail.sessions[0].summary.current, true);
+  assert.equal(detail.item.activity, 'recent'); assert.equal((await h.manager('/quick')).counts.notifications, 2);
   await fixture(h, { rewriteVariant: true });
   await rewriteSession(h, sid, 'retry-valid-summary');
   assert.equal((await finished(h, 'retry-valid-summary')).state, 'completed');
   detail = await h.manager(`/items/${item.id}`); assert.match(detail.sessions[0].summary.text, /작업 기록/);
+  assert.equal(detail.item.activity, 'recent', 'the independently failed metadata still needs attention');
+  await rewriteItem(h, detail.item, 'retry-valid-metadata');
+  assert.equal((await finished(h, 'retry-valid-metadata')).state, 'completed');
+  assert.equal((await h.manager('/quick')).counts.notifications, 0);
+  assert.equal((await h.manager('/writing/invalid-session')).state, 'failed', 'historical failures stay recorded without keeping attention open');
+  await h.stop('manager'); await h.start('manager');
+  assert.equal((await h.manager('/quick')).counts.notifications, 0);
+});
+
+test('editing metadata retires its latest failed rewrite without hiding unrelated session failures', async t => {
+  const h = await setup(t, { scenario: 'rewrite-blank' });
+  await h.ingest(pair('manual-attention', '09:00:00', '09:05:00'));
+  let item = (await h.manager('/items'))[0];
+  await rewriteItem(h, item, 'failed-before-edit'); assert.equal((await finished(h, 'failed-before-edit')).state, 'failed');
+  assert.equal((await h.manager('/quick')).counts.notifications, 1);
+  await h.manager(`/items/${item.id}`, { method: 'PATCH', body: { version: item.version, title: '직접 확정한 제목', description: '직접 확정한 설명' } });
+  assert.equal((await h.manager('/quick')).counts.notifications, 0);
+  const detail = await h.manager(`/items/${item.id}`); item = detail.item;
+  await rewriteSession(h, detail.sessions[0].id, 'failed-session-edit'); assert.equal((await finished(h, 'failed-session-edit')).state, 'failed');
+  await h.manager(`/items/${item.id}`, { method: 'PATCH', body: { version: item.version, title: '다시 편집한 제목', description: item.description } });
+  assert.equal((await h.manager('/quick')).counts.notifications, 1, 'editing item metadata does not resolve its session summary failure');
+});
+
+test('failed summaries follow merged work and stay visible alongside agent activity until a fresh retry', async t => {
+  const h = await setup(t, { scenario: 'rewrite-blank' });
+  await h.ingest([...pair('summary-source', '09:00:00', '09:05:00', 'first', { work_item_id: 'summary-source' }),
+    ...pair('summary-target', '09:00:00', '09:05:00', 'first', { work_item_id: 'summary-target' })]);
+  const sid = (await h.manager('/items/summary-source')).sessions[0].id;
+  await rewriteSession(h, sid, 'failed-before-merge'); assert.equal((await finished(h, 'failed-before-merge')).state, 'failed');
+  await h.manager('/merge', { method: 'POST', body: { ids: ['summary-source', 'summary-target'], target: 'summary-target', operation_id: 'merge-failed-summary' } });
+  await h.ingest([event('summary-target', 'input', '09:10:00', 'next', { work_item_id: 'summary-target' })]);
+  let overview = await h.manager('/quick');
+  assert.equal(overview.counts.total, 1); assert.equal(overview.counts.current, 1); assert.equal(overview.counts.notifications, 1);
+  assert.equal(overview.notifications[0].work_item_id, 'summary-target');
+  assert.deepEqual(overview.current[0].activities, ['agent_response_pending']);
+  await fixture(h, { delayMs: 900 });
+  await rewriteSession(h, sid, 'retry-after-merge'); await running(h, 'retry-after-merge');
+  overview = await h.manager('/quick');
+  assert.equal(overview.counts.notifications, 0, 'a fresh request replaces the old failure');
+  assert.equal(overview.current[0].activity, 'agent_response_pending', 'internal rewrite progress does not replace native activity');
+  assert.equal((await finished(h, 'retry-after-merge')).state, 'completed');
+  await h.ingest([event('summary-target', 'output', '09:12:00', 'next', { work_item_id: 'summary-target' })]);
+  overview = await h.manager('/quick'); assert.equal(overview.counts.current, 0); assert.equal(overview.counts.notifications, 0);
+  assert.equal(overview.counts.recent, 1);
 });
 
 test('a manual edit during headless generation wins; the obsolete generated title is not applied', async t => {
@@ -197,7 +243,30 @@ test('text.rewrite rejects unknown formats/fields and enforces the session five-
   const run = await h.run({ task: 'text.rewrite', input, internal: true, fixture: { scenario: 'rewrite-six-lines' } });
   const failed = await h.finish(run); assert.notEqual(failed.status, 'completed'); assert.ok(failed.round <= 2);
   const good = await h.finish(await h.run({ task: 'text.rewrite', input, internal: true })); assert.equal(good.status, 'completed');
-  assert.ok(JSON.parse(fs.readFileSync(good.artifact.file)).description.split('\n').length <= 5);
+  const description = JSON.parse(fs.readFileSync(good.artifact.file)).description.split('\n');
+  assert.ok(description.length <= 5 && description.every(line => line.startsWith('- ')));
+  for (const attempt of good.attempts) assert.match(fs.readFileSync(path.join(attempt.directory, 'prompt.txt'), 'utf8'), /최대 5개 bullet 항목/);
+  const emptyBullet = await h.finish(await h.run({ task: 'text.rewrite', input, internal: true, fixture: { scenario: 'rewrite-empty-bullet' } }));
+  assert.notEqual(emptyBullet.status, 'completed');
+  // New runs reject plain paragraphs; stored legacy summaries are covered by the UI scenario.
+  const legacy = await h.finish(await h.run({ task: 'text.rewrite', input, internal: true, fixture: { scenario: 'rewrite-legacy-paragraph' } }));
+  assert.equal(legacy.status, 'failed'); assert.equal(legacy.artifact, null);
+});
+
+test('metadata default requests four Markdown sections and keeps missing results explicitly unconfirmed', async t => {
+  const h = await setup(t);
+  await h.ingest([event('metadata-unconfirmed', 'input', '09:00:00', 'first', { text: '권한 관리 화면을 검토해 주세요.' })]);
+  const item = (await h.manager('/items'))[0];
+  await rewriteItem(h, item, 'metadata-no-result');
+  assert.equal((await finished(h, 'metadata-no-result')).state, 'completed');
+  const detail = await h.manager(`/items/${item.id}`);
+  assert.deepEqual([...detail.item.description.matchAll(/^## (.+)$/gm)].map(match => match[1]), ['작업 배경', '목적', '범위', '결과']);
+  assert.match(detail.item.description, /## 결과\n- 미완료:.*미확인/);
+  const run = await h.runtime(`/runs/${detail.metadata_rewrite.run_id}`);
+  assert.equal(run.attempts.length, 1, 'metadata generation uses one model call');
+  const prompt = fs.readFileSync(path.join(run.attempts[0].directory, 'prompt.txt'), 'utf8');
+  for (const heading of ['작업 배경', '목적', '범위', '결과']) assert.ok(prompt.includes(`## ${heading}`));
+  assert.match(prompt, /결과가 없거나 확인되지 않았으면 미완료·미확인/);
 });
 
 test('oversized automatic summary is reported without blocking unrelated manual work or retrying forever', async t => {
@@ -208,6 +277,7 @@ test('oversized automatic summary is reported without blocking unrelated manual 
   const items = await h.manager('/items'), large = items.find(i => i.session_count === 2), normal = items.find(i => i.session_count === 1);
   const failed = await eventually(() => h.manager(`/items/${large.id}`), d => d.sessions[0].summary?.state === 'failed');
   assert.match(failed.sessions[0].summary.message, /2000/); assert.equal(failed.runs.length, 0);
+  assert.equal(failed.item.activity, 'recent'); assert.equal((await h.manager('/quick')).counts.notifications, 1);
   await rewriteItem(h, normal, 'unrelated-normal-writing'); assert.equal((await finished(h, 'unrelated-normal-writing')).state, 'completed');
   const again = await h.manager(`/items/${large.id}`);
   assert.equal(again.sessions[0].summary.updated_at, failed.sessions[0].summary.updated_at);

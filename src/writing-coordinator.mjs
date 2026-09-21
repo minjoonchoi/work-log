@@ -4,12 +4,12 @@ import { assert, request, digest } from './shared.mjs';
 import { parseTextRewrite } from './text-rewrite.mjs';
 import { parseSessionSummary } from './session-summary.mjs';
 
-export function writingCoordinator({ dir, writings, notify, automatic = true, fixture = false }) {
+export function writingCoordinator({ dir, writings, notify, automatic = true, automaticMetadata = true, fixture = false }) {
   let busy = false;
   async function tick() {
     if (busy) return; busy = true;
     try {
-      if (automatic && writings.scheduleAutomatic()) notify();
+      if (writings.scheduleAutomatic({ summaries: automatic, metadata: automaticMetadata })) notify();
       for (const row of writings.pending()) {
         if (!writings.isCurrent(row)) { writings.finish(row, 'superseded'); notify(); continue; }
         try {

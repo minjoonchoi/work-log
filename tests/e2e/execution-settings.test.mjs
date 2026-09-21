@@ -46,3 +46,48 @@ test('execution settings reject unknown tasks, fields and invalid backend select
   await assert.rejects(h.runtime('/execution-settings/prd.create', { method: 'PUT', body: { ...valid, backend: 'other' } }), /backend/);
   await assert.rejects(h.runtime('/execution-settings/prd.create', { method: 'PUT', body: { ...valid, command: 'rm -rf' } }), /등록되지 않은 필드/);
 });
+
+test('Markdown defaults describe every model task and are frozen into real worker requests before local edits', async t => {
+  const h = await new Harness().start('runtime'); t.after(() => h.close());
+  const initial = await h.runtime('/execution-settings');
+  for (const task of initial.tasks) {
+    for (const section of ['목적', '입력', '범위', '수행 절차', '완료 기준']) assert.ok(task.instruction.includes(`\n## ${section}\n`), `${task.id}: ${section}`);
+    assert.ok(task.instruction.includes(task.boundary.owns));
+    assert.ok(task.instruction.includes(task.boundary.deliverable));
+    assert.ok(task.instruction.length <= 12000, `${task.id}: editable default fits the input limit`);
+  }
+  const prd = initial.tasks.find(task => task.id === 'prd.create');
+  assert.ok(!prd.instruction.includes('담당 범위:'), 'generated persona boundary suffix is not duplicated in the readable instruction');
+  const first = await h.run({ fixture: { delayMs: 100 } });
+  const markdown = '# 사용자 PRD 지시문\n\n## 목적\n**승인 상태**를 명확히 한다.\n\n## 수행 절차\n1. `REQ-001`을 대조한다.\n2. 거절 상태를 확인한다.';
+  await h.runtime('/execution-settings/prd.create', { method: 'PUT', body: {
+    revision: initial.revision, instruction: markdown, backend: 'codex',
+    backends: { codex: { model: null, effort: null }, claude: { model: null, effort: null } }
+  } });
+  const done = await h.finish(first); assert.equal(done.status, 'completed', done.message);
+  for (const attempt of done.attempts) {
+    const prompt = fs.readFileSync(path.join(attempt.directory, 'prompt.txt'), 'utf8');
+    assert.ok(prompt.includes(prd.instruction)); assert.ok(!prompt.includes(markdown));
+  }
+  const next = await h.finish(await h.run()); assert.equal(next.status, 'completed', next.message);
+  for (const attempt of next.attempts) assert.ok(fs.readFileSync(path.join(attempt.directory, 'prompt.txt'), 'utf8').includes(markdown));
+  await h.stop('runtime'); await h.start('runtime');
+  assert.equal((await h.runtime('/execution-settings')).tasks.find(task => task.id === 'prd.create').instruction, markdown);
+});
+
+test('preexisting plain-text instruction overrides remain byte-for-byte unchanged until an explicit reset', async t => {
+  const h = new Harness(); t.after(() => h.close());
+  const file = path.join(h.dir, 'execution-settings.json'), instruction = '기존 사용자 작성 지시문입니다.\n  들여쓰기와 줄바꿈도 보존합니다.\n';
+  const custom = { instruction, backend: 'codex', backends: { codex: { model: null, effort: null }, claude: { model: null, effort: null } } };
+  fs.writeFileSync(file, JSON.stringify({ version: 1, revision: 2, tasks: { 'entity.design': custom, 'text.rewrite': custom, 'session.summarize': custom } }));
+  const bytes = fs.readFileSync(file);
+  await h.start('runtime');
+  const settings = await h.runtime('/execution-settings');
+  for (const task of ['text.rewrite', 'session.summarize']) assert.equal(settings.tasks.find(t => t.id === task).instruction, instruction);
+  assert.equal(settings.tasks.find(task => task.id === 'entity.design').instruction, instruction);
+  const run = await h.finish(await h.run({ task: 'entity.design' })); assert.equal(run.status, 'completed', run.message);
+  assert.ok(fs.readFileSync(path.join(run.attempts[0].directory, 'prompt.txt'), 'utf8').includes(instruction));
+  assert.deepEqual(fs.readFileSync(file), bytes);
+  const reset = await h.runtime('/execution-settings/entity.design', { method: 'DELETE', body: { revision: settings.revision } });
+  assert.match(reset.tasks.find(task => task.id === 'entity.design').instruction, /^# 엔티티 설계\n/);
+});

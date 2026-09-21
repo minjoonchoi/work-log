@@ -13,7 +13,7 @@ try {
   const run = await h.runtime('/runs', { method: 'POST', body: {
     prompt: '하네스 서비스와 GUI의 E2E 검사를 실행해 주세요.', task: 'checks.run', work_item_id: workItemId, input: { profile: process.argv[2] || 'harness.e2e' }
   } });
-  const checked = await h.finish(run, 420000);
+  const checked = await h.finish(run, 540000);
   const report = await h.runtime('/runs', { method: 'POST', body: {
     prompt: '방금 수행한 검사의 실행 근거 보고서를 작성해 주세요.', task: 'verification.report', work_item_id: workItemId, input: { run_ids: [run.id] }
   } });

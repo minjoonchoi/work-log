@@ -4,10 +4,14 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 
 // Protocol simulators: never contact Atlassian, op, or the user's Keychain.
+export const oauthClient = { client_id: 'fixture-client', client_secret: 'fixture-secret' };
 export async function atlFixture(h) {
-  const state = { tokenCalls: [], calls: [], issues: [], worklogs: [], refresh: 'fixture-refresh-1', access: 'fixture-access-1', revision: 1,
-    scopes: ['read:jira-work', 'write:jira-work', 'read:page:confluence'], rejectRefresh: false, rejectAccessOnce: false, worklogFailure: null, loseIssue: false, loseWorklog: false,
-    transitionFailure: null, issueReadFailure: null, loseTransition: false, noTransitions: false, updated: 0 };
+  const state = { tokenCalls: [], calls: [], issues: [], worklogs: [], pages: [],
+    spaces: [{ id: '10', key: 'TEAM', name: '팀 업무', status: 'current' }, { id: '20', key: 'DOCS', name: '프로젝트 문서', status: 'current' }, { id: '30', key: 'OPS', name: '운영 기록', status: 'current' }],
+    pageFailure: null, losePage: false, refresh: 'fixture-refresh-1', access: 'fixture-access-1', revision: 1,
+    scopes: ['read:jira-work', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'], rejectRefresh: false, rejectAccessOnce: false, worklogFailure: null, loseIssue: false, loseWorklog: false,
+    transitionFailure: null, issueReadFailure: null, issueUpdateFailure: null, issueUpdateResponseLost: false,
+    loseTransition: false, noTransitions: false, updated: 0 };
   const statuses = { todo: { id: '10000', name: '해야 할 일', statusCategory: { key: 'new' } },
     progress: { id: '3', name: '진행 중', statusCategory: { key: 'indeterminate' } }, done: { id: '10002', name: '완료', statusCategory: { key: 'done' } } };
   function setStatus(issue, name) {
@@ -41,7 +45,11 @@ export async function atlFixture(h) {
       state.calls.push({ method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), body });
       if (state.rejectAccessOnce) { state.rejectAccessOnce = false; return send({}, 401); }
       if (req.headers.authorization !== `Bearer ${state.access}`) return send({}, 401);
-      if (url.pathname === '/oauth/token/accessible-resources') return send([{ id: 'cloud-test', name: 'Fixture 팀', url: 'https://fixture.atlassian.net', scopes: state.scopes }]);
+      if (url.pathname === '/oauth/token/accessible-resources') {
+        state.resourceCalls = (state.resourceCalls || 0) + 1;
+        if (state.resourceDelayAt === state.resourceCalls) await new Promise(resolve => setTimeout(resolve, state.resourceDelay || 250));
+        return send([{ id: 'cloud-test', name: 'Fixture 팀', url: 'https://fixture.atlassian.net', scopes: state.scopes }]);
+      }
       if (url.pathname.endsWith('/search/jql')) {
         const jql = url.searchParams.get('jql'), token = url.searchParams.get('nextPageToken');
         const terms = [...jql.matchAll(/summary ~ "([^"]+)\*"/g)].map(m => m[1].toLowerCase());
@@ -64,7 +72,34 @@ export async function atlFixture(h) {
         const start = Number(url.searchParams.get('startAt') || 0);
         return send({ issueTypes: [{ id: String(10001 + start), name: start ? 'Bug' : 'Task' }], total: state.paged ? 2 : 1, startAt: start, maxResults: 1 });
       }
-      if (url.pathname.includes('/wiki/api/v2/pages/')) return send({ id: '123', title: 'Fixture page', body: { storage: { value: '<p>fixture</p>' } } });
+      if (url.pathname.endsWith('/wiki/api/v2/spaces')) {
+        assert.equal(req.method, 'GET'); assert.equal(url.searchParams.get('status'), 'current');
+        const cursor = url.searchParams.get('cursor'), start = cursor ? Number(Buffer.from(cursor, 'base64url').toString()) : 0;
+        assert.ok(Number.isInteger(start) && start >= 0);
+        const size = Math.min(2, Number(url.searchParams.get('limit') || 50)), results = state.spaces.slice(start, start + size);
+        const next = start + size < state.spaces.length ? `/wiki/api/v2/spaces?cursor=${Buffer.from(String(start + size)).toString('base64url')}&limit=50&status=current` : null;
+        return send({ results, _links: { ...(next ? { next } : {}), ...(state.spacesNext !== undefined ? { next: state.spacesNext } : {}) } });
+      }
+      const spaceId = url.pathname.match(/\/wiki\/api\/v2\/spaces\/(\d+)$/)?.[1];
+      if (spaceId) {
+        const space = state.spaces.find(row => row.id === spaceId); return send(space || {}, space ? 200 : 404);
+      }
+      if (url.pathname.endsWith('/wiki/api/v2/pages') && req.method === 'POST') {
+        assert.equal(body.body.representation, 'storage'); assert.equal(body.status, 'current');
+        if (state.pageDelay) await new Promise(resolve => setTimeout(resolve, state.pageDelay));
+        if (state.pageFailure) return send({}, state.pageFailure);
+        const page = { id: String(1000 + state.pages.length), spaceId: body.spaceId, title: body.title, status: body.status,
+          body: { storage: { representation: 'storage', value: body.body.value } } };
+        state.pages.push(page);
+        if (state.losePage) { state.losePage = false; return res.destroy(); }
+        if (state.malformedPageResponse) return send({ id: page.id });
+        return send(page);
+      }
+      const pageId = url.pathname.match(/\/wiki\/api\/v2\/pages\/(\d+)$/)?.[1];
+      if (pageId) {
+        if (pageId === '123') return send({ id: '123', title: 'Fixture page', body: { storage: { value: '<p>fixture</p>' } } });
+        const page = state.pages.find(row => row.id === pageId); return send(page || {}, page ? 200 : 404);
+      }
       if (url.pathname.endsWith('/issue') && req.method === 'POST') {
         const issue = addIssue(body.fields); issue.properties = body.properties;
         if (state.loseIssue) { state.loseIssue = false; return res.destroy(); }
@@ -99,6 +134,15 @@ export async function atlFixture(h) {
         return send(worklog, wid ? 200 : 201);
       }
       if (issue) {
+        if (req.method === 'PUT' && /\/issue\/[^/]+$/.test(url.pathname)) {
+          if (state.issueUpdateDelay) await new Promise(resolve => setTimeout(resolve, state.issueUpdateDelay));
+          if (state.issueUpdateFailure) return send({}, state.issueUpdateFailure);
+          assert.deepEqual(Object.keys(body.fields).sort(), ['description', 'summary']);
+          issue.fields.summary = body.fields.summary; issue.fields.description = body.fields.description;
+          issue.fields.updated = new Date(Date.UTC(2026, 8, 17, 0, 0, ++state.updated)).toISOString();
+          if (state.issueUpdateResponseLost) { state.issueUpdateResponseLost = false; return res.destroy(); }
+          res.writeHead(204); return res.end();
+        }
         if (state.issueReadDelay) await new Promise(resolve => setTimeout(resolve, state.issueReadDelay));
         if (state.issueReadFailure) return send({}, state.issueReadFailure);
         return send(issue);
@@ -110,22 +154,26 @@ export async function atlFixture(h) {
   const origin = `http://127.0.0.1:${server.address().port}`;
   const helpers = path.join(h.dir, 'test-only-credentials'); fs.mkdirSync(helpers);
   const op = path.join(helpers, 'op.mjs'), keychain = path.join(helpers, 'keychain.mjs');
-  const record = path.join(helpers, 'mock-keychain.json'), opCalls = path.join(helpers, 'op-calls.jsonl');
-  fs.writeFileSync(op, `#!${process.execPath}\nimport fs from 'node:fs';\nconst args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(opCalls)},JSON.stringify(args)+'\\n');
-    if(args[0]!=='item'||args[1]!=='get'||args[4]!=='Team Vault'||args[2]!=='Atlassian App')process.exit(2);
-    process.stdout.write(JSON.stringify([{label:'client_id',value:'fixture-client'},{label:'client_secret',value:'fixture-secret'}]));\n`, { mode: 0o700 });
-  fs.writeFileSync(keychain, `#!${process.execPath}\nimport fs from 'node:fs';\nlet raw='';for await(const b of process.stdin)raw+=b;const r=JSON.parse(raw),file=${JSON.stringify(record)};
+  const record = path.join(helpers, 'mock-keychain.json'), clientRecord = path.join(helpers, 'mock-client-keychain.json');
+  const opCalls = path.join(helpers, 'op-calls.jsonl'), keychainCalls = path.join(helpers, 'keychain-calls.jsonl');
+  // A tripwire proves the removed provider is never consulted, even when installed.
+  fs.writeFileSync(op, `#!${process.execPath}\nimport fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(opCalls)},'unexpected op invocation\\n');process.exit(3);\n`, { mode: 0o700 });
+  fs.writeFileSync(keychain, `#!${process.execPath}\nimport fs from 'node:fs';\nlet raw='';for await(const b of process.stdin)raw+=b;const r=JSON.parse(raw),file=r.account.startsWith('client-')?${JSON.stringify(clientRecord)}:${JSON.stringify(record)};
+    if(!/^(oauth|client)-[a-f0-9]{24}$/.test(r.account))process.exit(4);
+    fs.appendFileSync(${JSON.stringify(keychainCalls)},JSON.stringify({operation:r.operation,account:r.account,args:process.argv.slice(2)})+'\\n');
     if(fs.existsSync(file+'.locked'))process.exit(3);
+    if(fs.existsSync(file+'.response')){process.stdout.write(fs.readFileSync(file+'.response'));process.exit(0);}
+    if(r.operation==='set'&&fs.existsSync(file+'.deny-set')){process.stderr.write('fixture-secret: denied');process.exit(3);}
     if(r.operation==='set'){fs.writeFileSync(file,JSON.stringify(r.value),{mode:0o600});}
     if(r.operation==='delete'&&fs.existsSync(file))fs.unlinkSync(file);
     process.stdout.write(JSON.stringify({ok:true,value:r.operation==='get'&&fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null}));\n`, { mode: 0o700 });
   h.env = { ...h.env, HARNESS_ATLASSIAN_TEST_ORIGIN: origin, HARNESS_OP_BIN: op, HARNESS_KEYCHAIN_BIN: keychain, HARNESS_TEST_SESSION_SUMMARIES: '1' };
-  return { state, origin, record, opCalls, addIssue, setStatus,
+  return { state, origin, record, clientRecord, opCalls, keychainCalls, addIssue, setStatus,
     expire: () => { const value = JSON.parse(fs.readFileSync(record)); value.expires_at = Date.now() - 1000; fs.writeFileSync(record, JSON.stringify(value)); },
     close: async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } };
 }
 export async function authorize(h) {
-  await h.manager('/integrations/atlassian', { method: 'PUT', body: { vault: 'Team Vault', item: 'Atlassian App' } });
+  await h.manager('/integrations/atlassian', { method: 'PUT', body: oauthClient });
   const { authorization_url } = await h.manager('/integrations/atlassian/authorize', { method: 'POST', body: {} });
   const url = new URL(authorization_url), callback = new URL(url.searchParams.get('redirect_uri'));
   callback.search = new URLSearchParams({ state: url.searchParams.get('state'), code: 'fixture-code' });

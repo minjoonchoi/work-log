@@ -4,7 +4,8 @@ import os from 'node:os';
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { assert, json, alive } from '../src/shared.mjs';
+import { assert, json } from '../src/shared.mjs';
+import { stopOwnedServices } from './service-control.mjs';
 import { locations, stat, safePath, locked, readManifest, saveManifest, matches, inventory,
   canonical, readConfig, writeConfig, hookPositions, quote } from './install-state.mjs';
 
@@ -17,40 +18,6 @@ export function prepareUninstall({ homeDir = os.homedir() } = {}) {
     links: receipt.links, files: receipt.files.map(f => f.path), app: receipt.trees[0].path, runtime: receipt.trees[1].path,
     preserve: ['업무 SQLite·산출물·로그·설치 백업', '사용자 설정과 다른 훅·스킬', 'macOS Keychain OAuth 토큰'],
     note: '제거 시 현재 내용과 소유 기록을 다시 대조합니다. 변경되거나 식별이 모호한 항목은 보존합니다.' };
-}
-
-const missingService = result => result.status !== 0 && /could not find (?:specified )?service|service not found/i.test(result.stderr || '');
-function stopServices(loc, receipt, launchctl, deactivate, preserved) {
-  if (!deactivate) assert(receipt.files.every(f => f.activation === 'not_started'), '활성화한 서비스의 종료 확인을 생략할 수 없습니다.');
-  for (const f of receipt.files) {
-    if (f.activation === 'not_started') continue;
-    try {
-      safePath(loc.home, f.path);
-      assert(!stat(f.path) || matches(f.path, { ...f, kind: 'file' }), '서비스 설정이 변경되어 실행 중인 서비스 소유를 확인할 수 없습니다.');
-      const target = `gui/${process.getuid()}/${f.label}`;
-      const current = launchctl('launchctl', ['print', target], { encoding: 'utf8', timeout: 15000 });
-      if (!missingService(current)) {
-        assert(current.status === 0, `서비스 조회 실패: ${current.stderr || current.error?.message || current.status}`);
-        const program = current.stdout.match(/(?:^|\n)\s*program = (.+)/)?.[1]?.trim();
-        const args = current.stdout.match(/(?:^|\n)\s*arguments = \{\s*\n([\s\S]*?)\n\s*\}/)?.[1]?.split('\n').map(s => s.trim()).filter(Boolean);
-        assert(program === f.argv[0] && canonical(args) === canonical(f.argv), '같은 이름의 다른 서비스가 있어 종료하지 않았습니다.');
-        const stopped = launchctl('launchctl', ['bootout', target], { encoding: 'utf8', timeout: 15000 });
-        assert(stopped.status === 0, `서비스 종료 실패: ${stopped.stderr || stopped.error?.message || stopped.status}`);
-        assert(missingService(launchctl('launchctl', ['print', target], { encoding: 'utf8', timeout: 15000 })), '서비스 종료를 확인하지 못했습니다.');
-      }
-      f.activation = 'stopped'; saveManifest(loc, receipt);
-    } catch (e) { preserved.push({ path: f.path, reason: e.message }); }
-  }
-  for (const role of ['runtime', 'manager']) {
-    const file = path.join(loc.data, `${role}.lock`);
-    try {
-      safePath(loc.home, file);
-      if (stat(file)) {
-        const { pid } = JSON.parse(fs.readFileSync(file, 'utf8'));
-        assert(Number.isSafeInteger(pid) && pid > 1 && !alive(pid), '프로세스 종료가 아직 확인되지 않았습니다. 종료 후 다시 제거하세요.');
-      }
-    } catch (e) { preserved.push({ path: file, reason: e.message }); }
-  }
 }
 
 function removeHooks(loc, receipt, removed, preserved) {
@@ -103,7 +70,7 @@ function removeTrees(loc, receipt, removed, preserved) {
   }
 }
 
-export function applyUninstall({ homeDir = os.homedir(), deactivate = true, launchctl = spawnSync } = {}) {
+export function applyUninstall({ homeDir = os.homedir(), deactivate = true, launchctl = spawnSync, stopTimeoutMs = 10000 } = {}) {
   const initial = prepareUninstall({ homeDir });
   if (['not_installed', 'unmanaged', 'uninstalled'].includes(initial.status)) return initial;
   return locked(homeDir, loc => {
@@ -111,7 +78,7 @@ export function applyUninstall({ homeDir = os.homedir(), deactivate = true, laun
     if (receipt.state === 'uninstalled') return { status: 'uninstalled', removed: [] };
     const removed = [], preserved = [];
     receipt.state = 'uninstalling'; saveManifest(loc, receipt);
-    stopServices(loc, receipt, launchctl, deactivate, preserved);
+    preserved.push(...stopOwnedServices(loc, receipt, { launchctl, deactivate, timeoutMs: stopTimeoutMs }));
     if (!preserved.length) {
       let dependent = removeHooks(loc, receipt, removed, preserved);
       for (const link of receipt.links) {

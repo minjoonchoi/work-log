@@ -78,6 +78,30 @@ export function redactValue(value) {
     [k, /^(password|api[_-]?key|access[_-]?token|secret)$/i.test(k) ? '[REDACTED]' : redactValue(v)]));
   return value;
 }
+// Executable source snapshots must remain byte-for-byte faithful. Logging still uses
+// redact/redactValue, but ingest refuses recognizable tokens and named secret string
+// nonempty literals (including placeholders) instead of silently rewriting source code.
+// Variable/environment expressions such as password = input.password remain valid.
+export function redactExecutionRequest(value) {
+  const safe = redactValue(value);
+  const token = /\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{15,})\b/;
+  const name = '(?:password|api[_-]?key|access[_-]?token|refresh[_-]?token|secret)';
+  const nonemptyString = "(?:\"[^\"]|'[^']|`[^`])";
+  const literal = new RegExp(`\\b${name}["']?\\s*[:=]\\s*${nonemptyString}`, 'i');
+  const typedLiteral = new RegExp(`\\b${name}\\s*:\\s*(?:str|string|String|&str)\\s*=\\s*${nonemptyString}`, 'i');
+  const preserve = (original, target) => {
+    if (!Array.isArray(original?.source_files)) return;
+    for (const file of original.source_files) for (const text of [file?.path, file?.content]) {
+      if (typeof text !== 'string') continue; // The job schema handles invalid shapes.
+      assert(!token.test(text) && !literal.test(text) && !typedLiteral.test(text),
+        '코드 원본에 자격증명 토큰 또는 하드코딩한 비밀 문자열이 있습니다. 변수·환경 설정 참조로 제거한 원본을 제공하세요.');
+    }
+    target.source_files = structuredClone(original.source_files);
+  };
+  preserve(value?.input, safe?.input);
+  if (Array.isArray(value?.steps)) value.steps.forEach((step, index) => preserve(step?.input, safe?.steps?.[index]?.input));
+  return safe;
+}
 export function readEndpoint(dir, role) {
   try { return JSON.parse(fs.readFileSync(path.join(dir, `${role}.endpoint.json`), 'utf8')); }
   catch { return null; }

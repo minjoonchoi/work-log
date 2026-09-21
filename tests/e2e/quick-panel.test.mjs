@@ -34,11 +34,11 @@ test('overview caps rows but keeps exact counts and excludes metadata workers an
   const item = (await h.manager('/items')).find(w => w.id === 'r0');
   await h.manager('/items/r0', { method: 'PATCH', body: { title: item.title, description: 'PRIVATE-DESCRIPTION', version: item.version } });
   const overview = await h.manager('/quick');
-  assert.deepEqual(overview.counts, { current: 7, waiting: 0, attention: 4, recent: 6, total: 17 });
-  assert.deepEqual([overview.current.length, overview.attention.length, overview.recent.length], [5, 3, 5]);
-  assert.equal(new Set([...overview.current, ...overview.attention, ...overview.recent].map(w => w.id)).size, 13);
+  assert.deepEqual(overview.counts, { current: 7, recent: 10, notifications: 4, total: 17 });
+  assert.deepEqual([overview.current.length, overview.notifications.length, overview.recent.length], [5, 3, 5]);
+  assert.equal(new Set(overview.notifications.map(w => w.work_item_id)).size, 3);
   assert.ok(!JSON.stringify(overview).includes('PRIVATE-'));
-  assert.deepEqual(Object.keys(overview.current[0]).sort(), ['activities', 'activity', 'id', 'last_activity', 'state', 'title']);
+  assert.deepEqual(Object.keys(overview.current[0]).sort(), ['activities', 'activity', 'id', 'last_activity', 'notification_count', 'state', 'title']);
 });
 
 test('merged concurrent agent sessions count as one work item; interrupted turns stop waiting; restart preserves overview', async t => {
@@ -57,10 +57,10 @@ test('merged concurrent agent sessions count as one work item; interrupted turns
 test('run state changes drive current/attention/recent, and overview remains authenticated', async t => {
   const h = await setup(t);
   await h.ingest(pair('run-state', '09:00:00', '09:01:00', 't1', { work_item_id: 'run-item' }));
-  for (const [status, group] of [['running', 'current'], ['blocked', 'attention'], ['completed', 'recent']]) {
+  for (const [status, group] of [['running', 'current'], ['blocked', 'notifications'], ['completed', 'recent']]) {
     await h.ingest([update('run-state', 'run-item', status)]);
     const overview = await h.manager('/quick');
-    assert.equal(overview.counts[group], 1); assert.equal(overview[group][0].id, 'run-item');
+    assert.equal(overview.counts[group], 1); assert.equal(overview[group][0][group === 'notifications' ? 'work_item_id' : 'id'], 'run-item');
   }
   const res = await fetch(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}/api/quick`);
   assert.equal(res.status, 401);

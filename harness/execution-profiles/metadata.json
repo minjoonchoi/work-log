@@ -3,15 +3,15 @@
   "description": "work item 메타데이터와 세션 요약 생성·검토·수정",
   "stages": {
     "produce": {
-      "codex": { "model": "gpt-5.6", "effort": "low" },
+      "codex": { "model": "gpt-5.6-luna", "effort": "low" },
       "claude": { "model": "sonnet", "effort": "low" }
     },
     "review": {
-      "codex": { "model": "gpt-5.6", "effort": "medium" },
+      "codex": { "model": "gpt-5.6-luna", "effort": "medium" },
       "claude": { "model": "sonnet", "effort": "medium" }
     },
     "repair": {
-      "codex": { "model": "gpt-5.6", "effort": "medium" },
+      "codex": { "model": "gpt-5.6-luna", "effort": "medium" },
       "claude": { "model": "sonnet", "effort": "medium" }
     }
   }

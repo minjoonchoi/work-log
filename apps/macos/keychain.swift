@@ -2,7 +2,8 @@ import Foundation
 import Security
 import LocalAuthentication
 
-// Only this application's OAuth record is accessible. No secret is accepted as an argv value.
+// Only this application's OAuth and client credential records are accessible.
+// No secret is accepted as an argv value.
 func respond(_ object: [String: Any]) {
     let bytes = try! JSONSerialization.data(withJSONObject: object)
     FileHandle.standardOutput.write(bytes)
@@ -13,7 +14,7 @@ do {
           let request = try JSONSerialization.jsonObject(with: input) as? [String: Any],
           let operation = request["operation"] as? String,
           let account = request["account"] as? String,
-          account.range(of: "^oauth-[a-f0-9]{24}$", options: .regularExpression) != nil else {
+          account.range(of: "^(oauth|client)-[a-f0-9]{24}$", options: .regularExpression) != nil else {
         respond(["ok": false]); exit(1)
     }
     let authentication = LAContext()
@@ -43,7 +44,7 @@ do {
         if status == errSecItemNotFound {
             var create = query
             create[kSecValueData as String] = bytes
-            create[kSecAttrLabel as String] = "WorkLog · Atlassian OAuth"
+            create[kSecAttrLabel as String] = account.hasPrefix("client-") ? "WorkLog · Atlassian Client" : "WorkLog · Atlassian OAuth"
             status = SecItemAdd(create as CFDictionary, nil)
         }
         respond(["ok": status == errSecSuccess, "status": status])

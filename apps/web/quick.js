@@ -2,7 +2,7 @@ const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let active = window.__HARNESS_QUICK_VISIBLE__ !== false, busy = false, queued = false, snapshot = null, revision = '', poll;
 let controller, streamController, streaming = false;
-const labels = { running: '작업 실행 중', queued: '실행 대기', agent_response_pending: '에이전트 응답 대기', waiting_for_user: '사용자 답변 필요', attention: '확인 필요', completed: '완료', cancelled: '취소됨', tracked: '이력 수집' };
+const labels = { running: '작업 실행 중', queued: '실행 대기', agent_response_pending: '에이전트 응답 대기', completed: '완료', cancelled: '취소됨', tracked: '이력 수집' };
 const activityLabel = (activity, connected) => ['running', 'queued'].includes(activity) && !connected ? '실행 상태 미확인' : labels[activity];
 const stamp = value => new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
 function navigate(route) {
@@ -12,7 +12,8 @@ function navigate(route) {
 }
 document.addEventListener('click', event => {
   const button = event.target.closest('button'); if (!button) return;
-  if (button.dataset.item) navigate({ view: 'items', item_id: button.dataset.item });
+  if (button.dataset.notification) navigate({ view: 'notifications', notification_id: button.dataset.notification });
+  else if (button.dataset.item) navigate({ view: 'items', item_id: button.dataset.item });
   else if (button.dataset.view) navigate({ view: button.dataset.view });
 });
 function render(data) {
@@ -20,25 +21,30 @@ function render(data) {
   $('#quick-health').textContent = issue ? '이력 수집 확인 필요 · 전체 창에서 확인하세요.' : h.runtime_connected ? '실행·관리 서비스 연결됨' : '관리 연결됨 · 실행 상태 확인 중';
   $('#quick-health').className = `quick-health ${issue ? '' : 'connected'}`;
   document.body.dataset.stale = 'false';
-  $('#current-count').textContent = data.counts.current; $('#waiting-count').textContent = data.counts.waiting; $('#attention-count').textContent = data.counts.attention;
-  const next = JSON.stringify([data.counts, data.current, data.waiting, data.attention, data.recent, h.runtime_connected]);
+  $('#current-count').textContent = data.counts.current; $('#notification-count').textContent = data.counts.notifications;
+  const next = JSON.stringify([data.counts, data.current, data.notifications, data.recent, h.runtime_connected]);
   if (next === revision) return; revision = next;
-  const list = $('.quick-content'), scroll = list.scrollTop, focus = document.activeElement?.dataset.item;
+  const list = $('.quick-content'), scroll = list.scrollTop;
+  const focused = document.activeElement, focus = focused?.dataset.notification ? ['notification', focused.dataset.notification]
+    : focused?.dataset.item ? ['item', focused.dataset.item] : null;
   $('#quick-groups').innerHTML = [
-    ['waiting', '사용자 답변 필요', '답변을 요청한 질문이 없습니다.', 'waiting-user'],
+    ['notifications', '알림', '현재 표시할 알림이 없습니다.', 'notifications'],
     ['current', '현재 작업', '실행 또는 에이전트 응답을 기다리는 업무가 없습니다.', 'current'],
-    ['attention', '확인 필요', '확인이 필요한 업무가 없습니다.', 'attention'],
     ['recent', '최근 업무', '에이전트에서 작업하면 이곳에 기록됩니다.', 'items']
-  ].filter(([key]) => key !== 'waiting' || data.counts.waiting > 0).map(([key, title, empty, view]) => `<section class="quick-group" data-group="${key}">
+  ].map(([key, title, empty, view]) => `<section class="quick-group" data-group="${key}">
     <div class="quick-group-heading"><h2>${title} <span>${data.counts[key]}</span></h2>${data.counts[key] > data[key].length ? `<button class="quick-more" data-view="${view}">+${data.counts[key] - data[key].length}개 더 보기</button>` : ''}</div>
     ${data[key].length ? data[key].map(item => {
+      if (key === 'notifications') return `<button class="quick-item quick-notification" data-notification="${esc(item.id)}" aria-label="${esc(`${item.work_item_title} · ${item.title} 알림 열기`)}" title="${esc(item.message || item.title)}">
+        <span class="quick-notification-owner">${esc(item.work_item_title)}</span><span class="quick-item-title">${esc(item.title)}</span>
+        ${item.message ? `<span class="quick-notification-message">${esc(item.message)}</span>` : ''}
+        <span class="quick-item-meta"><span class="quick-notification-action">${esc(item.action_label || '내용 확인')}</span><time datetime="${esc(item.occurred_at)}">${stamp(item.occurred_at)}</time></span></button>`;
       const status = activityLabel(item.activity, h.runtime_connected) || labels[item.state] || '기록됨';
       const secondary = (item.activities || []).filter(a => a !== item.activity).map(a => activityLabel(a, h.runtime_connected)).filter(Boolean);
       return `<button class="quick-item" data-item="${esc(item.id)}" aria-label="${esc(item.title)} 상세 열기" title="${esc(item.title)}">
         <span class="quick-item-title">${esc(item.title)}</span><span class="quick-item-meta"><span class="${esc(item.activity)}">${esc(status)}</span><time datetime="${esc(item.last_activity)}">${stamp(item.last_activity)}</time></span>${secondary.length ? `<span class="quick-secondary">추가 상태: ${esc([...new Set(secondary)].join(' · '))}</span>` : ''}</button>`;
     }).join('') : `<p class="quick-empty">${empty}</p>`}</section>`).join('');
   list.scrollTop = scroll;
-  if (focus) [...document.querySelectorAll('[data-item]')].find(b => b.dataset.item === focus)?.focus({ preventScroll: true });
+  if (focus) [...document.querySelectorAll(`[data-${focus[0]}]`)].find(b => b.dataset[focus[0]] === focus[1])?.focus({ preventScroll: true });
 }
 async function refresh() {
   if (!active) return;

@@ -17,6 +17,7 @@ test('GUI edits and resets task instruction, backend and backend-specific model 
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: '작업 실행 설정' })).toBeVisible();
   await dialog.getByLabel('작업 유형').selectOption('entity.design');
+  await dialog.getByRole('tab', { name: '원문 편집' }).click();
   await dialog.getByLabel('작업 지시문').fill('관계 수와 삭제 정책을 명확히 설명한다.');
   await dialog.getByLabel('기본 backend').selectOption('claude');
   await dialog.getByLabel('Model override', { exact: true }).nth(0).fill('gpt-5.5');
@@ -35,4 +36,37 @@ test('GUI edits and resets task instruction, backend and backend-specific model 
   await expect(page.locator('#toast')).toHaveText('유형 기본값으로 복원했습니다.');
   const reset = (await h.runtime('/execution-settings')).tasks.find(task => task.id === 'entity.design');
   expect(reset.backend).toBe('codex'); expect(reset.overridden).toBe(false);
+});
+
+test('instruction preview renders bounded Markdown, preserves edits across tabs, and never executes embedded HTML', async ({ page }) => {
+  await page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}`);
+  await page.getByRole('button', { name: '작업 실행 설정' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('작업 유형').selectOption('prd.create');
+  const preview = dialog.locator('#instruction-preview');
+  for (const name of ['목적', '입력', '범위', '수행 절차', '완료 기준']) await expect(preview.getByRole('heading', { name, exact: true })).toHaveCount(1);
+  await expect(dialog.getByLabel('작업 지시문')).toBeHidden();
+  await dialog.getByRole('tab', { name: '원문 편집' }).click();
+  const markdown = '# PRD 작성\n\n## 목적\n**요구사항**과 `REQ-007`을 확인한다.\n\n- 입력 근거\n- 예외 상태\n\n1. 비교한다.\n2. 검토한다.\n\n```html\n<img src=x onerror="window.markdownExecuted=true">\n```\n\n<script>window.markdownExecuted=true</script>\n<img src=x onerror="window.markdownExecuted=true">\n[링크](javascript:alert(1))';
+  await dialog.getByLabel('작업 지시문').fill(markdown);
+  await dialog.getByRole('tab', { name: '미리보기' }).click();
+  await expect(preview.locator('strong')).toHaveText('요구사항');
+  await expect(preview.locator('code').first()).toHaveText('REQ-007');
+  await expect(preview.locator('ul li')).toHaveCount(2); await expect(preview.locator('ol li')).toHaveCount(2);
+  await expect(preview.locator('pre code')).toContainText('<img src=x');
+  await expect(preview.locator('script,img,a')).toHaveCount(0);
+  expect(await page.evaluate(() => window.markdownExecuted)).toBeUndefined();
+  await expect(preview).toContainText('<script>window.markdownExecuted=true</script>');
+  await dialog.getByRole('tab', { name: '미리보기' }).press('ArrowRight');
+  await expect(dialog.getByRole('tab', { name: '원문 편집' })).toBeFocused();
+  await expect(dialog.getByLabel('작업 지시문')).toHaveValue(markdown);
+  await dialog.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page.locator('#toast')).toHaveText('작업 실행 설정을 저장했습니다.');
+  expect((await h.runtime('/execution-settings')).tasks.find(task => task.id === 'prd.create').instruction).toBe(markdown);
+  await expect(preview.getByRole('heading', { name: 'PRD 작성', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '기본값 복원' }).click();
+  await expect(preview.getByRole('heading', { name: '완료 기준', exact: true })).toHaveCount(1);
+  await expect(preview).not.toContainText('markdownExecuted');
+  fs.mkdirSync('output/screenshots', { recursive: true });
+  await dialog.locator('.instruction-editor').screenshot({ path: 'output/screenshots/execution-instruction-markdown.png' });
 });

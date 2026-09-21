@@ -5,6 +5,25 @@ import { runProcess } from './process-runner.mjs';
 import { ROOT, atomic, assert, json, redact, redactValue } from './shared.mjs';
 const versions = new Map();
 
+function errorMessage(value) {
+  // Codex may wrap the server's JSON error in another error.message string.
+  // Read only known message fields, never stringify the complete response.
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (value && typeof value === 'object') value = value.error?.message ?? value.message;
+    else if (typeof value === 'string') {
+      try {
+        const nested = JSON.parse(value);
+        if (nested && typeof nested === 'object' && (typeof nested.message === 'string' || typeof nested.error?.message === 'string')) {
+          value = nested; continue;
+        }
+        if (nested && typeof nested === 'object') return null;
+      } catch { /* Plain error text is already the message. */ }
+      return redact(value).replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
+    } else return null;
+  }
+  return null;
+}
+
 export function commandFor(engine, context) {
   const { cwd, schemaPath, outputPath, stage, execution } = context;
   if (['codex', 'claude'].includes(engine)) {
@@ -42,26 +61,38 @@ export function execute(context) {
   const env = Object.fromEntries(allowed.filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]]));
   Object.assign(env, { HARNESS_DATA_DIR: context.dataDir, HARNESS_WORKER: '1', HARNESS_PARENT: json(parent),
     HARNESS_ATTEMPT_ID: parent.task_id, HARNESS_ENGINE: engine, HARNESS_STAGE: stage,
-    HARNESS_TEST_MODE: process.env.HARNESS_TEST_MODE || '', HARNESS_FIXTURE: json(fixture || {}) });
+    HARNESS_TEST_MODE: process.env.HARNESS_TEST_MODE || '' });
+  if (engine === 'fixture') {
+    // Source snapshots can exceed the OS argv/environment limit. Fixture workers
+    // receive a private file; real CLIs receive their task exclusively on stdin.
+    env.HARNESS_FIXTURE_FILE = path.join(attemptDir, 'fixture-input.json');
+    atomic(env.HARNESS_FIXTURE_FILE, json(fixture || {}));
+  }
   const processRun = runProcess({ command, args, cwd, env, stdin: prompt, attemptDir, limits, onSpawn });
   const promise = processRun.promise.then(({ ok, stdout, observation: observed }) => {
-    let nativeSession = null, usage = null;
+    let nativeSession = null, usage = null, terminalFailure = null, streamError = null;
     if (engine === 'codex') {
       for (const line of stdout.split('\n')) {
         try {
           const event = JSON.parse(line);
           if (event.type === 'thread.started' && typeof event.thread_id === 'string') nativeSession = event.thread_id;
-          if (event.type === 'turn.completed' && event.usage) usage = event.usage;
+          if (event.type === 'turn.completed') { terminalFailure = null; streamError = null; if (event.usage) usage = event.usage; }
+          if (event.type === 'turn.failed') terminalFailure = errorMessage(event.error) || 'Codex 작업이 실패했습니다 (turn.failed).';
+          // Item-level error messages are advisory. A top-level error only
+          // supplies failure detail when the process itself did not succeed.
+          if (event.type === 'error') streamError = errorMessage(event);
         } catch { /* Only recognized protocol events carry metadata. */ }
       }
     } else if (engine === 'claude') {
       try { const outer = JSON.parse(stdout); nativeSession = outer.session_id || null; usage = outer.usage || null; } catch {}
     }
-    const observation = { ...observed, engine, model: execution?.model || null, effort: execution?.effort || null,
+    const failure = terminalFailure || (!ok && streamError);
+    const observation = { ...observed, ...(failure ? { reason: observed.reason || 'engine_failure', error: failure } : {}),
+      engine, model: execution?.model || null, effort: execution?.effort || null,
       permission_mode: ['codex', 'claude'].includes(engine) ? 'bypass' : null,
       cli_version: versions.get(command), native_session_id: nativeSession, usage };
     atomic(path.join(attemptDir, 'process.json'), json(observation));
-    if (!ok) return { ok: false, observation };
+    if (!ok || terminalFailure) return { ok: false, observation };
     try {
       let result;
       if (engine === 'claude') {
