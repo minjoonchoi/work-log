@@ -214,6 +214,10 @@ HARNESS_LIVE_APPROVED=1 node scripts/live-smoke.mjs
 
 GUI의 **연결 설정 → Atlassian 설정**에서 Atlassian 앱의 **Client ID·Client Secret**을 직접 입력합니다. 앱 자격증명과 OAuth 토큰은 함께 번들된 macOS Keychain 도우미로 서로 다른 레코드에 보관합니다. Secret 입력은 기본적으로 숨기며, 저장된 Secret은 **보기**를 눌렀을 때만 로컬 API로 조회해 표시합니다. 같은 Client ID에서 Secret을 비워 저장하면 기존 값을 유지하고, ID를 바꾸면 새 Secret이 필요합니다. Callback URL은 `http://127.0.0.1:47831/oauth/atlassian/callback`이며 Atlassian 앱의 권한 설정이 필요합니다.
 
+같은 화면의 **Atlassian 사이트 주소**에 `https://company.atlassian.net`을 저장하면 Jira 이슈 생성·연결과 Confluence 게시에서 해당 사이트를 기본으로 선택합니다. `company.atlassian.net`처럼 호스트만 입력해도 됩니다. 비워 두면 접근 가능한 사이트 목록에서 선택하며, 주소만 변경해도 기존 OAuth 연결은 유지됩니다. 지정한 사이트가 현재 계정의 접근 목록에 없으면 다른 사이트를 자동 선택하지 않고 안내합니다. 이미 연결한 Jira 이슈의 대상은 바꾸지 않습니다.
+
+이 주소는 회사의 Jira·Confluence 사이트를 선택하는 값입니다. Cloud OAuth 토큰 교환은 `auth.atlassian.com`, API 요청은 `api.atlassian.com`과 조회한 `cloudId`를 사용합니다. 사이트 주소 변경은 토큰 서버의 네트워크 연결 오류를 해결하는 설정이 아닙니다. [Atlassian Cloud OAuth API 호출 방식](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)
+
 이전 1Password vault/item 설정은 자동으로 읽거나 변환하지 않습니다. Atlassian 설정에서 자격증명을 직접 다시 입력하며, 기존 업무 기록과 토큰은 삭제하지 않습니다. Atlassian의 **연결 해제**는 OAuth 토큰만 제거하고 저장한 앱 자격증명은 유지합니다.
 
 OAuth 연결 자체는 Jira 티켓을 만들지 않습니다. 상세에서 새로 만들거나 기존 이슈를 확인해 연결한 뒤 종료 세션의 업무 로그를 전송합니다. 첫 입력부터 마지막 출력까지를 관측 시간으로 사용하며 20분 유휴 구간은 제외합니다. 실제 계정 연결·외부 쓰기는 로컬 모의 E2E와 구분합니다. [연동 설계·설정·복구 정책](docs/atlassian-worklogs.md)에서 상세 조건을 확인할 수 있습니다.

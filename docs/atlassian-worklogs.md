@@ -25,7 +25,11 @@ Jira의 업무 로그 생성·조회·수정 API를 사용하며, 사이트에�
 
 GUI **연결 설정 → Atlassian 설정**에서 Atlassian OAuth 앱의 **Client ID·Client Secret**을 직접 입력한다. Claude/Codex의 스킬·훅 연결과는 별도 설정이다. 첫 저장에는 두 값이 필요하다. 같은 Client ID에서 Secret 입력을 생략하거나 비워 두면 기존 값을 유지하며, Client ID를 바꿀 때는 새 Secret을 함께 입력해야 한다.
 
-Secret 입력은 기본적으로 password 형식으로 숨긴다. 설정을 열거나 일반 상태를 조회할 때 응답에 저장된 Secret을 포함하거나 GUI로 전달하지 않는다. GUI는 사용자가 **보기**를 눌렀을 때만 인증된 로컬 API로 조회해 화면에 표시한다. 서비스 내부의 자격증명 확인·OAuth 교환에는 Keychain 값을 사용할 수 있다. 기본 데이터 디렉터리의 `integrations/atlassian.json`에는 `client_id`, 불투명한 `credential_version` 등 설정 메타데이터만 저장하며 Secret·OAuth 토큰은 기록하지 않는다.
+**Atlassian 사이트 주소**는 선택 설정이다. `https://company.atlassian.net` 또는 호스트만 입력하면 HTTPS origin으로 정규화한다. 사용자 정보·경로·query·fragment·비표준 port·다른 도메인은 허용하지 않는다. 해당 주소를 OAuth의 accessible-resources와 대조하고 Jira·Confluence별 읽기 권한이 있는 사이트를 기본으로 선택한다. 다른 허용 사이트는 사용자가 선택할 수 있다. 지정한 사이트가 목록에 없거나 해당 제품 권한이 없으면 다른 사이트로 자동 대체하지 않는다. Jira 생성에 필요한 쓰기 권한도 따로 확인한다.
+
+사이트 주소만 변경할 때는 자격증명 버전과 토큰을 교체하지 않고 진행 중인 OAuth도 유지한다. 기존 연결된 이슈·업무 로그는 저장된 `cloud_id`를 계속 사용한다. 이 설정은 Cloud OAuth의 API origin이나 토큰 서버를 바꾸지 않는다. 토큰은 `https://auth.atlassian.com/oauth/token`에서 교환하고 API는 `https://api.atlassian.com/ex/jira/{cloudId}/…` 또는 Confluence 경로로 요청한다. 서버·게이트웨이 주소 설정이나 Jira Server/Data Center 연결 기능이 아니다. [공식 3LO 호출 경로](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)
+
+Secret 입력은 기본적으로 password 형식으로 숨긴다. 설정을 열거나 일반 상태를 조회할 때 응답에 저장된 Secret을 포함하거나 GUI로 전달하지 않는다. GUI는 사용자가 **보기**를 눌렀을 때만 인증된 로컬 API로 조회해 화면에 표시한다. 서비스 내부의 자격증명 확인·OAuth 교환에는 Keychain 값을 사용할 수 있다. 기본 데이터 디렉터리의 `integrations/atlassian.json`에는 `client_id`, 불투명한 `credential_version`, 선택한 `site_url` 등 설정 메타데이터만 저장하며 Secret·OAuth 토큰은 기록하지 않는다.
 
 앱 자격증명과 OAuth 토큰은 macOS Keychain의 별도 레코드에 보관한다. 앱 자격증명 계정 키는 `client-`, OAuth 토큰 계정 키는 `oauth-` 접두사로 구분하며 로컬 데이터 디렉터리에 연결한다. 버전 메타데이터는 자격증명 변경을 식별하기 위한 값으로 Secret 자체가 아니다.
 
@@ -80,7 +84,7 @@ Work Item 병합은 Jira 티켓을 병합하거나 이동시키지 않는다. �
 
 ## API와 구현 경계
 
-- manager: `/api/integrations/atlassian` GET/PUT/DELETE. GET은 `config.client_id`, `has_client_secret` 등 상태 메타데이터만 반환하며 PUT은 `{client_id,client_secret?}`를 받는다. `/client-secret` POST는 **보기**에서만 `{client_id}`로 요청하는 저장 Secret 조회다. `/authorize` POST, `/sites`, `/projects`, `/issue-types`, `/jira-issue`, `/confluence-page` GET도 제공한다.
+- manager: `/api/integrations/atlassian` GET/PUT/DELETE. GET은 `config.client_id`, `config.site_url?`, `has_client_secret` 등 상태 메타데이터만 반환하며 PUT은 `{client_id,client_secret?,site_url?}`를 받는다. `site_url` 생략은 기존 주소 보존, 빈 문자열은 기본 사이트 해제다. `/client-secret` POST는 **보기**에서만 `{client_id}`로 요청하는 저장 Secret 조회다. `/authorize` POST, `/sites?product=jira|confluence`(생략 시 Jira), `/projects`, `/issue-types`, `/jira-issue`, `/confluence-page` GET도 제공한다. 사이트 목록의 기본 선택 행은 `preferred:true`이며 제품별 권한과 지정 주소를 확인한 뒤 반환한다.
 - 수동 생성: `/api/items/:id/jira` POST. 복구: `/api/jira-links/:operation/resolve` POST.
 - 기존 이슈: `/api/integrations/atlassian/jira-search` GET으로 키·제목·URL 검색, `/jira-preview` GET으로 단일 이슈 확인, `/api/items/:id/jira/link` POST로 선택한 이슈 연결. 상태: `/api/jira-links/:operation/refresh`, `/transition` POST.
 - 재작성: `/api/items/:id/metadata/regenerate`, `/api/sessions/:id/summary/regenerate` POST. 실패 요약의 기존 `/summary/retry`도 유지.

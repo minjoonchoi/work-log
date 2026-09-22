@@ -84,13 +84,14 @@ export function reportsUI({ api, esc, modal, toast, absoluteTime, navigate, acti
     const status = await api('/integrations/atlassian');
     if (!current()) return;
     if (!status.connected) { toast('Confluence 게시를 위해 Atlassian을 연결하세요. 로컬 요약은 보관됩니다.'); return showSettings(); }
-    const sites = (await api('/integrations/atlassian/sites')).filter(site => site.scopes?.includes('read:page:confluence'));
+    const sites = (await api('/integrations/atlassian/sites?product=confluence')).filter(site => site.scopes?.includes('read:page:confluence'));
     if (!current()) return;
     modal(`<h2>Confluence에 업무 요약 게시</h2><p>확인한 요약으로 선택한 공간에 새 페이지를 만듭니다.</p><strong>${esc(report.title)}</strong><div id="report-publish-error" class="error" role="alert" hidden></div>
-      <label for="report-confluence-site">사이트</label><select id="report-confluence-site">${sites.map(site => `<option value="${esc(site.id)}">${esc(site.name)}</option>`).join('')}</select>
+      <label for="report-confluence-site">사이트</label><select id="report-confluence-site">${sites.map(site => `<option value="${esc(site.id)}">${esc(site.url ? `${site.name} · ${site.url}` : site.name)}</option>`).join('')}</select>
       <label for="report-confluence-space">Confluence 공간</label><select id="report-confluence-space" disabled></select><button id="report-spaces-more" class="secondary" hidden>공간 더 보기</button>
       <div class="dialog-actions"><button data-close>취소</button><button id="confirm-publish-report" class="primary" disabled>페이지 게시</button></div>`);
     const dialog = $('#modal'), site = $('#report-confluence-site'), spaces = $('#report-confluence-space'), confirm = $('#confirm-publish-report'), error = $('#report-publish-error'), more = $('#report-spaces-more');
+    site.value = sites.find(value => value.preferred)?.id || sites[0]?.id || '';
     let cursor = null, revision = 0, operation = null;
     async function loadSpaces(append = false) {
       const current = ++revision, cloud = site.value; confirm.disabled = true; spaces.disabled = true; more.disabled = true; error.hidden = true;

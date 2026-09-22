@@ -40,7 +40,7 @@ export async function atlFixture(h) {
         if (body.grant_type === 'refresh_token') {
           if (state.rejectRefresh || body.refresh_token !== state.refresh) return send({ error: 'invalid_grant' }, 400);
           state.revision++; state.refresh = `fixture-refresh-${state.revision}`; state.access = `fixture-access-${state.revision}`;
-          await new Promise(resolve => setTimeout(resolve, 40));
+          await new Promise(resolve => setTimeout(resolve, state.refreshDelay || 40));
         } else assert.equal(body.code, 'fixture-code');
         return send({ access_token: state.access, refresh_token: state.refresh, expires_in: 3600 });
       }
@@ -50,9 +50,9 @@ export async function atlFixture(h) {
       if (url.pathname === '/oauth/token/accessible-resources') {
         state.resourceCalls = (state.resourceCalls || 0) + 1;
         if (state.resourceDelayAt === state.resourceCalls) await new Promise(resolve => setTimeout(resolve, state.resourceDelay || 250));
-        return send([{ id: 'cloud-test', name: 'Fixture 팀', url: 'https://fixture.atlassian.net', scopes: state.scopes }]);
+        return send(state.resources || [{ id: 'cloud-test', name: 'Fixture 팀', url: 'https://fixture.atlassian.net', scopes: state.scopes }]);
       }
-      if (url.pathname === '/ex/jira/cloud-test/rest/api/3/myself') {
+      if (/^\/ex\/jira\/[a-zA-Z0-9-]+\/rest\/api\/3\/myself$/.test(url.pathname)) {
         assert.equal(req.method, 'GET');
         const user = structuredClone(state.user);
         if (state.myselfDelay) await new Promise(resolve => setTimeout(resolve, state.myselfDelay));

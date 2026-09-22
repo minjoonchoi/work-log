@@ -13,11 +13,29 @@ const clientId = value => {
   assert(typeof value === 'string' && value.trim() && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value), 'Client ID를 확인하세요.');
   return value.trim();
 };
+const siteUrl = value => {
+  assert(typeof value === 'string' && value.length <= 2048 && !/[\u0000-\u001f\u007f]/.test(value), '회사 Jira 사이트 주소를 확인하세요.');
+  const input = value.trim(); if (!input) return null;
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(input) ? input : `https://${input}`;
+  let url;
+  try { url = new URL(candidate); }
+  catch { assert(false, '회사 Jira 사이트 주소를 확인하세요.'); }
+  assert(url.protocol === 'https:' && !url.username && !url.password && !url.port && !url.search && !url.hash
+    && url.pathname === '/' && url.hostname.endsWith('.atlassian.net')
+    && url.hostname.split('.').every(label => /^[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?$/i.test(label))
+    && /^https:\/\/[^/?#@\\]+\/?$/i.test(candidate), 'https://회사명.atlassian.net 형식의 사이트 주소를 입력하세요. 경로·계정·비표준 포트는 넣지 마세요.');
+  return url.origin;
+};
+// Site selection is a preference, not part of the OAuth client identity. Keep
+// this exact legacy shape so existing token digests remain valid.
+const oauthConfiguration = config => config && ({ client_id: config.client_id, credential_version: config.credential_version });
+const publicConfiguration = config => ({ client_id: config.client_id, ...(config.site_url ? { site_url: config.site_url } : {}) });
 const configuration = input => {
   assert(input && typeof input === 'object' && !Array.isArray(input)
-    && Object.keys(input).every(k => ['client_id', 'credential_version'].includes(k))
+    && Object.keys(input).every(k => ['client_id', 'credential_version', 'site_url'].includes(k))
     && typeof input.credential_version === 'string' && /^[a-f0-9]{32}$/.test(input.credential_version), 'Atlassian 연결 설정을 다시 저장하세요.');
-  return { client_id: clientId(input.client_id), credential_version: input.credential_version };
+  const site = input.site_url === undefined ? null : siteUrl(input.site_url);
+  return { client_id: clientId(input.client_id), credential_version: input.credential_version, ...(site ? { site_url: site } : {}) };
 };
 const sameState = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const error = (message, status = 400, code) => Object.assign(new Error(message), { status, code });
@@ -28,7 +46,7 @@ export class AtlassianClient {
     this.credentials = credentials; this.tokens = tokens; this.onChange = onChange;
     this.authOrigin = authOrigin; this.apiOrigin = apiOrigin; this.callback = callback;
     this.mutations = Promise.resolve(); this.flow = null; this.listener = null; this.flowError = null; this.legacyConfig = false;
-    this.authorizationGeneration = 0;
+    this.authorizationGeneration = 0; this.siteGeneration = 0;
   }
   config() {
     this.legacyConfig = false;
@@ -45,14 +63,14 @@ export class AtlassianClient {
   status() { return this.exclusive(() => this.statusValue()); }
   async statusValue() {
     const config = this.config();
-    const result = { config: config ? { client_id: config.client_id } : null, has_client_secret: false,
-      callback_url: this.callback, connected: false, connecting: !!this.flow && json(this.flow.config) === json(config), scopes: ATLASSIAN_SCOPES,
+    const result = { config: config ? publicConfiguration(config) : null, has_client_secret: false,
+      callback_url: this.callback, connected: false, connecting: !!this.flow && json(oauthConfiguration(this.flow.config)) === json(oauthConfiguration(config)), scopes: ATLASSIAN_SCOPES,
       message: this.legacyConfig ? '기존 1Password 설정은 더 이상 사용하지 않습니다. Client ID와 Client Secret을 입력해 다시 저장하세요.' : this.flowError };
     if (!config) return result;
     try {
       await this.credentials.read(config); result.has_client_secret = true;
       const record = await this.tokens.read();
-      result.connected = !!record?.refresh_token && record.config_digest === digest(json(config));
+      result.connected = !!record?.refresh_token && record.config_digest === digest(json(oauthConfiguration(config)));
       result.expires_at = result.connected ? new Date(record.expires_at).toISOString() : null;
       result.needs_reconnect = !!record && !result.connected;
     } catch (e) { result.message = e.message; }
@@ -61,11 +79,12 @@ export class AtlassianClient {
   save(input) {
     return this.exclusive(async () => {
       assert(input && typeof input === 'object' && !Array.isArray(input)
-        && Object.keys(input).every(k => ['client_id', 'client_secret'].includes(k)), 'Client ID와 Client Secret만 입력하세요.');
+        && Object.keys(input).every(k => ['client_id', 'client_secret', 'site_url'].includes(k)), 'Client ID·Client Secret·회사 Jira 사이트만 입력하세요.');
       const client_id = clientId(input.client_id);
       assert(input.client_secret === undefined || (typeof input.client_secret === 'string' && input.client_secret.length <= 4096
         && !/[\u0000-\u001f\u007f]/.test(input.client_secret)), 'Client Secret을 확인하세요.');
       const supplied = input.client_secret?.trim() ? input.client_secret : null, current = this.config();
+      const site = Object.hasOwn(input, 'site_url') ? siteUrl(input.site_url) : current?.site_url || null;
       assert(supplied || current?.client_id === client_id, '처음 저장하거나 Client ID를 변경할 때는 Client Secret을 입력하세요.');
       const previous = await this.credentials.stored();
       const matches = current && previous?.client_id === current.client_id && previous.credential_version === current.credential_version
@@ -74,19 +93,26 @@ export class AtlassianClient {
       assert(supplied || matches, '저장된 Client Secret을 확인할 수 없습니다. 다시 입력하세요.');
       const client_secret = supplied || previous.client_secret;
       if (current?.client_id === client_id && matches && sameState(previous.client_secret, client_secret)) {
-        return { config: { client_id }, has_client_secret: true };
+        const value = { ...oauthConfiguration(current), ...(site ? { site_url: site } : {}) };
+        if ((current.site_url || null) !== site) {
+          try { atomic(this.file, JSON.stringify(value, null, 2)); }
+          catch { throw error('회사 Jira 사이트 설정을 저장하지 못했습니다. 로컬 저장 경로를 확인하세요.', 503); }
+          this.siteGeneration++; this.onChange();
+        }
+        return { config: publicConfiguration(value), has_client_secret: true };
       }
-      const value = { client_id, credential_version: crypto.randomBytes(16).toString('hex') };
+      const value = { client_id, credential_version: crypto.randomBytes(16).toString('hex'), ...(site ? { site_url: site } : {}) };
       try {
-        await this.credentials.write({ ...value, client_secret });
+        await this.credentials.write({ ...oauthConfiguration(value), client_secret });
         atomic(this.file, JSON.stringify(value, null, 2));
       } catch {
         try { if (previous) await this.credentials.write(previous); else await this.credentials.remove(); }
         catch { this.close(); throw error('Keychain 자격증명 저장 상태를 확인할 수 없습니다. Client ID와 Client Secret을 다시 저장하세요.', 503); }
         throw error('Atlassian 연결 설정을 저장하지 못했습니다. Keychain 접근 권한과 로컬 저장 경로를 확인하세요.', 503);
       }
+      if ((current?.site_url || null) !== site) this.siteGeneration++;
       this.close(); this.flowError = null; this.onChange();
-      return { config: { client_id }, has_client_secret: true };
+      return { config: publicConfiguration(value), has_client_secret: true };
     });
   }
   clientSecret(input) {
@@ -139,7 +165,7 @@ export class AtlassianClient {
         // the mutation queue. Its unchanged client configuration is not consent.
         const current = () => assert(this.authorizationGeneration === generation, '취소되었거나 대체된 OAuth 연결입니다. 다시 연결하세요.', 409);
         current();
-        assert(json(this.config()) === json(flow.config), '연결 중 설정이 변경되었습니다. 다시 연결하세요.');
+        assert(json(oauthConfiguration(this.config())) === json(oauthConfiguration(flow.config)), '연결 중 설정이 변경되었습니다. 다시 연결하세요.');
         const saved = await this.credentials.read(flow.config);
         current();
         assert(sameState(saved.client_secret, flow.credentials.client_secret), '연결 중 자격증명이 변경되었습니다. 다시 연결하세요.', 409);
@@ -168,7 +194,7 @@ export class AtlassianClient {
   async saveTokens(data, config, clientId) {
     assert(typeof data.access_token === 'string' && data.access_token && typeof data.refresh_token === 'string' && data.refresh_token && Number.isFinite(data.expires_in) && data.expires_in > 0, 'Atlassian 토큰과 offline_access 권한을 확인하세요.', 502);
     const record = { access_token: data.access_token, refresh_token: data.refresh_token, expires_at: Date.now() + data.expires_in * 1000,
-      config_digest: digest(json(config)), client_digest: digest(clientId) };
+      config_digest: digest(json(oauthConfiguration(config))), client_digest: digest(clientId) };
     // Access and rotating refresh tokens are replaced together, in one Keychain item.
     await this.tokens.write(record); this.onChange(); return record;
   }
@@ -178,7 +204,7 @@ export class AtlassianClient {
     return this.exclusive(async () => {
       const config = this.config(); assert(config, 'Client ID와 Client Secret을 저장하고 Atlassian OAuth를 연결하세요.', 401);
       const credentials = await this.credentials.read(config), record = await this.tokens.read();
-      assert(record?.refresh_token && record.config_digest === digest(json(config))
+      assert(record?.refresh_token && record.config_digest === digest(json(oauthConfiguration(config)))
         && record.client_digest === digest(credentials.client_id), 'Atlassian OAuth를 다시 연결하세요.', 401);
       if (rejectedToken ? record.access_token !== rejectedToken : record.expires_at > Date.now() + 60000) return record.access_token;
       try {
@@ -224,6 +250,22 @@ export class AtlassianClient {
     const rows = await this.request('/oauth/token/accessible-resources');
     assert(Array.isArray(rows), 'Atlassian 사이트 응답을 확인하세요.', 502);
     return rows.map(({ id, name, url, scopes }) => ({ id, name, url, scopes }));
+  }
+  async selectableSites(product = 'jira') {
+    assert(['jira', 'confluence'].includes(product), 'Jira 또는 Confluence 사이트를 선택하세요.');
+    const configured = this.config()?.site_url || null, generation = this.siteGeneration, authorization = this.authorizationGeneration;
+    const resources = await this.resources();
+    assert((this.config()?.site_url || null) === configured && this.siteGeneration === generation
+      && this.authorizationGeneration === authorization, '사이트 또는 연결 설정이 변경되었습니다. 사이트 목록을 다시 불러오세요.', 409);
+    const permission = product === 'jira' ? 'read:jira-work' : 'read:page:confluence';
+    const available = resources.filter(site => Array.isArray(site.scopes) && site.scopes.includes(permission));
+    if (!configured) return available;
+    const preferred = available.find(site => {
+      try { const url = new URL(site.url); return !url.username && !url.password && url.origin === configured; }
+      catch { return false; }
+    });
+    assert(preferred, `설정한 회사 사이트에 ${product === 'jira' ? 'Jira' : 'Confluence'} 접근 권한이 없습니다. 사이트 주소와 연결 계정을 확인하세요.`, 403);
+    return [{ ...preferred, preferred: true }, ...available.filter(site => site !== preferred)];
   }
   async site(cloudId, product) {
     assert(typeof cloudId === 'string' && /^[a-zA-Z0-9-]+$/.test(cloudId), 'Atlassian 사이트를 선택하세요.');
@@ -409,9 +451,9 @@ export class AtlassianClient {
   async createJiraIssue({ cloud_id, project, issue_type, title, description, operation_id, work_item_id }, { beforeSend } = {}) {
     let site, accountId, identityToken, observedToken, authorization;
     try {
-      const generation = this.authorizationGeneration, config = json(this.config());
+      const generation = this.authorizationGeneration, config = json(oauthConfiguration(this.config()));
       authorization = token => {
-        assert(this.authorizationGeneration === generation && json(this.config()) === config
+        assert(this.authorizationGeneration === generation && json(oauthConfiguration(this.config())) === config
           && (!identityToken || sameState(token, identityToken)), 'Jira 생성 중 Atlassian 인증이 변경되었습니다. 현재 계정을 확인하고 다시 시도하세요.', 409);
         observedToken = token;
       };

@@ -61,9 +61,9 @@ export function jiraUI({ api, esc, modal, toast, refresh, absoluteTime, openExte
   }
   async function existing(data) {
     if (!(await api('/integrations/atlassian')).connected) return showSettings();
-    const sites = (await api('/integrations/atlassian/sites')).filter(s => s.scopes?.includes('read:jira-work'));
+    const sites = (await api('/integrations/atlassian/sites?product=jira')).filter(s => s.scopes?.includes('read:jira-work'));
     modal(`<h2>기존 Jira 이슈 연결</h2><p>이슈 키 또는 제목으로 검색하고 연결할 이슈를 선택하세요.</p><div id="dialog-error" class="error" role="alert" hidden></div>
-      <label for="existing-site">Jira 사이트</label><select id="existing-site">${sites.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>
+      <label for="existing-site">Jira 사이트</label><select id="existing-site">${sites.map(s => `<option value="${esc(s.id)}">${esc(s.url ? `${s.name} · ${s.url}` : s.name)}</option>`).join('')}</select>
       <label for="existing-key">이슈 키 또는 제목</label><div class="jira-lookup"><input id="existing-key" maxlength="1000" placeholder="예: TEAM-123, 권한 관리 · URL도 가능" autocomplete="off"><button id="lookup-jira" class="secondary" ${sites.length ? '' : 'disabled'}>검색</button></div>
       <p id="jira-search-status" class="help" role="status">접근할 수 있는 이슈를 검색합니다.</p>
       <div id="jira-search-results" class="jira-search-results" role="radiogroup" aria-label="연결할 Jira 이슈" hidden></div>
@@ -73,6 +73,7 @@ export function jiraUI({ api, esc, modal, toast, refresh, absoluteTime, openExte
       <div class="dialog-actions"><button data-close>취소</button><button id="confirm-link-jira" class="primary" disabled>이슈 연결</button></div>`);
     const dialog = $('#modal'), input = $('#existing-key'), site = $('#existing-site'), results = $('#jira-search-results'), confirm = $('#confirm-link-jira'), lookup = $('#lookup-jira'), error = $('#dialog-error');
     const status = $('#jira-search-status'), more = $('#more-jira-results'), selection = $('#jira-selection');
+    site.value = sites.find(value => value.preferred)?.id || sites[0]?.id || '';
     let revision = 0, found = null, rows = [], next = null, controller, search = null;
     const fail = e => { error.textContent = e.message; error.hidden = false; };
     const invalidate = () => {

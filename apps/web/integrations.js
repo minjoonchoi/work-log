@@ -33,6 +33,8 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     if (ticket !== opening) return;
     modal(`<h2>Atlassian 연결 설정</h2><p>Jira 연결은 선택 사항입니다. 업무·세션 이력·요약·유형 태그는 연결 없이 로컬에서 사용할 수 있습니다.</p><p>Atlassian OAuth 앱의 Client ID와 Client Secret을 입력하세요.</p>
       <div id="dialog-error" class="error" role="alert" hidden></div>
+      <label for="atlassian-site-url">Atlassian 사이트 주소</label><input id="atlassian-site-url" maxlength="300" placeholder="https://company.atlassian.net" autocomplete="url" spellcheck="false" aria-describedby="atlassian-site-help" value="${esc(s.config?.site_url || '')}">
+      <p id="atlassian-site-help" class="help">선택 사항입니다. 회사 Jira·Confluence 사이트를 기본으로 선택합니다. 비워 두면 연결된 사이트 중에서 선택할 수 있습니다.</p>
       <label for="atlassian-client-id">Client ID</label><input id="atlassian-client-id" maxlength="200" autocomplete="off" spellcheck="false" value="${esc(s.config?.client_id || '')}">
       <label for="atlassian-client-secret">Client Secret</label><div class="credential-field"><input id="atlassian-client-secret" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false" aria-describedby="client-secret-help"><button id="toggle-client-secret" type="button" class="secondary" aria-controls="atlassian-client-secret" aria-pressed="false" aria-label="Client Secret 보기">보기</button></div>
       <p id="client-secret-help" class="help">Client Secret은 macOS Keychain에 보관합니다. 같은 Client ID에서 비워 두면 저장된 값을 유지합니다.</p>
@@ -42,7 +44,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       <div class="settings-actions"><button id="save-atlassian" class="secondary">설정 저장</button><button id="connect-atlassian" class="primary">Atlassian 연결</button><button id="disconnect-atlassian" class="secondary">연결 해제</button></div>
       <details class="service-details"><summary>로컬 서비스 상태</summary><p>관리: 연결됨 · 실행: ${health.runtime_connected ? '연결됨' : '연결 대기'}<br>수집 이벤트 ${health.events}개 · 미확인 출력 ${health.unresolved}개<br>버전 ${esc(health.version)}</p></details>
       <div class="dialog-actions"><button data-close>닫기</button></div>`);
-    const dialog = $('#modal'), client = $('#atlassian-client-id'), secret = $('#atlassian-client-secret'), toggle = $('#toggle-client-secret');
+    const dialog = $('#modal'), client = $('#atlassian-client-id'), secret = $('#atlassian-client-secret'), toggle = $('#toggle-client-secret'), site = $('#atlassian-site-url');
     let config = s.config, hasSecret = !!s.has_client_secret, origin = null, revision = 0, revealing = 0, busy = false, disposed = false;
     const view = { status: $('#atlassian-status'), active: () => !disposed && settings === view && dialog.open && client.isConnected,
       dispose: () => { disposed = true; clearSecret(); dialog.removeEventListener('close', closed); } };
@@ -56,16 +58,17 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     function closed() { if (settings === view) { opening++; clearSettings(); } }
     settings = view; dialog.addEventListener('close', closed); present();
     const currentError = e => { if (view.active()) fail(e); };
-    const dirty = () => client.value.trim() !== config?.client_id || (!!secret.value && origin !== 'stored');
+    const dirty = () => client.value.trim() !== config?.client_id || site.value.trim() !== (config?.site_url || '') || (!!secret.value && origin !== 'stored');
     const withBusy = fn => async () => {
       if (busy || !view.active()) return;
       busy = true; revealing++;
-      const controls = [client, secret, toggle, $('#save-atlassian'), $('#connect-atlassian'), $('#disconnect-atlassian')];
+      const controls = [client, secret, toggle, site, $('#save-atlassian'), $('#connect-atlassian'), $('#disconnect-atlassian')];
       controls.forEach(control => control.disabled = true);
       try { await fn(); } catch (e) { currentError(e); }
       finally { busy = false; if (view.active()) { controls.forEach(control => control.disabled = false); present(); } }
     };
     client.oninput = () => { clearSecret(); $('#dialog-error').hidden = true; };
+    site.oninput = () => { $('#dialog-error').hidden = true; };
     secret.oninput = () => { revision++; revealing++; origin = secret.value ? 'typed' : null; toggle.disabled = busy; present(); };
     toggle.onclick = async () => {
       if (!view.active() || busy) return;
@@ -87,9 +90,10 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       if (!clientId) throw new Error('Client ID를 입력하세요.');
       if (!newSecret && (!hasSecret || clientId !== config?.client_id)) throw new Error('이 Client ID의 Client Secret을 입력하세요.');
       secret.type = 'password'; present();
-      const saved = await api('/integrations/atlassian', { method: 'PUT', body: { client_id: clientId, ...(newSecret ? { client_secret: newSecret } : {}) } });
+      const saved = await api('/integrations/atlassian', { method: 'PUT', body: { client_id: clientId, ...(newSecret ? { client_secret: newSecret } : {}),
+        ...(site.value.trim() !== (config?.site_url || '') ? { site_url: site.value.trim() } : {}) } });
       if (!view.active()) return false;
-      config = saved.config; hasSecret = saved.has_client_secret ?? !!(newSecret || hasSecret); client.value = config.client_id;
+      config = saved.config; hasSecret = saved.has_client_secret ?? !!(newSecret || hasSecret); client.value = config.client_id; site.value = config.site_url || '';
       clearSecret(); $('#dialog-error').hidden = true; return true;
     };
     $('#save-atlassian').onclick = withBusy(async () => { if (await save()) { toast('연결 설정을 저장했습니다.'); await pollSettings(); } });
@@ -120,15 +124,19 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
   async function createIssue(data) {
     const status = await api('/integrations/atlassian');
     if (!status.connected) return showSettings();
-    const sites = (await api('/integrations/atlassian/sites')).filter(s => s.scopes?.includes('write:jira-work'));
+    const availableSites = await api('/integrations/atlassian/sites?product=jira');
+    const preferred = availableSites.find(site => site.preferred);
+    if (preferred && !preferred.scopes?.includes('write:jira-work')) throw new Error('설정한 Atlassian 사이트에 Jira 쓰기 권한이 없습니다. 연결 권한을 확인하세요.');
+    const sites = availableSites.filter(site => site.scopes?.includes('write:jira-work'));
     const { item } = data;
     modal(`<h2>Jira 티켓 만들기</h2><p>아래 제목과 설명을 그대로 Jira 티켓에 사용합니다.</p><div id="dialog-error" class="error" role="alert" hidden></div>
-      <label for="jira-site">Jira 사이트</label><select id="jira-site">${sites.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>
+      <label for="jira-site">Jira 사이트</label><select id="jira-site">${sites.map(s => `<option value="${esc(s.id)}">${esc(s.url ? `${s.name} · ${s.url}` : s.name)}</option>`).join('')}</select>
       <label for="jira-project">프로젝트</label><select id="jira-project"></select>
       <label for="jira-type">티켓 유형</label><select id="jira-type"></select>
       <div class="jira-preview"><strong>${esc(item.title)}</strong><div class="work-item-description">${descriptionHTML(item.description, esc)}</div></div>
       <p class="help">생성 후 종료된 세션의 요약과 관측 시간을 Jira 업무 로그로 자동 동기화합니다.</p>
       <div class="dialog-actions"><button data-close>취소</button><button id="confirm-jira" class="primary" disabled>Jira 티켓 만들기</button></div>`);
+    $('#jira-site').value = preferred?.id || sites[0]?.id || '';
     let loading = 0;
     async function types() {
       const current = ++loading; $('#confirm-jira').disabled = true;

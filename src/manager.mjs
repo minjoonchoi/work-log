@@ -147,7 +147,11 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (p === '/api/integrations/atlassian/client-secret' && req.method === 'POST') return atlassian.clientSecret(await body(req));
     if (p === '/api/integrations/atlassian' && req.method === 'DELETE') return atlassian.disconnect();
     if (p === '/api/integrations/atlassian/authorize' && req.method === 'POST') return atlassian.begin();
-    if (p === '/api/integrations/atlassian/sites' && req.method === 'GET') return atlassian.resources();
+    if (p === '/api/integrations/atlassian/sites' && req.method === 'GET') {
+      assert([...url.searchParams.keys()].every(key => key === 'product') && url.searchParams.getAll('product').length <= 1,
+        '사이트 조회 조건을 확인하세요.');
+      return atlassian.selectableSites(url.searchParams.get('product') ?? 'jira');
+    }
     if (p === '/api/integrations/atlassian/confluence-spaces' && req.method === 'GET') return atlassian.confluenceSpaces(url.searchParams.get('cloud_id'), url.searchParams.get('cursor'));
     if (p === '/api/integrations/atlassian/projects' && req.method === 'GET') return atlassian.jiraProjects(url.searchParams.get('cloud_id'));
     if (p === '/api/integrations/atlassian/issue-types' && req.method === 'GET') return atlassian.jiraIssueTypes(url.searchParams.get('cloud_id'), url.searchParams.get('project'));

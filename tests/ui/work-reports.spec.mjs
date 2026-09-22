@@ -217,7 +217,7 @@ test('late Confluence sites and partial-report responses cannot replace a newer 
   await h.ingest(Array.from({ length: 101 }, (_, index) => sample(`report-modal-${index}`, '2026-09-17', `부분 요약의 근거 ${index}`)).flat());
   await createLocal(page); await authorize(h);
   for (const scenario of [
-    { glob: '**/api/integrations/atlassian/sites', trigger: '#publish-report' },
+    { glob: '**/api/integrations/atlassian/sites?product=confluence', trigger: '#publish-report' },
     { glob: '**/api/reports/*/parts/*', trigger: '#report-detail .report-reference[data-reference-kind="part"]' }
   ]) {
     let release, received = false;
@@ -230,7 +230,7 @@ test('late Confluence sites and partial-report responses cannot replace a newer 
       await page.locator('#automation-settings').click();
       const dialog = page.getByRole('dialog'), heading = dialog.getByRole('heading', { name: '자동 작성 설정', exact: true });
       await expect(heading).toBeVisible(); await dialog.getByLabel('에이전트 응답 수').fill('13');
-      const finished = page.waitForResponse(response => scenario.glob.includes('/parts/') ? new URL(response.url()).pathname.includes('/parts/') : response.url().endsWith('/api/integrations/atlassian/sites'));
+      const finished = page.waitForResponse(response => scenario.glob.includes('/parts/') ? new URL(response.url()).pathname.includes('/parts/') : new URL(response.url()).pathname === '/api/integrations/atlassian/sites');
       release(); await (await finished).finished();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       await expect(heading).toBeVisible(); await expect(dialog.getByLabel('에이전트 응답 수')).toHaveValue('13');
