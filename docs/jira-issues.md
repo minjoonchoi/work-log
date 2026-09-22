@@ -4,7 +4,7 @@
 
 ## 사용자 흐름
 
-Work item 상세의 **Jira 이슈** 영역에서 **새 이슈 만들기** 또는 **기존 이슈 연결**을 선택한다. 새 이슈는 저장된 work item 제목·설명을 사용하며 설명의 Markdown 구조를 Jira 서식으로 변환한다. 기존 이슈는 사이트를 선택하고 **완전한 이슈 키(`TEAM-123`) 또는 제목**으로 검색한다. 같은 사이트의 `/browse/TEAM-123` URL도 지원한다. 결과 목록에서 키·제목·상태를 비교해 하나를 선택한 뒤 **이슈 연결**을 누른다. 검색·선택만으로 연결하거나 업무 로그를 전송하지 않는다. 연결은 기존 Jira 이슈의 제목·설명과 work item 메타데이터를 수정하지 않는다.
+Work item 상세의 **Jira 이슈** 영역에서 **새 이슈 만들기** 또는 **기존 이슈 연결**을 선택한다. 새 이슈는 저장된 work item 제목·설명을 사용하며 Jira wiki 설명의 구역·목록·본문을 ADF로 변환한다. 기존 Markdown·평문도 계속 지원한다. 기존 이슈는 사이트를 선택하고 **완전한 이슈 키(`TEAM-123`) 또는 제목**으로 검색한다. 같은 사이트의 `/browse/TEAM-123` URL도 지원한다. 결과 목록에서 키·제목·상태를 비교해 하나를 선택한 뒤 **이슈 연결**을 누른다. 검색·선택만으로 연결하거나 업무 로그를 전송하지 않는다. 연결은 기존 Jira 이슈의 제목·설명과 work item 메타데이터를 수정하지 않는다.
 
 제목 검색은 관리 서비스의 `AtlassianClient.searchIssues`가 Jira REST API를 감싸 처리한다. GUI에는 JQL·인증 토큰·외부 API 주소를 전달하지 않는다. 제목의 단어마다 접두어 검색 조건을 결합하며, 구두점은 단어 경계로 처리한다. 실제 검색 일치는 Jira 색인·언어 분석에 따른다. 사용자 문자열을 JQL로 직접 실행하지 않는다. 한 번에 최대 20개를 반환하고 Jira의 `nextPageToken`으로 **더 보기**를 제공한다. 검색 총건수는 추정하지 않는다.
 
@@ -20,24 +20,30 @@ GUI에서 검색어·사이트를 변경하면 기존 선택과 다음 페이지
 
 ## 설명 형식과 Jira 문서 변환
 
-Work item의 설명은 계속 문자열로 저장한다. 생성·재작성 결과는 `## 작업 배경`, `## 목적`, `## 범위`, `## 결과`의 Markdown 제목 아래에 근거 있는 내용과 필요한 목록을 둔다. 이전 설명을 자동으로 재작성하거나 이미 연결된 Jira 이슈를 조회만으로 변경하지 않는다.
+Work item의 새 생성·재작성 설명은 편집 가능한 Jira wiki 문자열을 기준으로 저장한다. `h2. 배경`, `h2. 목표`, `h2. 요구사항`, `h2. 작업 범위`, `h2. 참고사항`의 다섯 구역을 이 순서로 두고 목록 항목은 `* `로 시작한다. 주요 결과·검증 근거는 원문에 제공된 내용을 참고사항에 정리하며 별도 결과 구역을 추가하지 않는다. 확인할 수 없는 사실은 `미확인`으로 표시한다. 새 실행의 고정 형식 계약과 기존 로컬 지시문 보존은 [재작성 문서](on-demand-writing.md)를 따른다.
 
-Jira REST v3의 이슈 `description`은 문자열을 그대로 보내는 대신 Atlassian Document Format(ADF)으로 전송한다. 생성과 제목·설명 반영은 같은 `jiraDescription` 변환기를 사용한다. ADF는 `doc` 아래에 제목·문단·목록을 순서대로 담는 JSON 문서다. [Jira REST v3](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro), [ADF 구조](https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/)
+GUI 상세·미리보기는 구역과 목록을 렌더링하고 편집창은 Jira wiki 원문을 유지한다. 기존 Markdown·평문 설명을 DB에서 자동 변환하지 않으며 직접 편집한 내용도 보존한다. 이전 설명을 자동으로 재작성하거나 이미 연결된 Jira 이슈를 조회만으로 변경하지 않는다.
+
+Jira Cloud REST v3의 이슈 생성·수정은 저장된 제목을 `fields.summary`에, 설명을 Atlassian Document Format(ADF) 문서로 변환해 `fields.description`에 전송한다. Jira wiki 문자열을 `description`에 그대로 보내지 않는다. 생성과 제목·설명 반영은 같은 `jiraDescription` 변환기를 사용해 내용과 구역·목록의 순서를 보존한다. ADF는 `doc` 아래에 제목·문단·목록을 담는 JSON 문서이며 전송을 위해 변환해도 로컬 원문은 바뀌지 않는다. [Jira Cloud 이슈 생성·수정 API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/), [ADF 구조](https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/)
 
 | 설명 원문 | Jira 표현 |
 |---|---|
-| `#`~`######` 제목 | `heading`, 해당 `attrs.level` |
+| Jira wiki의 `h2. 배경` 등 다섯 구역 | `heading`, `attrs.level=2` |
+| Jira wiki의 `* ` 목록 | `bulletList` 안의 `listItem` |
+| Jira wiki의 `*강조*`, `{{코드}}` | `strong`, `code` 텍스트 mark |
+| Jira wiki의 `[표시\|https://example.com]` | 허용된 `http`·`https` 주소의 `link` mark |
+| 기존 Markdown의 `#`~`######` 제목 | `heading`, 해당 `attrs.level` |
 | 일반 문장·줄바꿈 | `paragraph`, `text`, `hardBreak` |
-| `-`, `*`, `+`의 연속된 한 단계 목록 | `bulletList` 안의 `listItem` |
-| `1.` 또는 `1)` 형식의 연속된 한 단계 목록 | 시작 번호를 보존하는 `orderedList` |
-| `**강조**` | `strong` 텍스트 mark |
-| `[표시](https://example.com)` | `http`·`https` 주소만 허용하는 `link` mark |
+| 기존 Markdown의 `-`, `*`, `+` 연속 한 단계 목록 | `bulletList` 안의 `listItem` |
+| 기존 Markdown의 `1.` 또는 `1)` 연속 한 단계 목록 | 시작 번호를 보존하는 `orderedList` |
+| 기존 Markdown의 `**강조**` | `strong` 텍스트 mark |
+| 기존 Markdown의 `[표시](https://example.com)` | `http`·`https` 주소만 허용하는 `link` mark |
 
 제목과 목록의 문법은 [heading](https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/heading/), [bulletList](https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/bulletList/), [orderedList](https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/orderedList/) 규약을 따른다. 링크는 [link mark](https://developer.atlassian.com/cloud/jira/platform/apis/document/marks/link/)로 표현한다.
 
-HTML·이미지·중첩 목록·표 등 지원하지 않는 구문은 문자로 남긴다. 코드 펜스 안의 내용도 제목·목록으로 재해석하지 않는다. `javascript:`·`data:` 링크나 인증 정보가 포함된 URL은 링크로 만들지 않는다. 기존 일반 텍스트 설명은 문장과 개행을 유지한다. Markdown 전체를 지원하는 편집기나 HTML 변환기로 취급하지 않는다.
+HTML·이미지·중첩 목록·표 등 지원하지 않는 구문은 문자로 남긴다. 코드 펜스 안의 내용도 제목·목록으로 재해석하지 않는다. `javascript:`·`data:` 링크나 인증 정보가 포함된 URL은 링크로 만들지 않는다. 기존 일반 텍스트 설명은 문장과 개행을 유지한다. Jira wiki나 Markdown 전체를 지원하는 편집기 또는 HTML 변환기로 취급하지 않는다.
 
-세션 업무 로그의 댓글은 별도의 `plainTextADF`를 사용한다. 제목 한 줄과 최대 다섯 줄 요약이라는 기존 계약, 문자와 줄바꿈을 보존하며 설명의 Markdown 서식 변환을 적용하지 않는다.
+세션 업무 로그의 댓글은 별도의 `plainTextADF`를 사용한다. 제목 한 줄과 최대 다섯 줄 요약이라는 기존 계약, 문자와 줄바꿈을 보존하며 업무 설명의 Jira wiki 구역 형식으로 바꾸지 않는다. 세션 요약과 캘린더 업무 요약 보고서의 생성 형식도 유지한다.
 
 반영 요청은 로컬 work item의 버전과 미리보기 시점 Jira의 `updated`를 보낸다. 서비스는 최신 원격 버전을 조회하고 실제 전송 직전에도 로컬 식별자·버전을 확인한다. 중간 편집이나 병합, 이미 확인된 원격 변경이 있으면 전송을 거절한다. Jira 읽기와 PUT은 하나의 원자적 비교·교환이 아니므로, 원격 조회 뒤 PUT 직전 다른 사용자가 수정하는 경우까지 배제하지는 못한다.
 
@@ -47,6 +53,7 @@ HTML·이미지·중첩 목록·표 등 지원하지 않는 구문은 문자로 
 
 | 동작 | Jira REST API |
 |---|---|
+| 새 이슈 생성 | `POST /rest/api/3/issue`, `fields.summary`, `fields.description`(ADF) |
 | 제목 검색·다음 페이지 | `GET /rest/api/3/search/jql`, `jql`, `maxResults=20`, `nextPageToken` |
 | 제목·상태·수정 버전 | `GET /rest/api/3/issue/{id}?fields=summary,status,updated` |
 | 제목·구조화 설명 반영 | `PUT /rest/api/3/issue/{id}`, `fields.summary`, `fields.description`(ADF), 성공 `204` |
@@ -61,6 +68,18 @@ HTML·이미지·중첩 목록·표 등 지원하지 않는 구문은 문자로 
 
 변경 전 최신 상태·수정 시각·허용 전환을 다시 조회한다. GUI가 선택한 기준과 다르면 전송하지 않고 최신 상태에서 다시 선택하게 한다. 이 검사는 Jira의 조건부 원자적 쓰기를 뜻하지 않는다. 조회와 POST 사이의 외부 변경은 Jira 워크플로 검증과 최종 재조회로 확인한다.
 
+## 완료 결과 댓글
+
+연결된 이슈의 `제목·설명 반영` 버튼은 현재 로컬 제목·본문을 미리보기로 확인하고 원격 이슈에 반영한다. Jira wiki 원문과 화면의 구조를 같은 ADF로 변환하며, 결과 댓글과 업무 로그는 설명에 합치지 않는다.
+
+WorkLog에서 Jira가 반환한 대상 상태의 `statusCategory.key=done`인 전환을 선택하면, 성공한 상태 변경에 이어 `work-item.result.summarize`를 백그라운드로 실행한다. 상태 이름이 영어 Done인지 여부로 판단하지 않는다. 상태 변경 요청 시점의 해당 work item에 연결된 사용자 에이전트 세션 원본 입출력·유효한 요약을 고정한다. 제목·본문은 작업 맥락으로 사용하며, 내부 요약 worker의 대화를 수행 결과로 섞지 않는다.
+
+생성 결과는 확인된 수행 내용·산출물·검증 결과와 남은 제약을 간결한 한 문단으로 표현한다. 모델 호출 1회와 JSON·길이·단락 형식 검사를 수행한다. 실제 결과가 없으면 미확인으로 명시하며 Done 상태 자체를 작업 성공의 근거로 사용하지 않는다. 이 댓글은 `POST /rest/api/3/issue/{issueId}/comment`로 작성하는 일반 댓글이다. 각 세션의 시작 시각·작업 시간을 담는 `/worklog`와 별개다. [공식 댓글 API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/)
+
+상태 변경과 댓글 작성은 별도 결과다. 요약 또는 댓글 게시가 실패해도 성공한 Jira 상태 변경을 되돌리지 않는다. GUI에서 진행·생성 결과·실패 이유를 표시하고, 확정된 실패에만 다시 시도 버튼을 제공한다. 댓글 응답이 유실되거나 전송 중 서비스가 종료되면 `unknown`으로 보관하고 자동 재게시하지 않는다. 원격 댓글의 `work-log-result` 속성으로 동일 operation ID를 찾아야 게시를 확인한다. 조회 결과가 없더라도 접근 제한으로 보이지 않을 수 있으므로 미확인 상태를 유지한다. 댓글의 생성 완료를 로컬 업무 완료나 모델의 사실 검증으로 표현하지 않는다.
+
+`jira_result_comments`는 전환 operation·연결·고정 입력·입력 해시·생성 run·전송 상태·댓글 ID를 보관한다. 같은 전환 재요청과 서비스 재시작으로 댓글을 중복 생성하지 않는다. 실패한 재시도는 새 operation ID로 같은 스냅샷을 사용하고, 미확인 전송은 조회만 가능하다. 작업이 병합·삭제되거나 연결이 변경되면 기존 스냅샷의 게시를 중단한다. WorkLog 밖에서 이루어진 상태 변경은 댓글 생성 트리거가 아니다.
+
 ## 구조화 명령과 저장
 
 Jira 읽기·연결·상태 변경은 관리 계층의 명시적인 API 명령이다. 모델 판단이 필요하지 않으므로 헤드리스 텍스트 작업으로 만들지 않는다. 기존 제목·설명 및 세션 요약의 `text.rewrite` 계약은 유지한다.
@@ -74,6 +93,8 @@ Jira 읽기·연결·상태 변경은 관리 계층의 명시적인 API 명령�
 | `POST /api/jira-links/:operation/refresh` | 상태·허용 전환 새로고침 |
 | `POST /api/jira-links/:operation/transition` | 선택한 전환 수행 |
 | `POST /api/jira-links/:operation/content` | 확인한 work item 제목·설명을 연결된 Jira에 반영 |
+| `POST /api/jira-links/:operation/result-comment/retry` | 확정 실패한 완료 결과 댓글을 새 operation ID로 다시 작성·전송 |
+| `POST /api/jira-links/:operation/result-comment/reconcile` | 응답 미확인 댓글을 원격 operation marker로 조회 |
 
 기존 이슈 연결 요청:
 
@@ -128,9 +149,11 @@ Jira 읽기·연결·상태 변경은 관리 계층의 명시적인 API 명령�
 
 서비스 E2E는 `tests/e2e/jira-issues.test.mjs`, 브라우저 E2E는 `tests/ui/jira-issues.spec.mjs`, `tests/ui/jira-search.spec.mjs`에 있다. 키/URL 조회, 제목 검색·페이지 이동·접근 범위·특수문자, 연결의 동시성·멱등성, 제목 보존, 204 전환, 낡은 선택 거절, 추가 입력·권한 부족, 실패 조회·키 이동, 중복 클릭, 응답 유실·서비스 강제 종료·재개, 성공 후 조회 실패, 병합 후 독립 상태·업무 로그를 검증한다. GUI는 실제 링크의 href와 브라우저 열기 bridge, 검색 결과 선택·더 보기, 지연된 이전 응답 무시, 선택 보존, 상태 갱신, 실패 표시와 좁은 화면을 확인한다.
 
+`tests/e2e/result-summary.test.mjs`, `tests/e2e/jira-result-comments.test.mjs`, `tests/e2e/jira-identity-comments.test.mjs`는 완료 댓글의 생성 계약·전환 연계·중복 방지·복구 및 생성자 지정 경로를 검증한다.
+
 Atlassian·Keychain·요약 모델은 격리된 테스트 대역을 사용한다. 실제 계정의 권한·워크플로·외부 쓰기는 이 검증 결과에 포함하지 않는다. 이전 `op` 기반 자격증명 조회의 결과는 [과거 연동 검증 기록](verification-atlassian.md)으로 구분한다. macOS의 기본 브라우저 실행은 기존 NSWorkspace bridge를 재사용하며 브라우저 E2E는 bridge에 전달한 URL까지 확인한다.
 
-`tests/e2e/jira-description.test.mjs`는 실제 로컬 관리 서비스와 모의 Jira HTTP API를 연결해 생성·수정의 ADF 제목·목록·강조·링크, 기존 일반 텍스트, HTML과 위험한 링크의 문자 보존, 업무 로그 댓글의 원문 보존, 쓰기 권한·204·거절·응답 유실을 검증한다.
+`tests/e2e/jira-description.test.mjs`는 실제 로컬 관리 서비스와 모의 Jira HTTP API를 연결해 생성·수정의 ADF 제목·목록·강조·링크, 기존 일반 텍스트, HTML과 위험한 링크의 문자 보존, 업무 로그 댓글의 원문 보존, 쓰기 권한·204·거절·응답 유실을 검증한다. 새 Jira wiki 형식의 검증 대상에는 정확한 다섯 구역과 `* ` 목록의 ADF 변환, 생성·수정의 동일 본문 전달, 기존 Markdown·평문 원문 보존을 포함한다. 아래의 과거 회귀 결과와 이번 형식 변경의 검증 결과는 구분한다.
 
 `tests/e2e/jira-content.test.mjs`는 명시적 반영 전 외부 수정 없음, 동시·재시작 후 멱등성, 로컬·원격 버전 충돌, 검사·인증 중 편집과 병합, 응답 유실의 동일/상이 판정, 이슈 키 이동, 후속 읽기 실패, 전송 중 서비스 종료 복구를 검증한다.
 

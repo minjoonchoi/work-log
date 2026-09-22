@@ -9,6 +9,7 @@ import { validateSchema, canonicalJson } from './schema.mjs';
 import { nextStep } from './workflow.mjs';
 import { resolveTask } from './intake.mjs';
 import { executionSettings } from './execution-settings.mjs';
+import { taskDrafts } from './task-drafts.mjs';
 import { assertModelSelection } from './model-capabilities.mjs';
 import { planOrchestrator } from './plans.mjs';
 import { validateCodeInput } from './code-bundle.mjs';
@@ -18,7 +19,7 @@ import { normalizeWorkspace, snapshotInputFiles, executionInputDigest, materiali
 const dir = dataRoot(); lockService(dir, 'runtime');
 const { definitions, rules, responseSchema, taskTypes, workflows, profiles, executionProfiles, runSchema, requestSchema } = loadCatalog();
 const settings = executionSettings({ dir, jobs: definitions.jobs, workflows, profiles: executionProfiles });
-const runtimeDigest = digest([...['runtime', 'plans', 'review-policy', 'code-bundle', 'artifact-handoff', 'executor', 'execution-settings', 'model-capabilities', 'task-instruction', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite', 'work-report'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
+const runtimeDigest = digest([...['runtime', 'plans', 'review-policy', 'code-bundle', 'artifact-handoff', 'executor', 'execution-settings', 'task-drafts', 'task-type-draft', 'model-capabilities', 'task-instruction', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite', 'work-report', 'result-summary'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
   fs.readFileSync(path.join(ROOT, 'harness/model-capabilities.json'), 'utf8'),
   fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8')].join('\n'));
 const db = database(path.join(dir, 'runtime.sqlite'), `
@@ -46,12 +47,15 @@ function view(row) {
     evidence: db.prepare('SELECT file,content_digest,epoch FROM check_evidence WHERE run_id=? AND epoch=?').get(row.id, row.epoch) || null };
 }
 function emit(event) { db.prepare('INSERT INTO outbox(payload) VALUES(?)').run(json(event)); }
+// App setup has no user work item. Keep its run/attempt evidence in the runtime
+// without creating a synthetic task/session in the user's work history.
+function emitWorkEvent(request, event) { if (!(request.internal && request.task === 'task.type.draft')) emit(event); }
 function eventBase(request) { return { engine: request.origin.engine, agent_session_id: request.origin.agent_session_id, turn_id: request.origin.turn_id, role: request.internal ? 'metadata' : 'user', work_item_id: request.work_item_id, source: 'runtime' }; }
 function update(runId, fields) {
   return transaction(db, () => {
     const keys = Object.keys(fields); db.prepare(`UPDATE runs SET ${keys.map(k => `${k}=?`).join(',')},updated_at=? WHERE id=?`).run(...Object.values(fields), now(), runId);
     const row = get(runId), r = JSON.parse(row.request);
-    emit({ ...eventBase(r), id: id('state-'), kind: 'run.updated', event_at: now(), run: view(row) });
+    emitWorkEvent(r, { ...eventBase(r), id: id('state-'), kind: 'run.updated', event_at: now(), run: view(row) });
     return row;
   });
 }
@@ -94,7 +98,7 @@ function prepare(input, context = {}) {
     assert(Object.hasOwn(profiles, normalizedInput.profile), '등록되지 않은 검사 프로필입니다.');
     assert(!(process.env.HARNESS_CHECK_ACTIVE === '1' && normalizedInput.profile.startsWith('harness.')), '검사 실행 중 하네스 전체 검사를 재귀 실행할 수 없습니다.');
   }
-  assert(!input.internal || job.allow_internal === true, '내부 실행은 허용된 기록 작성 작업만 지원합니다.');
+  assert(!input.internal || job.allow_internal === true, '내부 실행은 허용된 GUI 작업만 지원합니다.');
   const runId = context.runId || (input.idempotency_key ? stableId('run-', input.idempotency_key) : id('run-'));
   const prior = get(runId), previous = prior ? JSON.parse(prior.request) : null;
   const origin = input.origin || previous?.origin || { engine: 'harness', agent_session_id: id('cli-'), turn_id: id('turn-') };
@@ -148,7 +152,7 @@ function register({ runId, request, definition }) {
     db.prepare('INSERT INTO runs(id,status,request,definition,definition_digest,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
       .run(runId, 'pending', json(request), json(definition), digest(json(definition)), now(), now());
     if (request.record_io) emit({ ...eventBase(request), id: `input-${runId}`, kind: 'input', event_at: now(), turn_id: request.origin.turn_id, text: request.prompt });
-    emit({ ...eventBase(request), id: id('state-'), kind: 'run.updated', event_at: now(), run: view(get(runId)) });
+    emitWorkEvent(request, { ...eventBase(request), id: id('state-'), kind: 'run.updated', event_at: now(), run: view(get(runId)) });
   });
   if (request.task === 'checks.run') saveEvidence(db, dir, initialEvidence(get(runId), definition.check_profile, request.input.profile));
   queueMicrotask(schedule); return view(get(runId));
@@ -236,7 +240,7 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
   const inputs = materializeInputs(attemptDir, definition);
   const prompt = buildPrompt({ stage: task, definition, request, candidate, issues, inputReferences: inputs.references });
   db.prepare('INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(attempt, runId, row.epoch, task, round, 'running', null, now(), null, null, attemptDir);
-  emit({ ...workerBase, id: `input-${attempt}`, kind: 'input', event_at: now(), turn_id: attempt, text: prompt });
+  emitWorkEvent(request, { ...workerBase, id: `input-${attempt}`, kind: 'input', event_at: now(), turn_id: attempt, text: prompt });
   const processRun = execute({ engine: request.engine, cwd, attemptDir, stage: task, prompt, limits: definition.limits, parent, dataDir: dir,
     execution: request.engine === 'fixture' ? null : definition.execution_profile.stages[task][request.engine],
     schema: definition.response_schema, allowedFile: job.file, fixture: { ...request.fixture, job, round, input: request.input },
@@ -249,7 +253,7 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
     atomic(path.join(attemptDir, 'process.json'), json(returned.observation));
   }
   endAttempt(attempt, returned);
-  emit({ ...workerBase, id: `output-${attempt}`, kind: returned.ok ? 'output' : 'turn.failed', event_at: now(), turn_id: attempt,
+  emitWorkEvent(request, { ...workerBase, id: `output-${attempt}`, kind: returned.ok ? 'output' : 'turn.failed', event_at: now(), turn_id: attempt,
     source_session_id: returned.observation.native_session_id, text: returned.ok ? json(returned.result) : json(returned.observation) });
   let outcome;
   if (!returned.ok) outcome = { status: 'failed', result: { message: `실행 실패: ${[returned.observation.reason, returned.observation.error].filter(Boolean).join(': ') || returned.observation.code}` } };
@@ -457,6 +461,7 @@ for (const row of db.prepare("SELECT * FROM runs WHERE status='running'").all())
   }
   update(row.id, { status: 'interrupted', message: '실행 서비스 중단 후 상태 대조가 필요합니다.' });
 }
+const drafts = taskDrafts({ settings, createRun: create, getRun: get, cancelRun: cancel });
 const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(process.env.HARNESS_RUNTIME_PORT || 0), handler: async (req, url) => {
   if (req.method === 'GET' && url.pathname === '/health') return { role: 'execution', version: definitions.version, active: running.size, lifecycle: draining ? 'draining' : 'running' };
   if (req.method === 'POST' && url.pathname === '/lifecycle/quit') return quit();
@@ -473,6 +478,13 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
     task_types: taskTypes, workflows, execution_profiles: executionProfiles,
     check_profiles: Object.entries(profiles).map(([id, p]) => ({ id, label: p.label, validation_scope: p.validation_scope })) };
   if (req.method === 'GET' && url.pathname === '/execution-settings') return settings.snapshot();
+  if (req.method === 'POST' && url.pathname === '/execution-settings/custom-task-drafts') return drafts.create(await body(req));
+  const draftMatch = url.pathname.match(/^\/execution-settings\/custom-task-drafts\/([^/]+)(?:\/(cancel))?$/);
+  if (draftMatch && req.method === 'GET' && !draftMatch[2]) return drafts.detail(draftMatch[1]);
+  if (draftMatch && req.method === 'POST' && draftMatch[2] === 'cancel') {
+    const input = await body(req); assert(input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).length === 0, '작성 중단 요청은 빈 객체여야 합니다.');
+    return drafts.cancel(draftMatch[1]);
+  }
   if (req.method === 'POST' && url.pathname === '/execution-settings/custom-tasks') return settings.create(await body(req));
   const customSettingMatch = url.pathname.match(/^\/execution-settings\/custom-tasks\/([^/]+)$/);
   if (customSettingMatch && req.method === 'DELETE') return settings.remove(decodeURIComponent(customSettingMatch[1]), (await body(req)).revision);

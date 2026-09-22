@@ -1,6 +1,6 @@
 # 작업 유형과 책임 경계
 
-전체 68개는 사용자 업무 63개와 시스템 업무 5개다. 작업 유형은 역할 이름이 아니라 하나의 결과와 판단 책임을 기준으로 나눈다. 업무마다 `boundary.owns`, `excludes`, `inputs`, `deliverable`, `acceptance`가 있으며 `routing`은 자연어 분류를 위한 용어·동작·우선순위를 제공한다. 전체 정의는 `harness/jobs.json`, 입력 계약은 `contracts/inputs/`, 업무별 검토 근거는 `harness/rules.json`에 있다. `harness catalog --summary`로 경계를 비교하고 `harness catalog --task <id>`로 선택한 업무의 입력 스키마·완료 기준을 확인한다.
+전체 70개는 사용자 업무 63개와 시스템 업무 7개다. 작업 유형은 역할 이름이 아니라 하나의 결과와 판단 책임을 기준으로 나눈다. 업무마다 `boundary.owns`, `excludes`, `inputs`, `deliverable`, `acceptance`가 있으며 `routing`은 자연어 분류를 위한 용어·동작·우선순위를 제공한다. 전체 정의는 `harness/jobs.json`, 입력 계약은 `contracts/inputs/`, 업무별 검토 근거는 `harness/rules.json`에 있다. `harness catalog --summary`로 경계를 비교하고 `harness catalog --task <id>`로 선택한 업무의 입력 스키마·완료 기준을 확인한다.
 
 입력 필드는 업무별 스키마를 따른다. `requirements`를 사용하는 업무에서는 해당 필드에 목표와 기준 자료를 포함하며, `document.share.create`는 `source_text`, `audience`, `purpose`를 사용한다. 허용되지 않은 필드를 추가하지 않으며, 필수 정보가 요청 본문에 이미 있으면 사용자에게 같은 내용을 다시 묻지 않고 해당 필드로 정리한다. 기준 자료가 실제로 없으면 사실을 만들지 않는다. 역할 명칭만으로 PM·PO·FE·BE 업무를 모두 실행하지 않는다.
 
@@ -142,6 +142,10 @@
 | `text.rewrite` · 이력 기반 텍스트 재작성 | GUI가 지정한 work item 또는 세션의 제목·설명을 원본 이력으로 재생성 | 외부 문서 재작성 · 원본 메시지 변경 · 작업 실제 실행 | 형식과 고정된 세션 스냅샷 |
 | `checks.run` · 등록된 검사 실행 | 등록된 검사 프로필의 명령 실행과 실제 실행 증거 수집 | 임의 명령 생성 · 모델 판단 검토 · 검사 대상 수정 | 등록된 검사 프로필 |
 | `verification.report` · 검사 근거 보고서 | 완료된 검사 실행 증거를 모은 검증 보고서 | 검사 재실행 · 누락 증거 생성 · 자체 모델 합격 판정 | 완료된 검사 run 또는 범위 내 최신 검사 |
+
+`task.type.draft`는 GUI에서 사용자가 설명한 업무를 승인된 템플릿의 등록 전 초안으로 작성한다. 사용자가 등록 버튼을 누르기 전에는 유형을 만들지 않는다.
+
+`work-item.result.summarize`는 WorkLog에서 Jira 완료 상태로 변경할 때 고정한 사용자 세션의 수행 결과를 일반 댓글용 한 문단으로 작성한다. `result-summary.json`의 `{text}`만 반환하며 업무 설명·원본 이력·Jira 업무 로그를 수정하지 않는다. 원격 댓글 게시와 재시도는 관리 서비스가 담당한다. 모델 생성 1회와 형식 검사만 수행하고 실제 완료 여부·성과를 독립 검토로 보장하지 않는다.
 
 ## 오케스트레이션과 진행 출력
 

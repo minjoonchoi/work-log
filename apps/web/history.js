@@ -8,12 +8,28 @@ export function historyUI({ api, esc, eventHTML, invalidated }) {
   // A delayed record below the loaded range is retained until scrolling reaches its timestamp.
   const sorted = cache => [...cache.records.values()].filter(e => !cache.cursor || !cache.boundary || compare(e, cache.boundary) <= 0).sort(compare);
   const nodeFor = cache => panel && [...panel.querySelectorAll('[data-history-key]')].find(n => n.dataset.historyKey === cache.key);
-  const visible = node => !node.closest('.session-card') || node.closest('.session-card').open;
+  const visible = node => {
+    if (!node) return false;
+    for (let parent = node.parentElement; parent && parent !== panel; parent = parent.parentElement) {
+      if (parent.tagName === 'DETAILS' && !parent.open) return false;
+    }
+    return true;
+  };
+  function capture() {
+    for (const cache of caches.values()) {
+      const node = nodeFor(cache); if (!node) continue;
+      cache.open = node.closest('[data-raw-history-key]').open;
+      for (const record of node.querySelectorAll('.event')) {
+        if (record.open) cache.expanded.add(record.dataset.eventId); else cache.expanded.delete(record.dataset.eventId);
+      }
+    }
+  }
   function clear() {
     for (const cache of caches.values()) cache.controller?.abort();
     caches.clear(); observer?.disconnect(); itemId = null;
   }
   function configure(data) {
+    capture();
     if (itemId !== data.item.id) clear();
     itemId = data.item.id;
     const streams = [...data.sessions.map(s => ({ key: s.id, session: s.id, meta: s.history })),
@@ -24,7 +40,8 @@ export function historyUI({ api, esc, eventHTML, invalidated }) {
       let cache = caches.get(key);
       if (!cache || cache.meta.revision !== meta.revision) {
         cache?.controller?.abort();
-        cache = { key, session, item: itemId, records: new Map(), initialized: false, busy: false, cursor: null, watermark: 0 };
+        cache = { key, session, item: itemId, records: new Map(), nodes: new Map(), expanded: cache?.expanded || new Set(), open: cache?.open || false,
+          initialized: false, busy: false, cursor: null, watermark: 0 };
         caches.set(key, cache);
       }
       cache.meta = meta;
@@ -32,14 +49,16 @@ export function historyUI({ api, esc, eventHTML, invalidated }) {
   }
   function contents(cache) {
     const records = sorted(cache);
-    return `<div class="history-records">${records.map(eventHTML).join('')}</div>
+    return `<div class="history-records"></div>
       <div class="history-page-status" role="status">${cache.error ? esc(cache.error) : cache.busy ? '기록을 불러오는 중…'
         : cache.initialized && !records.length ? '수집된 입력·응답이 없습니다.' : cache.initialized && !cache.cursor ? '모든 기록을 불러왔습니다.' : ''}</div>
       ${cache.error || !cache.initialized || cache.cursor ? `<div class="history-sentinel"><button class="history-more secondary" ${cache.busy ? 'disabled' : ''}>${cache.error ? '이력 다시 불러오기' : '이전 기록 불러오기'}</button></div>` : ''}`;
   }
   function html(session) {
     const cache = caches.get(keyFor(session));
-    return `<div class="conversation-history" data-history-key="${esc(cache.key)}" aria-label="${session ? '세션 입력·응답 이력' : '연결 미확인 출력 이력'}" aria-busy="${cache.busy}">${contents(cache)}</div>`;
+    return `<details class="raw-history" data-raw-history-key="${esc(cache.key)}" ${cache.open ? 'open' : ''}><summary>원문 이력 ${cache.meta.count}개</summary>
+      <p class="help">입력·응답 원문입니다. 기록을 선택하면 내용을 볼 수 있습니다. 최신순으로 표시합니다.</p>
+      <div class="conversation-history" data-history-key="${esc(cache.key)}" aria-label="${session ? '세션 입력·응답 이력' : '연결 미확인 출력 이력'}" aria-busy="${cache.busy}">${contents(cache)}</div></details>`;
   }
   function anchor() {
     if (!panel || panel.scrollTop <= 0) return null;
@@ -53,7 +72,26 @@ export function historyUI({ api, esc, eventHTML, invalidated }) {
     const node = nodeFor(cache); if (!node) return;
     const saved = anchor();
     const previous = node.querySelector('.history-sentinel'); if (previous) observer?.unobserve(previous);
-    node.innerHTML = contents(cache); node.setAttribute('aria-busy', String(cache.busy));
+    const records = node.querySelector('.history-records');
+    const shell = document.createElement('template'); shell.innerHTML = contents(cache);
+    shell.content.querySelector('.history-records').remove();
+    // Reuse each record node so expanded logs survive paging and live updates.
+    const wanted = new Set(); let next = records.firstElementChild;
+    for (const record of sorted(cache)) {
+      wanted.add(record.uid);
+      let entry = cache.nodes.get(record.uid);
+      if (!entry) {
+        const template = document.createElement('template'); template.innerHTML = eventHTML(record);
+        entry = template.content.firstElementChild; entry.open = cache.expanded.has(record.uid);
+        entry.ontoggle = () => { if (entry.open) cache.expanded.add(record.uid); else cache.expanded.delete(record.uid); };
+        cache.nodes.set(record.uid, entry);
+      }
+      if (entry !== next) records.insertBefore(entry, next);
+      next = entry.nextElementSibling;
+    }
+    for (const entry of [...records.children]) if (!wanted.has(entry.dataset.eventId)) entry.remove();
+    for (const child of [...node.children]) if (child !== records) child.remove();
+    node.append(shell.content); node.setAttribute('aria-busy', String(cache.busy));
     if (saved) {
       const found = [...panel.querySelectorAll('.event')].find(n => n.dataset.eventId === saved.id);
       if (found) panel.scrollTop += found.getBoundingClientRect().top - saved.top;
@@ -94,7 +132,7 @@ export function historyUI({ api, esc, eventHTML, invalidated }) {
     } finally {
       if (current(cache)) { cache.busy = false; paint(cache); }
     }
-    if (current(cache) && !cache.error && cache.meta.watermark > cache.watermark) void fetchRecords(cache, 'newer');
+    if (current(cache) && !cache.error && cache.meta.watermark > cache.watermark && visible(nodeFor(cache))) void fetchRecords(cache, 'newer');
   }
   function ensure(cache) {
     if (cache.busy || (cache.error && cache.retryMode !== 'newer')) return;
@@ -118,9 +156,11 @@ export function historyUI({ api, esc, eventHTML, invalidated }) {
       }
     }, { root: panel, rootMargin: '100px 0px' });
     for (const node of panel.querySelectorAll('[data-history-key]')) {
-      const cache = caches.get(node.dataset.historyKey); bindNode(node, cache);
+      const cache = caches.get(node.dataset.historyKey); paint(cache);
+      const group = node.closest('[data-raw-history-key]');
+      group.ontoggle = () => { cache.open = group.open; if (visible(node)) ensure(cache); };
       const session = node.closest('.session-card');
-      if (session) session.ontoggle = () => { if (session.open) ensure(cache); };
+      if (session) session.ontoggle = () => { if (visible(node)) ensure(cache); };
       if (visible(node)) ensure(cache);
     }
   }

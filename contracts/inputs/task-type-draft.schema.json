@@ -1,0 +1,50 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request", "templates", "existing_tasks"],
+  "properties": {
+    "request": { "type": "string", "minLength": 1, "maxLength": 12000, "pattern": "\\S" },
+    "templates": {
+      "type": "array", "minItems": 1, "maxItems": 100,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "label", "kind", "boundary"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "label": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "\\S" },
+          "kind": { "enum": ["document", "html", "data_model", "code_bundle", "scenario_plan"] },
+          "boundary": {
+            "type": "object", "additionalProperties": false,
+            "required": ["owns", "excludes", "inputs", "deliverable", "acceptance"],
+            "properties": {
+              "owns": { "type": "string", "minLength": 1, "maxLength": 4000, "pattern": "\\S" },
+              "excludes": { "$ref": "#/$defs/boundaryItems" },
+              "inputs": { "$ref": "#/$defs/boundaryItems" },
+              "deliverable": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
+              "acceptance": { "$ref": "#/$defs/boundaryItems" }
+            }
+          }
+        }
+      }
+    },
+    "existing_tasks": {
+      "type": "array", "maxItems": 200,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "label", "description"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "label": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "\\S" },
+          "description": { "type": "string", "maxLength": 4000 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9._-]*$" },
+    "boundaryItems": {
+      "type": "array", "minItems": 1, "maxItems": 30, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" }
+    }
+  }
+}

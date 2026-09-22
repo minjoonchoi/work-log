@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Harness, pair, eventually } from '../helpers.mjs';
 import { readEndpoint } from '../../src/shared.mjs';
-import { atlFixture, authorize } from '../fixtures/atlassian.mjs';
+import { atlFixture, authorize, adfText } from '../fixtures/atlassian.mjs';
 
 let h, f, item;
 test.beforeEach(async ({ context }) => {
@@ -58,6 +58,7 @@ test('key/URL lookup preview, explicit connection, real link and inline status c
   await expect(change(page)).toBeDisabled();
   await expect(select(page).locator('option[value="41"]')).toBeDisabled();
   await page.locator('.session-card > summary').click();
+  await page.locator('.session-card .raw-history > summary').click();
   await expect(page.locator('.session-card .event')).toHaveCount(2);
   await select(page).selectOption('21');
   await h.ingest(pair('jira-ui-issues', '09:10:00', '09:12:00', 'next', { text: '권한 예외 처리 요구사항을 보완합니다.' }));
@@ -95,9 +96,73 @@ test('stale selection refreshes status; failed reads retain marked history and r
 test('read-only access and unavailable transitions explain disabled controls while retaining the issue link', async ({ page }) => {
   await linked(page); f.state.scopes = ['read:jira-work']; await reload(page).click();
   await expect(select(page)).toBeDisabled(); await expect(page.locator('.jira-message')).toContainText('쓰기 권한');
+  await expect(page.getByRole('button', { name: 'TEAM-42 제목·설명 반영', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'TEAM-42 제목·설명 반영', exact: true })).toBeDisabled();
   await expect(page.getByRole('link', { name: 'TEAM-42 Jira에서 열기' })).toBeVisible();
   f.state.scopes.push('write:jira-work'); f.state.noTransitions = true; await reload(page).click();
   await expect(select(page)).toBeDisabled(); await expect(page.locator('.jira-card')).toContainText('변경 가능한 상태가 없습니다.');
+});
+
+test('Done status selection explains automatic posting and produces one normal paragraph comment from the sessions', async ({ page }, info) => {
+  await h.stop('manager'); h.env.HARNESS_RESULT_FIXTURE = JSON.stringify({ scenario: 'slow', delayMs: 1200 }); await h.start('manager');
+  await linked(page);
+  const notice = page.locator('.jira-done-notice'), result = page.getByRole('region', { name: 'TEAM-42 완료 결과 댓글', exact: true });
+  await expect(notice).toBeHidden();
+  await select(page).selectOption('31'); await expect(notice).toContainText('한 문단의 결과 댓글을 Jira에 자동 게시');
+  await select(page).selectOption('21'); await expect(notice).toBeHidden();
+  await select(page).selectOption('31');
+  await change(page).click();
+  await expect(page.locator('.jira-status')).toHaveText('완료');
+  await expect(result.locator('.jira-result-comment-state')).toHaveText(/작성 대기|작성 중|게시 대기|게시 중/);
+  await expect(result).toContainText('화면을 이동해도 계속 진행됩니다');
+  await expect(result.locator('.jira-result-comment-state')).toHaveText('게시됨', { timeout: 20000 });
+  expect(f.state.comments).toHaveLength(1);
+  const comment = f.state.comments[0], content = adfText(comment.body);
+  expect(comment.body.content).toHaveLength(1); expect(comment.body.content[0].type).toBe('paragraph');
+  expect(content).toContain('권한 관리'); expect(content).not.toMatch(/[\r\n]/);
+  await expect(result.locator('.jira-result-comment-text')).toHaveText(content);
+  await expect(page.getByRole('button', { name: 'TEAM-42 제목·설명 반영', exact: true })).toBeEnabled();
+  expect(f.state.calls.filter(call => call.method === 'POST' && call.path.endsWith('/transitions'))).toHaveLength(1);
+  expect(f.state.calls.filter(call => call.method === 'POST' && call.path.endsWith('/comment'))).toHaveLength(1);
+  await page.locator('.jira-card').screenshot({ path: info.outputPath('jira-done-result-comment.png') });
+  await page.reload(); await page.locator('.item-open').click();
+  await expect(result.locator('.jira-result-comment-state')).toHaveText('게시됨');
+  await reload(page).click(); expect(f.state.comments).toHaveLength(1);
+});
+
+test('a known comment rejection allows an explicit retry and preserves its request ID when the retry response is lost', async ({ page }) => {
+  await linked(page); f.state.commentFailure = 403;
+  await select(page).selectOption('31'); await change(page).click();
+  const result = page.getByRole('region', { name: 'TEAM-42 완료 결과 댓글', exact: true }), retry = result.getByRole('button', { name: '결과 댓글 다시 시도', exact: true });
+  await expect(result.locator('.jira-result-comment-state')).toHaveText('실패', { timeout: 20000 });
+  await expect(retry).toBeEnabled(); expect(f.state.comments).toHaveLength(0);
+  const requests = [];
+  await page.route('**/api/jira-links/*/result-comment/retry', route => {
+    requests.push(route.request().postDataJSON());
+    return requests.length === 1 ? route.abort('failed') : route.continue();
+  });
+  f.state.commentFailure = null;
+  await retry.click(); await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect(result.locator('.jira-result-comment-state')).toHaveText('게시됨', { timeout: 20000 });
+  expect(requests).toHaveLength(2); expect(requests[1]).toEqual(requests[0]); expect(requests[0].operation_id).toMatch(/^[a-f0-9-]{36}$/);
+  expect(f.state.comments).toHaveLength(1);
+  expect(f.state.calls.filter(call => call.method === 'POST' && call.path.endsWith('/transitions'))).toHaveLength(1);
+});
+
+test('a lost comment response offers reconciliation without retrying or duplicating the posted comment', async ({ page }) => {
+  await linked(page); f.state.loseComment = true;
+  await select(page).selectOption('31'); await change(page).click();
+  const result = page.getByRole('region', { name: 'TEAM-42 완료 결과 댓글', exact: true });
+  await expect(result.locator('.jira-result-comment-state')).toHaveText('게시 결과 확인 필요', { timeout: 20000 });
+  await expect(result.getByRole('button', { name: '결과 댓글 다시 시도', exact: true })).toHaveCount(0);
+  await expect(result).toContainText('댓글을 다시 전송하지 않습니다'); expect(f.state.comments).toHaveLength(1);
+  const requests = [];
+  page.on('request', request => { if (request.url().endsWith('/result-comment/reconcile')) requests.push(request.postDataJSON()); });
+  await result.getByRole('button', { name: '게시 결과 확인', exact: true }).click();
+  await expect(result.locator('.jira-result-comment-state')).toHaveText('게시됨', { timeout: 20000 });
+  expect(requests).toEqual([{}]); expect(f.state.comments).toHaveLength(1);
+  expect(f.state.calls.filter(call => call.method === 'POST' && call.path.endsWith('/comment'))).toHaveLength(1);
 });
 
 test('lost transition response shows durable uncertainty and refresh observes the target without resending', async ({ page }) => {

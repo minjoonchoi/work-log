@@ -55,7 +55,7 @@ test('the fifth real user Stop creates one format-checked automatic metadata run
   assert.equal(run.internal, true); assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']);
   assert.equal(run.artifact.validation_scope, 'format');
   assert.equal(run.request.input.sessions.flatMap(session => session.events).filter(row => row.kind === 'output').length, 5);
-  assert.deepEqual([...accepted.item.description.matchAll(/^## (.+)$/gm)].map(match => match[1]), ['작업 배경', '목적', '범위', '결과']);
+  assert.deepEqual([...accepted.item.description.matchAll(/^h2\. (.+)$/gm)].map(match => match[1]), ['배경', '목표', '요구사항', '작업 범위', '참고사항']);
   hookTurn(5); hookTurn(6);
   await h.stop('manager'); await h.start('manager'); await stableCount(h, 1);
   assert.equal((await detail(h, item)).metadata_rewrite.run_id, run.id);

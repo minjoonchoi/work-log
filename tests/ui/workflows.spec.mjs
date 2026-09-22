@@ -64,7 +64,8 @@ test('20-minute boundary is visible in detail with real prompt/output timestamps
   await h.ingest([...sample('a', '세션 경계 확인', '09:00:00', '09:05:00'), ...sample('a', '두 번째 요청', '09:25:00', '09:27:00', 't2')]);
   await open(page); await page.getByRole('button', { name: '세션 경계 확인', exact: true }).click();
   await expect(page.locator('.session-card')).toHaveCount(2);
-  await page.locator('.session-card').first().locator('summary').click();
+  await page.locator('.session-card').first().locator(':scope > summary').click();
+  await page.locator('.session-card').first().locator('.raw-history > summary').click();
   await expect(page.locator('.session-card').first()).toContainText('프롬프트 입력');
   await expect(page.locator('.session-card').first()).toContainText('09:27');
   await expect(page.locator('.session-card').first().locator('.event').first()).toHaveAttribute('data-kind', 'output');
@@ -175,7 +176,7 @@ for (const engine of ['codex', 'claude']) test(`${engine} system hooks stream ne
   await expect(page.getByRole('button', { name: '실시간 세션 확인', exact: true })).toBeVisible({ timeout: 3000 });
   await page.getByRole('button', { name: '실시간 세션 확인', exact: true }).click();
   const session = page.locator('.session-card');
-  await session.locator('summary').click();
+  await session.locator(':scope > summary').click(); await session.locator('.raw-history > summary').click();
   await expect(page.locator('#history-live')).toHaveText('실시간 갱신 중');
   await expect(session).toContainText('응답 대기');
   h.hook(engine, { ...raw, event_id: 'output-1', hook_event_name: 'Stop', last_assistant_message: '첫 번째 응답 원문' });
@@ -199,7 +200,7 @@ test('late hook delivery is placed by observed time, not ingestion time; open ed
     event('late', 'output', '2026-09-17T09:10:00+09:00', 'first', { text: '09:10 응답' })
   ]);
   await open(page); await page.locator('.item-open').click();
-  await page.locator('.session-card summary').click();
+  await page.locator('.session-card > summary').click(); await page.locator('.raw-history > summary').click();
   await page.getByRole('button', { name: '제목·설명 편집' }).click();
   await page.getByLabel('제목', { exact: true }).fill('작성 중인 제목');
   await h.ingest([
@@ -215,7 +216,7 @@ test('late hook delivery is placed by observed time, not ingestion time; open ed
 test('open session reconnects after manager restart and catches up on spooled hooks without a page reload', async ({ page }) => {
   await h.ingest(pair('recover', new Date(Date.now() - 60000).toISOString(), new Date(Date.now() - 30000).toISOString(), 'before', { text: '연결 복구 확인' }));
   await open(page); await page.locator('.item-open').click();
-  await page.locator('.session-card summary').click();
+  await page.locator('.session-card > summary').click(); await page.locator('.raw-history > summary').click();
   await expect(page.locator('.event')).toHaveCount(2);
   await expect(page.locator('#history-live')).toHaveText('실시간 갱신 중');
   const originalSession = await page.locator('.session-card').getAttribute('data-session-id');

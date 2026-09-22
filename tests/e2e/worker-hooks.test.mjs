@@ -6,8 +6,10 @@ import os from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { execute } from '../../src/executor.mjs';
 import { ROOT } from '../../src/shared.mjs';
+import { managerStore } from '../../src/manager-store.mjs';
 import { hookCommand, locations, quote, readManifest } from '../../scripts/install-state.mjs';
 import { prepareInstall, applyInstall } from '../../scripts/install.mjs';
+import { connectAgent, getAgentConnections } from '../../scripts/agent-connections.mjs';
 import { applyUninstall } from '../../scripts/uninstall.mjs';
 
 function temporary(t) {
@@ -56,8 +58,15 @@ test('ordinary user hooks still record lifecycle, tools and correlated input/out
   const rows = fs.readdirSync(path.join(dir, 'spool')).map(file => JSON.parse(fs.readFileSync(path.join(dir, 'spool', file))));
   assert.equal(rows.length, events.length); assert.ok(rows.every(row => row.role === 'user'));
   const input = rows.find(row => row.kind === 'input'), output = rows.find(row => row.kind === 'output');
-  assert.equal(output.turn_id, input.turn_id); assert.equal(input.text, '일반 사용자 요청');
+  assert.equal(output.turn_id, null); assert.equal(output.turn_source, 'missing');
+  assert.equal(input.turn_source, 'local'); assert.equal(input.text, '일반 사용자 요청');
   assert.ok(rows.some(row => row.kind === 'tool.started' && row.call_id === 'tool-1'));
+  assert.equal(fs.existsSync(path.join(dir, 'hook-state.sqlite')), false);
+  const store = managerStore(dir); t.after(() => store.db.close());
+  store.ingestMany(rows);
+  const detail = store.detail(store.items()[0].id), projected = detail.events.find(row => row.kind === 'output');
+  assert.equal(projected.turn_id, input.turn_id); assert.equal(projected.resolution, 'matched');
+  assert.equal(detail.sessions[0].pending, false);
 });
 
 test('owned shell hook commands skip workers before spawning Node and still run for users', t => {
@@ -122,13 +131,16 @@ test('legacy owned hook receipts remain uninstallable while unrelated hooks are 
   fs.mkdirSync(bin, { recursive: true }); fs.mkdirSync(bundle, { recursive: true });
   for (const name of ['node', 'WorkLog', 'WorkLogKeychain']) fs.writeFileSync(path.join(bin, name), 'fixture binary');
   fs.cpSync(path.join(ROOT, 'skills'), path.join(bundle, 'skills'), { recursive: true });
+  fs.mkdirSync(path.join(bundle, 'src'), { recursive: true }); fs.writeFileSync(path.join(bundle, 'src/hook.mjs'), '// fixture hook');
   const loc = locations(homeDir), unrelated = { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'company-required-hook' }] }] } };
   for (const target of Object.values(loc.configs)) {
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, JSON.stringify(unrelated));
   }
   const plan = prepareInstall({ output: path.join(dir, 'plan'), homeDir, sourceApp });
   applyInstall(plan, { activate: false });
-  const receipt = readManifest(loc);
+  for (const engine of ['claude', 'codex']) connectAgent(engine, { homeDir });
+  const receipt = readManifest(loc); receipt.format = 1; delete receipt.created_directories; delete receipt.created_configs;
+  for (const link of receipt.links) { delete link.pending; delete link.identity; }
   for (const record of receipt.hooks) {
     const config = JSON.parse(fs.readFileSync(record.path));
     for (const entry of record.entries) {
@@ -141,6 +153,7 @@ test('legacy owned hook receipts remain uninstallable while unrelated hooks are 
   }
   fs.writeFileSync(loc.manifest, JSON.stringify(receipt));
   assert.equal(readManifest(loc).id, receipt.id);
+  assert.ok(getAgentConnections({ homeDir }).connections.every(row => row.state === 'connected'));
   const tampered = structuredClone(receipt); tampered.hooks[0].entries[0].hook.command += ' ; arbitrary-command';
   fs.writeFileSync(loc.manifest, JSON.stringify(tampered)); assert.throws(() => readManifest(loc), /훅 소유 식별자/);
   fs.writeFileSync(loc.manifest, JSON.stringify(receipt));

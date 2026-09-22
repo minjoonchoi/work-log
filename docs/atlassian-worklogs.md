@@ -4,7 +4,7 @@
 
 ## 확정 동작
 
-Work Item은 훅의 세션 시작에서 자동 등록하며, 시작 이벤트가 없으면 첫 사용자 입력에서 생성한다. Jira 연결 없이도 로컬 업무·이력·요약·태그를 관리한다. GUI의 **업무 상세 → Jira 이슈 → 새 이슈 만들기**를 눌러 사이트·프로젝트·유형을 선택해야 Jira 티켓을 생성한다. **기존 이슈 연결**에서는 키·제목·URL로 검색하고 결과 목록에서 이슈를 선택해 연결한다. OAuth 연결이나 work item 생성만으로 티켓을 만들지 않는다. 생성 직전 저장된 work item의 제목·설명과 버전을 고정한다. 제목은 Jira `summary`, 설명은 줄바꿈을 보존한 ADF `description`으로 전송한다. 미리보기 이후 내용이 바뀌면 요청을 거절해 최신 내용을 다시 확인하게 한다. 연결된 이슈의 링크·현재 상태·상태 변경은 [Jira 이슈 관리 설계](jira-issues.md)를 따른다.
+Work Item은 훅의 세션 시작에서 자동 등록하며, 시작 이벤트가 없으면 첫 사용자 입력에서 생성한다. Jira 연결 없이도 로컬 업무·이력·요약·태그를 관리한다. GUI의 **업무 상세 → Jira 이슈 → 새 이슈 만들기**를 눌러 사이트·프로젝트·유형을 선택해야 Jira 티켓을 생성한다. **기존 이슈 연결**에서는 키·제목·URL로 검색하고 결과 목록에서 이슈를 선택해 연결한다. OAuth 연결이나 work item 생성만으로 티켓을 만들지 않는다. 생성 직전 저장된 work item의 제목·설명과 버전을 고정한다. 제목은 Jira `summary`, 설명은 Jira wiki의 구역·목록·본문을 보존하는 ADF `description`으로 변환해 전송하며 기존 Markdown·평문도 지원한다. 로컬 편집 원문은 유지한다. 미리보기 이후 내용이 바뀌면 요청을 거절해 최신 내용을 다시 확인하게 한다. 연결된 이슈의 링크·현재 상태·상태 변경은 [Jira 이슈 관리 설계](jira-issues.md)를 따른다.
 
 에이전트 세션별로 마지막 출력과 다음 입력의 간격이 **1,200초 이상**이면 새 Work Item Session을 시작한다. 다음 입력이 실제로 관측되어 이전 세션의 경계가 확정되고, 이전 세션에 미종료 turn이 없을 때 요약을 예약한다. 시계만으로 20분 뒤 종료 이벤트를 만들지 않는다.
 
@@ -23,7 +23,7 @@ Jira의 업무 로그 생성·조회·수정 API를 사용하며, 사이트에�
 
 ## 연결 설정과 자격증명
 
-GUI **연결 설정**에서 Atlassian OAuth 앱의 **Client ID·Client Secret**을 직접 입력한다. 첫 저장에는 두 값이 필요하다. 같은 Client ID에서 Secret 입력을 생략하거나 비워 두면 기존 값을 유지하며, Client ID를 바꿀 때는 새 Secret을 함께 입력해야 한다.
+GUI **연결 설정 → Atlassian 설정**에서 Atlassian OAuth 앱의 **Client ID·Client Secret**을 직접 입력한다. Claude/Codex의 스킬·훅 연결과는 별도 설정이다. 첫 저장에는 두 값이 필요하다. 같은 Client ID에서 Secret 입력을 생략하거나 비워 두면 기존 값을 유지하며, Client ID를 바꿀 때는 새 Secret을 함께 입력해야 한다.
 
 Secret 입력은 기본적으로 password 형식으로 숨긴다. 설정을 열거나 일반 상태를 조회할 때 응답에 저장된 Secret을 포함하거나 GUI로 전달하지 않는다. GUI는 사용자가 **보기**를 눌렀을 때만 인증된 로컬 API로 조회해 화면에 표시한다. 서비스 내부의 자격증명 확인·OAuth 교환에는 Keychain 값을 사용할 수 있다. 기본 데이터 디렉터리의 `integrations/atlassian.json`에는 `client_id`, 불투명한 `credential_version` 등 설정 메타데이터만 저장하며 Secret·OAuth 토큰은 기록하지 않는다.
 
@@ -37,7 +37,9 @@ OAuth 앱의 Callback URL은 다음과 정확히 일치하도록 등록한다.
 http://127.0.0.1:47831/oauth/atlassian/callback
 ```
 
-GUI의 연결 버튼이 기본 브라우저를 연다. 임시 loopback listener가 난수 state·10분 만료·일회성 콜백을 확인한다. 인증 코드 및 refresh 교환에는 Keychain에 저장한 앱의 Client ID·Secret을 사용한다. 요청 scope는 `offline_access`, `read:jira-work`, `write:jira-work`, `read:page:confluence`, `read:space:confluence`, `write:page:confluence`다. Confluence 게시 권한이 없는 이전 연결은 사용자가 다시 승인해야 한다. 실제 접근 가능한 사이트는 accessible-resources에서 확인한다. [Atlassian 3LO](https://developer.atlassian.com/cloud/jira/software/oauth-2-3lo-apps/)
+GUI의 연결 버튼이 기본 브라우저를 연다. 임시 loopback listener가 난수 state·10분 만료·일회성 콜백을 확인한다. 인증 코드 및 refresh 교환에는 Keychain에 저장한 앱의 Client ID·Secret을 사용한다. 요청 scope는 `offline_access`, `read:jira-work`, `read:jira-user`, `write:jira-work`, `read:page:confluence`, `read:space:confluence`, `write:page:confluence`다. Jira 사용자 읽기 또는 Confluence 게시 권한이 없는 이전 연결은 사용자가 다시 승인해야 한다. 실제 접근 가능한 사이트는 accessible-resources에서 확인한다. [Atlassian 3LO](https://developer.atlassian.com/cloud/jira/software/oauth-2-3lo-apps/)
+
+Jira 이슈를 생성할 때는 해당 사이트의 현재 로그인 사용자를 먼저 조회해 보고자와 담당자에 같은 `accountId`를 명시한다. 사용자 조회·권한 확인에 실패하면 생성 요청을 보내지 않는다. 계정 인증이 조회와 생성 사이에 변경되면 현재 계정을 확인하고 다시 시도해야 한다. `read:jira-user`는 이 조회에 필요한 권한이며, 일반 이슈 댓글에는 기존 `read:jira-work`·`write:jira-work` 권한을 사용한다. [현재 사용자 조회](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-myself/), [이슈 댓글 API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/)
 
 Access/refresh token과 만료 정보는 **하나의 OAuth 전용 generic password 레코드**에 함께 저장한다. 회전된 두 토큰을 함께 교체하고, 동시 API 호출의 refresh는 한 번만 수행한다. 만료·회수된 refresh token은 재연결을 요구한다. Keychain 잠금·접근 실패 시 평문 파일로 대체하지 않는다. **연결 해제**는 OAuth 토큰 레코드만 지우고 앱 자격증명 레코드는 보존하며, Atlassian 계정의 앱 승인 자체는 취소하지 않는다. [Apple Keychain](https://developer.apple.com/documentation/security/adding-a-password-to-the-keychain)
 

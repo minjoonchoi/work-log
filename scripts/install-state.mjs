@@ -61,7 +61,7 @@ export function readManifest(loc) {
   safePath(loc.home, loc.manifest);
   if (!stat(loc.manifest)) return null;
   const m = JSON.parse(fs.readFileSync(loc.manifest, 'utf8'));
-  assert(m.owner === OWNER && m.format === 1 && /^[0-9a-f-]{36}$/.test(m.id) && m.home === loc.home, 'WorkLog 설치 소유 정보를 확인할 수 없습니다.');
+  assert(m.owner === OWNER && [1, 2].includes(m.format) && /^[0-9a-f-]{36}$/.test(m.id) && m.home === loc.home, 'WorkLog 설치 소유 정보를 확인할 수 없습니다.');
   assert(typeof m.version === 'string' && /^\d+\.\d+\.\d+-[a-f0-9]{12}$/.test(m.version), '설치 버전 형식이 잘못되었습니다.');
   const runtime = path.join(loc.data, 'versions', m.version);
   assert(Array.isArray(m.skills) && m.skills.length > 0 && new Set(m.skills).size === m.skills.length
@@ -76,20 +76,63 @@ export function readManifest(loc) {
     }
   }
   const links = skillLinks(loc, m.skills, runtime);
-  assert(Array.isArray(m.links) && m.links.length === links.length, '지시문 연결 목록이 잘못되었습니다.');
-  assert(m.links.every((l, i) => l.path === links[i].path && l.target === links[i].target), '지시문 연결 경로가 다릅니다.');
+  assert(Array.isArray(m.links) && (m.format === 2 || m.links.length === links.length)
+    && new Set(m.links.map(l => l.path)).size === m.links.length, '지시문 연결 목록이 잘못되었습니다.');
+  assert(m.links.every(l => links.some(expected => l.path === expected.path && l.target === expected.target)), '지시문 연결 경로가 다릅니다.');
+  assert(m.links.every(link => link.pending === undefined || typeof link.pending === 'boolean'), '지시문 연결 생성 상태가 잘못되었습니다.');
   assert(Array.isArray(m.files) && m.files.length === loc.agents.length, '서비스 목록이 잘못되었습니다.');
   assert(m.files.every((f, i) => f.path === loc.agents[i].path && f.label === loc.agents[i].label
     && digest(f.content) === f.digest && Array.isArray(f.argv)
     && canonical(f.argv) === canonical(i === 2 ? [path.join(loc.app, 'Contents/MacOS/WorkLog'), '--background']
       : [path.join(runtime, 'node'), path.join(runtime, 'harness/bin/harness.mjs'), 'serve', ['runtime', 'manager'][i]])), '서비스 소유 정보가 잘못되었습니다.');
-  assert(Array.isArray(m.hooks) && m.hooks.length === 2, '훅 소유 정보가 없습니다.');
+  assert(Array.isArray(m.hooks) && (m.format === 2 || m.hooks.length === 2)
+    && new Set(m.hooks.map(h => h.engine)).size === m.hooks.length, '훅 소유 정보가 없습니다.');
   for (const h of m.hooks) {
-    assert(h.path === loc.configs[h.engine] && Array.isArray(h.entries), '훅 설정 경로가 다릅니다.');
+    assert(['claude', 'codex'].includes(h.engine) && h.path === loc.configs[h.engine] && Array.isArray(h.entries), '훅 설정 경로가 다릅니다.');
     for (const entry of h.entries) assert(entry.hook?.type === 'command' && typeof entry.event === 'string'
       && [hookCommand(loc, runtime, m.id, h.engine), legacyHookCommand(loc, runtime, m.id, h.engine)].includes(entry.hook.command), '훅 소유 식별자가 다릅니다.');
   }
+  if (m.format === 2) {
+    const permittedDirs = new Set([loc.app, ...loc.agents.map(f => f.path), ...Object.values(loc.configs), ...links.map(l => l.path)]
+      .flatMap(target => parentPaths(loc.home, target)));
+    assert(Array.isArray(m.created_directories) && new Set(m.created_directories).size === m.created_directories.length
+      && m.created_directories.every(dir => permittedDirs.has(dir)), '생성한 디렉터리 소유 경로가 다릅니다.');
+    assert(Array.isArray(m.created_configs) && new Set(m.created_configs).size === m.created_configs.length
+      && m.created_configs.every(file => Object.values(loc.configs).includes(file)), '생성한 설정 소유 경로가 다릅니다.');
+  }
   return m;
+}
+
+export function parentPaths(home, target) {
+  const result = [];
+  for (let current = path.dirname(target); current !== home; current = path.dirname(current)) {
+    assert(current.startsWith(`${home}${path.sep}`), '상위 경로가 사용자 홈 범위를 벗어났습니다.');
+    result.unshift(current);
+  }
+  return result;
+}
+
+export function upgradeManifest(receipt) {
+  receipt.format = 2; receipt.created_directories ||= []; receipt.created_configs ||= [];
+  return receipt;
+}
+
+export function recordDirectories(loc, receipt, targets) {
+  upgradeManifest(receipt);
+  for (const target of targets) for (const dir of parentPaths(loc.home, target)) {
+    if (!stat(dir) && !receipt.created_directories.includes(dir)) receipt.created_directories.push(dir);
+  }
+}
+
+export function removeEmptyDirectories(loc, receipt, removed, targets = receipt.created_directories || []) {
+  for (const dir of [...targets].sort((a, b) => b.length - a.length)) {
+    try {
+      safePath(loc.home, dir);
+      const info = stat(dir);
+      if (info?.isDirectory() && !fs.readdirSync(dir).length) { fs.rmdirSync(dir); removed.push({ kind: 'empty_directory', path: dir }); }
+      if (!stat(dir)) receipt.created_directories = receipt.created_directories.filter(value => value !== dir);
+    } catch { /* Changed or nonempty directories belong to the user now. */ }
+  }
 }
 
 export function hookCommand(loc, runtime, id, engine) {

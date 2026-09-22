@@ -81,12 +81,39 @@ else if (stage === 'review') {
     if (scenario === 'report-body-evidence-section') value.body += '\n\n### 근거 세션\n- 내부 세션 목록';
     text = JSON.stringify(value);
   }
+  if (job.kind === 'task_type_draft') {
+    const input = fixture.input, template = input.templates.find(value => value.id === 'document.share.create') || input.templates[0];
+    const names = new Set([...input.existing_tasks, ...input.templates].map(value => value.label.normalize('NFC').trim().toLowerCase()));
+    let number = 1, label = '사용자 업무 초안';
+    while (names.has(label.normalize('NFC').toLowerCase())) label = `사용자 업무 초안 ${++number}`;
+    const boundary = template.boundary;
+    const value = { template_id: template.id, label, description: input.request.slice(0, 1900).trim(), routing_terms: [`사용자 업무 초안 ${number}`],
+      instruction: `# ${label}\n\n## 목적\n${boundary.owns}\n${input.request.slice(0, 1500)}\n\n## 입력\n${boundary.inputs.map(item => `- ${item}`).join('\n')}\n\n## 범위\n- 산출물: ${boundary.deliverable}\n${boundary.excludes.map(item => `- 제외: ${item}`).join('\n')}\n\n## 수행 절차\n1. 제공된 입력과 담당 범위를 확인한다.\n2. 요청 범위에 맞는 산출물만 작성하고 제외 업무를 수행하지 않는다.\n3. 근거와 완료 기준을 확인하고 불확실한 사항을 표시한다.\n\n## 완료 기준\n${boundary.acceptance.map(item => `- ${item}`).join('\n')}` };
+    if (scenario === 'draft-invalid') value.instruction = '구조화되지 않은 지시문';
+    if (scenario === 'draft-unknown-template') value.template_id = 'unknown.template';
+    if (scenario === 'draft-duplicate-name') value.label = input.existing_tasks[0]?.label || template.label;
+    if (scenario === 'draft-duplicate-terms') value.routing_terms = ['중복 키워드', ' 중복 키워드 '];
+    if (scenario === 'draft-empty-section') value.instruction = value.instruction.replace(/## 수행 절차\n[\s\S]*?(?=\n\n## 완료 기준)/, '## 수행 절차\n');
+    if (scenario === 'draft-missing-boundary') value.instruction = value.instruction.replace(`- 제외: ${boundary.excludes[0]}`, '');
+    if (scenario === 'draft-extra-field') value.backend = 'claude';
+    text = JSON.stringify(value);
+  }
+  if (job.kind === 'result_summary') {
+    const outputs = fixture.input.sessions.flatMap(s => s.events).filter(e => e.kind === 'output' && e.text?.trim());
+    let summary = outputs.length ? `작업 이력에 기록된 결과: ${outputs.map(e => e.text.trim().replace(/\s+/g, ' ')).join(' ').slice(0, 1000)} 확인 범위는 제공된 원본 기록에 한정됩니다.`
+      : '이 업무의 요청을 기록했으나 확인된 응답 결과가 없어 실제 작업 결과는 미확인입니다.';
+    if (scenario === 'result-summary-invalid') summary += '\n\n두 번째 문단';
+    if (scenario === 'result-summary-list') summary = '- 결과 목록';
+    text = JSON.stringify({ text: summary });
+  }
   if (job.kind === 'text_rewrite') {
-    const events = fixture.input.sessions.flatMap(s => s.events), messages = events.filter(e => e.text).map(e => e.text.replace(/\s+/g, ' ').slice(0, 400));
+    const events = fixture.input.sessions.flatMap(s => s.events), messages = events.filter(e => e.text?.trim()).map(e => e.text.trim().replace(/\s+/g, ' ').slice(0, 400));
     const value = {
       title: (messages[0] || '작업 세션').slice(0, 200),
       description: fixture.input.format === 'session-summary' ? messages.slice(-5).map(message => `- ${message}`).join('\n') || '- 응답 본문 미확인'
-        : `## 작업 배경\n- ${fixture.input.sessions.length}개 세션 이력\n\n## 목적\n- ${messages[0] || '목적 미확인'}\n\n## 범위\n${messages.slice(-5).map(message => `- ${message}`).join('\n') || '- 요청 범위 미확인'}\n\n## 결과\n- ${events.some(event => event.kind === 'output' && event.text) ? '수집된 응답을 확인했습니다. 실제 완료 여부는 원문 기준으로 확인해야 합니다.' : '미완료: 확인된 응답이 없어 결과 미확인입니다.'}`
+        : job.metadata_format === 'work-item-jira-v1'
+          ? `h2. 배경\n${fixture.input.sessions.length}개 세션 이력에 근거합니다.\n\n* 현재 상황: ${messages[0] || '미확인'}\n* 문제점: 구체적인 문제 원인은 미확인입니다.\n* 작업 필요성: 요청한 내용을 확인합니다.\n\nh2. 목표\n${messages[0] || '목표 미확인'}\n\nh2. 요구사항\n* ${messages[0] || '요구사항 미확인'}\n\nh2. 작업 범위\n${messages.slice(-5).map(message => `* ${message}`).join('\n') || '* 요청 범위 미확인'}\n\nh2. 참고사항\n* ${events.some(event => event.kind === 'output' && event.text) ? '수집된 응답을 확인했습니다. 실제 완료 여부는 원문 기준으로 확인해야 합니다.' : '미완료: 확인된 응답이 없어 결과 미확인입니다.'}`
+          : `## 작업 배경\n- ${fixture.input.sessions.length}개 세션 이력\n\n## 목적\n- ${messages[0] || '목적 미확인'}\n\n## 범위\n${messages.slice(-5).map(message => `- ${message}`).join('\n') || '- 요청 범위 미확인'}\n\n## 결과\n- ${events.some(event => event.kind === 'output' && event.text) ? '수집된 응답을 확인했습니다. 실제 완료 여부는 원문 기준으로 확인해야 합니다.' : '미완료: 확인된 응답이 없어 결과 미확인입니다.'}`
     };
     if (fixture.rewriteVariant) value.title = `${value.title.slice(0, 180)} · 작업 기록`;
     if (scenario === 'rewrite-six-lines') value.description = Array.from({ length: 6 }, () => '형식 오류').join('\n');
@@ -94,7 +121,9 @@ else if (stage === 'review') {
     if (scenario === 'rewrite-summary-plain') value.description = '검토한 변경 사항을 일반 문장으로 정리했습니다.';
     if (scenario === 'rewrite-legacy-paragraph') value.description = '버전 1.2.3과 비율 3.14를 확인했습니다. 자료는 https://example.test/docs/v1.2?rate=3.14 입니다. Dr. Smith reviewed the API. 요구사항을 정리했습니다. 화면 흐름을 확인했습니다. <img src=x onerror=alert(1)>를 기록했습니다. 다음 검토가 남아 있습니다.';
     if (scenario === 'rewrite-blank') value.title = '   ';
-    if (scenario === 'rewrite-empty-section') value.description = '## 작업 배경\n배경\n\n## 목적\n목적\n\n## 범위\n범위\n\n## 결과';
+    if (['rewrite-empty-section', 'rewrite-empty-jira-section'].includes(scenario)) value.description = value.description.replace(/(h2\. 참고사항|## 결과)[\s\S]*$/, '$1');
+    if (scenario === 'rewrite-legacy-markdown') value.description = '## 작업 배경\n배경\n\n## 목적\n목적\n\n## 범위\n범위\n\n## 결과\n미확인';
+    if (scenario === 'rewrite-placeholder') value.description = value.description.replace(/h2\. 요구사항\n[^\n]+/, 'h2. 요구사항\n* {현재 확인된 요구사항}');
     text = JSON.stringify(value);
   }
   if (scenario === 'bad-html') text = text.replace("document.querySelector('#result').hidden=false", "throw new Error('broken button')");

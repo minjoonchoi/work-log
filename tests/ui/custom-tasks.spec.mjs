@@ -18,6 +18,7 @@ async function open(page) {
 }
 async function draft(dialog, { label = '주간 회의 기록', description = '회의 결정과 다음 행동을 정리한다.', terms = '주간 회의 기록, 주간결정정리' } = {}) {
   await dialog.getByRole('button', { name: '사용자 작업 등록', exact: true }).click();
+  await dialog.getByRole('button', { name: '직접 입력', exact: true }).click();
   await expect(dialog.getByLabel('기반 작업 유형', { exact: true })).toHaveValue('document.create');
   await dialog.getByLabel('작업 이름', { exact: true }).fill(label);
   await dialog.getByLabel('작업 목적', { exact: true }).fill(description);

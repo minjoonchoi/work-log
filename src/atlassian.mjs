@@ -8,7 +8,7 @@ import { jiraDescription, plainTextADF } from './jira-adf.mjs';
 export { jiraDescription } from './jira-adf.mjs';
 
 export const ATLASSIAN_CALLBACK = 'http://127.0.0.1:47831/oauth/atlassian/callback';
-export const ATLASSIAN_SCOPES = ['offline_access', 'read:jira-work', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'];
+export const ATLASSIAN_SCOPES = ['offline_access', 'read:jira-work', 'read:jira-user', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'];
 const clientId = value => {
   assert(typeof value === 'string' && value.trim() && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value), 'Client ID를 확인하세요.');
   return value.trim();
@@ -190,11 +190,16 @@ export class AtlassianClient {
       }
     });
   }
-  async request(apiPath, { method = 'GET', body, beforeSend } = {}) {
+  async request(apiPath, { method = 'GET', body, beforeSend, authorization } = {}) {
     assert(apiPath.startsWith('/') && !apiPath.startsWith('//') && !apiPath.includes('..'), 'API 경로가 올바르지 않습니다.');
     const send = async token => {
       // Recheck local snapshots after token/site I/O, immediately before a write.
-      try { beforeSend?.(); } catch (e) { e.not_sent = true; throw e; }
+      try {
+        authorization?.(token);
+        const pending = beforeSend?.();
+        if (pending?.then) await pending;
+        authorization?.(token);
+      } catch (e) { e.not_sent = true; throw e; }
       try { return await fetch(new URL(apiPath, this.apiOrigin), { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: json(body) } : {}), redirect: 'error', signal: AbortSignal.timeout(15000) }); }
       catch { throw error('Atlassian API 응답을 확인하지 못했습니다.', 502, 'unconfirmed'); }
@@ -306,7 +311,7 @@ export class AtlassianClient {
         transitions = result.transitions.filter(t => t.isAvailable !== false).map(t => {
           assert(typeof t.id === 'string' && /^\d+$/.test(t.id) && typeof t.name === 'string' && typeof t.to?.id === 'string' && typeof t.to.name === 'string', 'Jira 상태 변경 항목을 확인하세요.', 502);
           const required_fields = Object.entries(t.fields || {}).filter(([, f]) => f.required).map(([key, f]) => ({ key, name: f.name || key }));
-          return { id: t.id, name: t.name, to: { id: t.to.id, name: t.to.name }, required_fields };
+          return { id: t.id, name: t.name, to: { id: t.to.id, name: t.to.name, category: t.to.statusCategory?.key || 'undefined' }, required_fields };
         });
       } catch (e) { transition_message = e.message; }
     } else transition_message = 'Jira 쓰기 권한으로 OAuth를 다시 연결하면 상태를 변경할 수 있습니다.';
@@ -402,12 +407,30 @@ export class AtlassianClient {
     throw error('Jira 목록 조회 한도를 초과했습니다.', 409);
   }
   async createJiraIssue({ cloud_id, project, issue_type, title, description, operation_id, work_item_id }, { beforeSend } = {}) {
-    let site;
-    try { site = await this.site(cloud_id, 'jira'); } catch (e) { e.not_sent = true; throw e; }
-    assert(site.scopes.includes('write:jira-work'), 'Jira 쓰기 권한으로 OAuth를 다시 연결하세요.', 403);
-    assert(/^[a-zA-Z0-9_]+$/.test(project) && /^\d+$/.test(issue_type), 'Jira 프로젝트와 티켓 유형을 선택하세요.');
-    const result = await this.request(`/ex/jira/${cloud_id}/rest/api/3/issue`, { method: 'POST', beforeSend, body: {
-      fields: { project: { key: project }, issuetype: { id: issue_type }, summary: title, description: jiraDescription(description) },
+    let site, accountId, identityToken, observedToken, authorization;
+    try {
+      const generation = this.authorizationGeneration, config = json(this.config());
+      authorization = token => {
+        assert(this.authorizationGeneration === generation && json(this.config()) === config
+          && (!identityToken || sameState(token, identityToken)), 'Jira 생성 중 Atlassian 인증이 변경되었습니다. 현재 계정을 확인하고 다시 시도하세요.', 409);
+        observedToken = token;
+      };
+      site = await this.site(cloud_id, 'jira');
+      assert(site.scopes.includes('write:jira-work'), 'Jira 쓰기 권한으로 OAuth를 다시 연결하세요.', 403);
+      assert(site.scopes.includes('read:jira-user'), 'Jira 현재 사용자 읽기 권한(read:jira-user)으로 OAuth를 다시 연결하세요.', 403);
+      assert(/^[a-zA-Z0-9_]+$/.test(project) && /^\d+$/.test(issue_type), 'Jira 프로젝트와 티켓 유형을 선택하세요.');
+      const user = await this.request(`/ex/jira/${cloud_id}/rest/api/3/myself`, { authorization });
+      accountId = user?.accountId;
+      assert(typeof accountId === 'string' && accountId.length > 0 && accountId.length <= 256
+        && !/\s|[\u0000-\u001f\u007f]/.test(accountId) && !/^(?:unknown|anonymous)$/i.test(accountId)
+        && user.active !== false, 'Jira 현재 사용자를 확인할 수 없습니다. OAuth 계정과 사용자 읽기 권한을 확인하세요.', 502);
+      // Pin the credential that identified this user. A refresh or another OAuth
+      // connection must never reuse that identity with a different bearer token.
+      identityToken = observedToken;
+    } catch (e) { e.not_sent = true; throw e; }
+    const result = await this.request(`/ex/jira/${cloud_id}/rest/api/3/issue`, { method: 'POST', beforeSend, authorization, body: {
+      fields: { project: { key: project }, issuetype: { id: issue_type }, summary: title, description: jiraDescription(description),
+        reporter: { accountId }, assignee: { accountId } },
       properties: [{ key: 'work-log', value: { operation_id, work_item_id } }]
     } });
     assert(typeof result.id === 'string' && /^[a-zA-Z][a-zA-Z0-9_]*-\d+$/.test(result.key), 'Jira 티켓 생성 결과를 확인하지 못했습니다.', 502);
@@ -429,6 +452,60 @@ export class AtlassianClient {
     assert(property.value?.operation_id === link.operation_id, '이 생성 요청으로 만든 Jira 티켓인지 확인할 수 없습니다.', 409);
     const site = await this.site(link.request.cloud_id, 'jira');
     return { id: issue.id, key: issue.key, url: new URL(`/browse/${issue.key}`, site.url).href, cloud_id: link.request.cloud_id };
+  }
+  resultCommentPath(issue) {
+    assert(typeof issue?.id === 'string' && /^\d+$/.test(issue.id), 'Jira 결과 댓글의 이슈 ID를 확인하세요.');
+    return `${this.issuePath(issue.cloud_id, issue.id)}/comment`;
+  }
+  async postResultComment(issue, { operation_id, work_item_id, text, source_digest }, { beforeSend } = {}) {
+    let base;
+    try {
+      base = this.resultCommentPath(issue);
+      assert([operation_id, work_item_id, source_digest].every(value => typeof value === 'string' && value.trim()
+        && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value))
+        && typeof text === 'string' && text.trim() && text.length <= 32767, 'Jira 결과 댓글과 출처를 확인하세요.');
+      const site = await this.site(issue.cloud_id, 'jira');
+      assert(site.scopes.includes('write:jira-work'), 'Jira 쓰기 권한으로 OAuth를 다시 연결하세요.', 403);
+    } catch (e) { e.not_sent = true; throw e; }
+    const result = await this.request(base, { method: 'POST', beforeSend, body: {
+      body: plainTextADF(text), properties: [{ key: 'work-log-result', value: {
+        operation_id, work_item_id, source_digest, cloud_id: issue.cloud_id, issue_id: issue.id
+      } }]
+    } });
+    assert(typeof result?.id === 'string' && /^\d+$/.test(result.id), 'Jira 결과 댓글 생성 결과를 확인하지 못했습니다.', 502);
+    return { id: result.id };
+  }
+  async findResultComment(issue, operationId) {
+    const base = this.resultCommentPath(issue);
+    assert(typeof operationId === 'string' && operationId.trim() && operationId.length <= 256
+      && !/[\u0000-\u001f\u007f]/.test(operationId), 'Jira 결과 댓글 요청 ID를 확인하세요.');
+    await this.site(issue.cloud_id, 'jira');
+    let start = 0, total = null, match = null;
+    const seen = new Set();
+    for (let page = 0; page < 100; page++) {
+      const result = await this.request(`${base}?startAt=${start}&maxResults=100&orderBy=created&expand=properties`);
+      assert(Array.isArray(result?.comments) && result.comments.length <= 100 && result.startAt === start
+        && Number.isSafeInteger(result.total) && result.total >= 0
+        && start + result.comments.length <= result.total && (total === null || total === result.total), 'Jira 결과 댓글 페이지가 변경되었거나 올바르지 않습니다. 다시 확인하세요.', 502);
+      total = result.total;
+      for (const comment of result.comments) {
+        assert(typeof comment?.id === 'string' && /^\d+$/.test(comment.id) && !seen.has(comment.id)
+          && (comment.properties === undefined || Array.isArray(comment.properties)), 'Jira 결과 댓글 조회 응답을 확인하세요.', 502);
+        seen.add(comment.id);
+        const markers = (comment.properties || []).filter(property => property?.key === 'work-log-result');
+        const marker = markers.find(property => property.value?.operation_id === operationId)?.value;
+        if (!marker) continue;
+        assert(markers.length === 1 && marker.cloud_id === issue.cloud_id && marker.issue_id === issue.id
+          && typeof marker.work_item_id === 'string' && marker.work_item_id.trim()
+          && typeof marker.source_digest === 'string' && marker.source_digest.trim(), 'Jira 결과 댓글의 이슈와 출처를 확인할 수 없습니다.', 409);
+        assert(!match, '같은 요청의 Jira 결과 댓글이 여러 개입니다. 직접 확인하세요.', 409);
+        match = comment;
+      }
+      start += result.comments.length;
+      if (start === total) return match;
+      assert(result.comments.length > 0, 'Jira 결과 댓글 조회가 끝나지 않았습니다.', 502);
+    }
+    throw error('Jira 결과 댓글 조회 한도를 초과했습니다. 직접 확인하세요.', 409);
   }
   worklogPath(issue) {
     // Stable numeric IDs keep worklog ownership intact when Jira moves an issue to another project.

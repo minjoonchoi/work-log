@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["template_id", "label", "description", "routing_terms", "instruction"],
+  "properties": {
+    "template_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9._-]*$" },
+    "label": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "\\S" },
+    "description": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
+    "routing_terms": {
+      "type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "\\S" }
+    },
+    "instruction": { "type": "string", "minLength": 1, "maxLength": 12000, "pattern": "\\S" }
+  }
+}

@@ -46,6 +46,7 @@ test('execution diagnostics distinguish generation, review and repair I/O and sh
   fs.mkdirSync('output/playwright', { recursive: true });
   await page.screenshot({ path: 'output/playwright/execution-stage-details.png' });
   await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  await page.locator('.raw-history > summary').click();
   await expect(page.locator('.conversation-history .event-label-title')).toHaveText(['응답 출력', '프롬프트 입력']);
 });
 

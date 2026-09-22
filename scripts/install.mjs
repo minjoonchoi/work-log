@@ -6,8 +6,8 @@ import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ROOT, atomic, assert, json, digest } from '../src/shared.mjs';
-import { OWNER, quote, locations, stat, safePath, locked, readManifest, saveManifest, hookCommand,
-  inventory, matches, readConfig, writeConfig, hookPositions, skillLinks } from './install-state.mjs';
+import { OWNER, quote, locations, stat, safePath, locked, readManifest, saveManifest, recordDirectories,
+  inventory, matches } from './install-state.mjs';
 
 const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const plist = object => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>${Object.entries(object).map(([k, v]) => `<key>${xml(k)}</key>${typeof v === 'boolean' ? `<${v}/>` : Array.isArray(v) ? `<array>${v.map(s => `<string>${xml(s)}</string>`).join('')}</array>` : typeof v === 'object' ? `<dict>${Object.entries(v).map(([a, b]) => `<key>${xml(a)}</key>${typeof b === 'boolean' ? `<${b}/>` : `<string>${xml(b)}</string>`}`).join('')}</dict>` : `<string>${xml(v)}</string>`}`).join('')}</dict></plist>`;
@@ -33,20 +33,12 @@ export function prepareInstall({ output, homeDir = os.homedir(), sourceApp }) {
   const argv = [path.join(loc.app, 'Contents/MacOS/WorkLog'), '--background'];
   files.push({ target: loc.agents[2].path, label: 'local.worklog.gui', argv, content: plist({ Label: 'local.worklog.gui',
     ProgramArguments: argv, RunAtLoad: true, KeepAlive: false, EnvironmentVariables: { HARNESS_DATA_DIR: loc.data } }) });
-  const hooks = {};
-  for (const engine of ['claude', 'codex']) {
-    const command = hookCommand(loc, runtimeRoot, installationId, engine);
-    const events = ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd', 'PreToolUse', 'PostToolUse'];
-    if (engine === 'claude') events.push('PostToolUseFailure', 'StopFailure');
-    hooks[engine] = { hooks: Object.fromEntries(events.map(event => [event, [{ hooks: [{ type: 'command', command, timeout: 2 }] }]])) };
-  }
-  const links = skillLinks(loc, skills, runtimeRoot).map(l => ({ target: l.path, source: l.target }));
+  const hooks = {}, links = [];
   const plan = { installationId, homeDir: loc.home, version, sourceApp: path.resolve(sourceApp), targetApp: loc.app,
     dataDir: loc.data, runtimeRoot, files, hooks, links, skills, manifest: loc.manifest,
     note: '준비만 완료. --apply로 설치합니다. 기존 지시문을 보존하며 WorkLog 소유 기록과 일치하는 항목만 제거할 수 있습니다.' };
   fs.mkdirSync(output, { recursive: true });
   for (const f of files) atomic(path.join(output, path.basename(f.target)), f.content);
-  for (const engine of ['codex', 'claude']) atomic(path.join(output, `${engine}-hooks.json`), JSON.stringify(hooks[engine], null, 2));
   atomic(path.join(output, 'plan.json'), JSON.stringify(plan, null, 2));
   return plan;
 }
@@ -57,11 +49,7 @@ function intact(loc, receipt) {
     assert(matches(target, e), `기존 설치가 변경되었습니다. 보존 후 확인이 필요합니다: ${target}`);
   }
   for (const f of receipt.files) { safePath(loc.home, f.path); assert(matches(f.path, { ...f, kind: 'file' }), `기존 서비스 설정이 변경되었습니다: ${f.path}`); }
-  for (const link of receipt.links) { safePath(loc.home, link.path, { symlink: true }); assert(matches(link.path, { ...link, kind: 'symlink' }), `기존 지시문 연결이 변경되었습니다: ${link.path}`); }
-  for (const hook of receipt.hooks) {
-    const { value } = readConfig(loc, hook.path);
-    assert(hook.entries.every(e => hookPositions(value, e).length === 1), `기존 훅이 변경되었습니다: ${hook.path}`);
-  }
+
 }
 
 export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, launchctl = spawnSync } = {}) {
@@ -75,7 +63,7 @@ export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, la
     }
     assert(!previous || previous.state === 'uninstalled', '이전 설치 또는 제거가 미완료입니다. uninstall 결과를 먼저 확인하세요.');
     assert(!activate || loc.home === path.resolve(os.homedir()) || launchctl !== spawnSync, '다른 홈에는 서비스를 활성화할 수 없습니다. --no-activate를 사용하세요.');
-    for (const target of [loc.app, plan.runtimeRoot, ...plan.files.map(f => f.target), ...plan.links.map(l => l.target)]) {
+    for (const target of [loc.app, plan.runtimeRoot, ...plan.files.map(f => f.target)]) {
       safePath(loc.home, target, { symlink: true });
       assert(!stat(target), `이미 설치되었거나 사용자가 소유한 경로가 있습니다. 덮어쓰지 않습니다: ${target}`);
     }
@@ -84,18 +72,6 @@ export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, la
       assert(existing.status !== 0, `이미 등록된 서비스가 있습니다. 소유를 인계하지 않습니다: ${file.label}`);
       assert(/could not find (?:specified )?service|service not found/i.test(existing.stderr || ''), `기존 서비스 확인 실패: ${existing.stderr || existing.error?.message || existing.status}`);
     }
-    const replacements = Object.entries(plan.hooks).map(([engine, hooks]) => {
-      const target = loc.configs[engine], { raw, value } = readConfig(loc, target);
-      const record = { engine, path: target, hooksExisted: value.hooks !== undefined, entries: [] };
-      value.hooks ||= {};
-      for (const [event, groups] of Object.entries(hooks.hooks)) {
-        const eventExisted = value.hooks[event] !== undefined;
-        value.hooks[event] ||= []; assert(Array.isArray(value.hooks[event]), `${engine} ${event} 설정 형식을 확인하세요.`);
-        for (const group of groups) for (const hook of group.hooks) record.entries.push({ event, eventExisted, qualifiers: {}, hook });
-        value.hooks[event].push(...structuredClone(groups));
-      }
-      return { target, raw, value, record };
-    });
     for (const file of ['Contents/MacOS/node', 'Contents/MacOS/WorkLogKeychain', ...plan.skills.map(s => `Contents/Resources/harness/skills/${s}/SKILL.md`)])
       assert(fs.existsSync(path.join(plan.sourceApp, file)), `최신 macOS 앱을 먼저 빌드하세요: ${file}`);
     const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-install-stage-'));
@@ -114,22 +90,17 @@ export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, la
         fs.chmodSync(helper, 0o755);
       }
       const backupDir = path.join(loc.data, 'install-backups', plan.installationId);
-      receipt = { format: 1, owner: OWNER, id: plan.installationId, home: loc.home, version: plan.version, skills: plan.skills, state: 'installing', created_at: new Date().toISOString(),
+      receipt = { format: 2, owner: OWNER, id: plan.installationId, home: loc.home, version: plan.version, skills: plan.skills, state: 'installing', created_at: new Date().toISOString(),
         trees: [{ path: loc.app, entries: inventory(stagedApp) }, { path: plan.runtimeRoot, entries: inventory(stagedRuntime) }],
         files: plan.files.map(f => ({ path: f.target, label: f.label, argv: f.argv, content: f.content, digest: digest(f.content), mode: 0o600, activation: 'not_started' })),
-        links: plan.links.map(l => ({ path: l.target, target: l.source })), hooks: replacements.map(r => r.record), backup_dir: backupDir };
+        links: [], hooks: [], created_directories: [], created_configs: [], backup_dir: backupDir };
+      recordDirectories(loc, receipt, [loc.app, ...receipt.files.map(f => f.path)]);
       saveManifest(loc, receipt); // Persist exact ownership before the first shared configuration write.
       readManifest(loc); // Validate the same boundaries used by the uninstaller.
-      for (const r of replacements) if (r.raw !== null) atomic(path.join(backupDir, `${r.record.engine}.json`), r.raw);
       for (const [i, source] of [stagedApp, stagedRuntime].entries()) {
         const target = receipt.trees[i].path; safePath(loc.home, target); assert(!stat(target), `설치 대상이 변경되었습니다: ${target}`);
         fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
         fs.cpSync(source, target, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });
-      }
-      for (const r of replacements) writeConfig(loc, r.target, r.raw, r.value);
-      for (const link of receipt.links) {
-        safePath(loc.home, link.path, { symlink: true }); fs.mkdirSync(path.dirname(link.path), { recursive: true, mode: 0o700 });
-        fs.symlinkSync(link.target, link.path); const info = stat(link.path); link.identity = { dev: info.dev, ino: info.ino }; saveManifest(loc, receipt);
       }
       for (const f of receipt.files) {
         safePath(loc.home, f.path); fs.mkdirSync(path.dirname(f.path), { recursive: true, mode: 0o700 });

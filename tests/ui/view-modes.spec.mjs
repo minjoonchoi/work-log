@@ -53,6 +53,9 @@ test('one item with a 20-minute split becomes two ordered session rows; summary,
   await page.getByLabel('세션 검색').fill(''); await rows.nth(1).locator('.session-open').click();
   await expect(page.locator('.work-item-title')).toHaveText('통합 업무 대표');
   await expect(page.locator('.session-card[open]')).toHaveCount(1); await expect(page.locator('.session-card[open]')).toHaveAttribute('data-session-id', older.id);
+  await page.locator('.session-card[open] .raw-history > summary').click();
+  await expect(page.locator('.session-card[open] .event')).toHaveCount(2);
+  for (const record of await page.locator('.session-card[open] .event > summary').all()) await record.click();
   await expect(page.locator('.session-card[open] .event pre')).toHaveText(['독립검색어 검증 완료', '최초 요구 정리']);
   await page.getByRole('button', { name: '상세 닫기' }).click(); await page.getByLabel('목록 표시 단위').selectOption('items');
   await expect(page.getByRole('checkbox', { name: '통합 업무 대표 선택' })).not.toBeChecked();

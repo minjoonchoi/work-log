@@ -7,7 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { prepareInstall, applyInstall } from '../../scripts/install.mjs';
 import { prepareUninstall, applyUninstall } from '../../scripts/uninstall.mjs';
 import { controlServices } from '../../scripts/service-control.mjs';
-import { quote, locations } from '../../scripts/install-state.mjs';
+import { getAgentConnections, connectAgent, disconnectAgent } from '../../scripts/agent-connections.mjs';
+import { quote, locations, skillLinks } from '../../scripts/install-state.mjs';
 import { ROOT, readEndpoint } from '../../src/shared.mjs';
 import { Harness, eventually } from '../helpers.mjs';
 
@@ -21,8 +22,11 @@ function setup(t, real = false) {
   for (const name of ['WorkLog', 'WorkLogKeychain']) fs.writeFileSync(path.join(sourceApp, 'Contents/MacOS', name), 'test-package-placeholder');
   fs.writeFileSync(path.join(bundle, 'immutable.txt'), 'v1');
   fs.cpSync(path.join(ROOT, 'skills'), path.join(bundle, 'skills'), { recursive: true });
+  fs.mkdirSync(path.join(bundle, 'src'), { recursive: true }); fs.writeFileSync(path.join(bundle, 'src/hook.mjs'), '// fixture hook');
   if (real) {
     for (const name of ['src', 'bin', 'harness', 'contracts', 'apps/web']) fs.cpSync(path.join(ROOT, name), path.join(bundle, name), { recursive: true });
+    fs.mkdirSync(path.join(bundle, 'scripts'), { recursive: true });
+    for (const name of ['agent-connections', 'install-state', 'install', 'uninstall', 'service-control']) fs.copyFileSync(path.join(ROOT, `scripts/${name}.mjs`), path.join(bundle, `scripts/${name}.mjs`));
     for (const name of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(ROOT, name), path.join(bundle, name));
     for (const name of ['ajv', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'require-from-string']) fs.cpSync(path.join(ROOT, 'node_modules', name), path.join(bundle, 'node_modules', name), { recursive: true });
   }
@@ -35,6 +39,8 @@ function setup(t, real = false) {
   for (const target of ['.claude/CLAUDE.md', '.codex/AGENTS.md']) fs.writeFileSync(path.join(homeDir, target), 'User owned instructions\n');
   const plan = prepareInstall({ output: path.join(dir, 'plan'), homeDir, sourceApp });
   return { dir, homeDir, sourceApp, plan, loc, config,
+    links: skillLinks(loc, plan.skills, plan.runtimeRoot).map(l => ({ target: l.path, source: l.target })),
+    connect: () => { for (const engine of ['claude', 'codex']) connectAgent(engine, { homeDir }); },
     install: options => applyInstall(plan, { activate: false, ...options }),
     uninstall: options => applyUninstall({ homeDir, deactivate: false, ...options }),
     read: engine => JSON.parse(fs.readFileSync(loc.configs[engine], 'utf8')),
@@ -42,32 +48,176 @@ function setup(t, real = false) {
 }
 const present = file => { try { fs.lstatSync(file); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } };
 
-test('install plan, owned installation, and reinstall preserve user instructions and register one request skill without duplicate hooks', t => {
-  const f = setup(t);
-  assert.equal(present(f.plan.targetApp), false); assert.deepEqual(f.read('codex'), f.config);
+test('install and reinstall own only app/services until each agent is explicitly connected', t => {
+  const f = setup(t), before = Object.fromEntries(Object.entries(f.loc.configs).map(([engine, file]) => [engine, fs.readFileSync(file)]));
+  assert.equal(getAgentConnections({ homeDir: f.homeDir }).available, false);
   const result = f.install(); assert.equal(result.activated, false);
-  assert.equal(f.plan.skills.join(), 'work');
-  for (const engine of ['codex', 'claude']) {
-    const after = f.read(engine);
-    assert.equal(after.model, 'preserve-me'); assert.equal(after.disableAllHooks, true); assert.deepEqual(after.hooks.Stop[0], f.config.hooks.Stop[0]);
-    assert.equal(after.hooks.Stop.length, 2); assert.equal(after.hooks.UserPromptSubmit.length, 1);
-    assert.match(after.hooks.Stop[1].hooks[0].command, new RegExp(result.installation_id));
-  }
-  assert.equal(fs.readFileSync(path.join(f.plan.runtimeRoot, 'harness/immutable.txt'), 'utf8'), 'v1');
-  assert.equal(f.plan.files.length, 3); assert.equal(f.plan.links.length, 3);
-  for (const link of f.plan.links) {
+  assert.deepEqual(f.plan.hooks, {}); assert.deepEqual(f.plan.links, []);
+  const receipt = JSON.parse(fs.readFileSync(f.loc.manifest));
+  assert.equal(receipt.format, 2); assert.deepEqual(receipt.hooks, []); assert.deepEqual(receipt.links, []);
+  assert.deepEqual(getAgentConnections({ homeDir: f.homeDir }).connections.map(row => row.state), ['disconnected', 'disconnected']);
+  for (const [engine, file] of Object.entries(f.loc.configs)) assert.deepEqual(fs.readFileSync(file), before[engine]);
+  for (const link of f.links) assert.equal(present(link.target), false);
+  assert.equal(f.install().status, 'already_installed');
+  const connected = connectAgent('claude', { homeDir: f.homeDir });
+  assert.deepEqual(connected.connections.map(row => row.state), ['connected', 'disconnected']);
+  assert.equal(f.read('claude').hooks.Stop.length, 2); assert.deepEqual(fs.readFileSync(f.loc.configs.codex), before.codex);
+  assert.equal(connectAgent('claude', { homeDir: f.homeDir }).connections[0].state, 'connected');
+  assert.equal(f.read('claude').hooks.Stop.length, 2);
+  const connectedBytes = fs.readFileSync(f.loc.configs.claude);
+  assert.equal(f.install().status, 'already_installed'); assert.deepEqual(fs.readFileSync(f.loc.configs.claude), connectedBytes);
+  connectAgent('codex', { homeDir: f.homeDir });
+  for (const link of f.links) {
     assert.equal(fs.readlinkSync(link.target), link.source);
     assert.match(fs.readFileSync(path.join(link.target, 'SKILL.md'), 'utf8'), /name: work/);
   }
-  assert.equal(f.plan.hooks.claude.hooks.PostToolUseFailure.length, 1);
-  assert.equal(f.plan.hooks.codex.hooks.PostToolUseFailure, undefined);
-  assert.ok(f.plan.files.some(file => file.content.includes('<string>--background</string>')));
-  assert.equal(f.install().status, 'already_installed'); assert.equal(f.read('codex').hooks.Stop.length, 2);
+  assert.equal(f.read('claude').hooks.PostToolUseFailure.length, 1);
+  assert.equal(f.read('codex').hooks.PostToolUseFailure, undefined);
   assert.equal(fs.readFileSync(path.join(f.homeDir, '.codex/AGENTS.md'), 'utf8'), 'User owned instructions\n');
 });
 
-test('uninstall removes only owned hooks, links and binaries; later user settings, co-located hooks and SQLite data survive', t => {
+test('malformed or redirected agent configuration never blocks app install, reinstall or uninstall', t => {
+  const f = setup(t), outside = path.join(f.dir, 'outside-config');
+  fs.writeFileSync(f.loc.configs.claude, '{malformed'); fs.writeFileSync(outside, 'user settings');
+  fs.unlinkSync(f.loc.configs.codex); fs.symlinkSync(outside, f.loc.configs.codex);
+  assert.equal(f.install().status, 'installed'); assert.equal(f.install().status, 'already_installed');
+  assert.ok(getAgentConnections({ homeDir: f.homeDir }).connections.every(row => row.state === 'disconnected'));
+  assert.throws(() => connectAgent('claude', { homeDir: f.homeDir }), /JSON/);
+  assert.throws(() => connectAgent('codex', { homeDir: f.homeDir }), /심링크/);
+  assert.equal(f.uninstall().status, 'uninstalled');
+  assert.equal(fs.readFileSync(f.loc.configs.claude, 'utf8'), '{malformed');
+  assert.equal(fs.readlinkSync(f.loc.configs.codex), outside); assert.equal(fs.readFileSync(outside, 'utf8'), 'user settings');
+});
+
+for (const eventValue of [null, false, 0, '', {}]) test(`connection rejects an existing non-array hook event ${JSON.stringify(eventValue)} without rewriting it`, t => {
   const f = setup(t); f.install();
+  for (const engine of ['claude', 'codex']) {
+    const config = f.read(engine); config.hooks.Stop = eventValue; f.write(engine, config);
+    const before = fs.readFileSync(f.loc.configs[engine]), receipt = fs.readFileSync(f.loc.manifest);
+    assert.throws(() => connectAgent(engine, { homeDir: f.homeDir }), /Stop 설정 형식/);
+    assert.deepEqual(fs.readFileSync(f.loc.configs[engine]), before); assert.deepEqual(fs.readFileSync(f.loc.manifest), receipt);
+  }
+  for (const link of f.links) assert.equal(present(link.target), false);
+});
+
+for (const relative of ['node', 'harness/src/hook.mjs', 'harness/skills/work/SKILL.md']) test(`connection detects missing ${relative} and reconnect preserves existing ownership until restored`, t => {
+  const f = setup(t); f.install(); connectAgent('claude', { homeDir: f.homeDir });
+  const file = path.join(f.plan.runtimeRoot, relative), contents = fs.readFileSync(file), mode = fs.statSync(file).mode;
+  const config = fs.readFileSync(f.loc.configs.claude), receipt = fs.readFileSync(f.loc.manifest);
+  fs.unlinkSync(file);
+  const snapshot = getAgentConnections({ homeDir: f.homeDir });
+  assert.equal(snapshot.available, true); assert.equal(snapshot.connections[0].state, 'needs_attention');
+  assert.match(snapshot.connections[0].message, /실행 파일 또는 스킬/);
+  assert.throws(() => connectAgent('claude', { homeDir: f.homeDir }), /실행 파일 또는 스킬/);
+  assert.deepEqual(fs.readFileSync(f.loc.configs.claude), config); assert.deepEqual(fs.readFileSync(f.loc.manifest), receipt);
+  assert.ok(present(f.links[0].target)); assert.equal(present(file), false);
+  fs.writeFileSync(file, contents, { mode });
+  assert.equal(connectAgent('claude', { homeDir: f.homeDir }).connections[0].state, 'connected');
+  assert.deepEqual(fs.readFileSync(f.loc.configs.claude), config);
+});
+
+test('a link created by another actor after connection preflight is never adopted or removed', t => {
+  const f = setup(t); f.install(); const original = fs.symlinkSync, link = f.links[0];
+  fs.symlinkSync = (target, file, ...options) => {
+    if (file === link.target) original(target, file, ...options);
+    return original(target, file, ...options);
+  };
+  try { assert.throws(() => connectAgent('claude', { homeDir: f.homeDir }), error => error.code === 'EEXIST'); }
+  finally { fs.symlinkSync = original; }
+  const identity = fs.lstatSync(link.target), receipt = JSON.parse(fs.readFileSync(f.loc.manifest));
+  assert.equal(receipt.links[0].pending, true); assert.equal(receipt.links[0].identity, undefined);
+  assert.equal(getAgentConnections({ homeDir: f.homeDir }).connections[0].state, 'needs_attention');
+  assert.throws(() => disconnectAgent('claude', { homeDir: f.homeDir }), /소유를 확인/);
+  assert.equal(fs.readlinkSync(link.target), link.source); assert.equal(fs.lstatSync(link.target).ino, identity.ino);
+  assert.throws(() => connectAgent('claude', { homeDir: f.homeDir }), /소유를 확인/);
+  assert.equal(f.uninstall().status, 'needs_attention'); assert.ok(present(f.plan.runtimeRoot));
+  assert.equal(fs.lstatSync(link.target).ino, identity.ino);
+  fs.unlinkSync(link.target); assert.equal(f.uninstall().status, 'uninstalled');
+});
+
+test('disconnect is independent and idempotent, preserves user hooks and keeps every original backup', t => {
+  const f = setup(t); f.install(); f.connect();
+  const codex = fs.readFileSync(f.loc.configs.codex), backupDir = path.join(f.loc.data, 'install-backups', f.plan.installationId);
+  const firstBackups = fs.readdirSync(backupDir);
+  assert.equal(firstBackups.length, 2);
+  assert.ok(firstBackups.every(file => fs.readFileSync(path.join(backupDir, file), 'utf8') === JSON.stringify(f.config)));
+  assert.match(getAgentConnections({ homeDir: f.homeDir }).connections[0].message, /비활성화/);
+  const changed = f.read('claude'); changed.customProperty = 'preserve';
+  changed.hooks.Stop[1].hooks.push({ type: 'command', command: 'new-company-hook' }); f.write('claude', changed);
+  assert.deepEqual(disconnectAgent('claude', { homeDir: f.homeDir }).connections.map(row => row.state), ['disconnected', 'connected']);
+  assert.equal(f.read('claude').customProperty, 'preserve'); assert.equal(f.read('claude').disableAllHooks, true);
+  assert.deepEqual(f.read('claude').hooks.Stop, [f.config.hooks.Stop[0], { hooks: [{ type: 'command', command: 'new-company-hook' }] }]);
+  assert.deepEqual(fs.readFileSync(f.loc.configs.codex), codex); assert.ok(present(f.links[1].target));
+  const disconnected = fs.readFileSync(f.loc.configs.claude);
+  disconnectAgent('claude', { homeDir: f.homeDir }); assert.deepEqual(fs.readFileSync(f.loc.configs.claude), disconnected);
+  connectAgent('claude', { homeDir: f.homeDir });
+  assert.equal(fs.readdirSync(backupDir).length, 3);
+  for (const file of firstBackups) assert.equal(fs.readFileSync(path.join(backupDir, file), 'utf8'), JSON.stringify(f.config));
+});
+
+test('new empty agent configs and directories are tracked and removed, while later user data survives', t => {
+  const f = setup(t);
+  for (const dir of ['.claude', '.codex']) fs.rmSync(path.join(f.homeDir, dir), { recursive: true });
+  f.install();
+  for (const dir of ['.claude', '.codex', '.agents']) assert.equal(present(path.join(f.homeDir, dir)), false);
+  f.connect();
+  const receipt = JSON.parse(fs.readFileSync(f.loc.manifest));
+  assert.deepEqual(new Set(receipt.created_configs), new Set(Object.values(f.loc.configs)));
+  assert.ok(receipt.created_directories.includes(path.join(f.homeDir, '.agents/skills')));
+  disconnectAgent('claude', { homeDir: f.homeDir }); assert.equal(present(path.join(f.homeDir, '.claude')), false);
+  const config = f.read('codex'); config.userSetting = true; f.write('codex', config);
+  const ownSkill = path.join(f.homeDir, '.agents/skills/user-skill'); fs.mkdirSync(ownSkill); fs.writeFileSync(path.join(ownSkill, 'SKILL.md'), 'keep');
+  assert.equal(f.uninstall().status, 'uninstalled');
+  assert.deepEqual(f.read('codex'), { userSetting: true }); assert.equal(present(path.join(f.homeDir, '.codex/worklog')), false);
+  assert.equal(fs.readFileSync(path.join(ownSkill, 'SKILL.md'), 'utf8'), 'keep');
+});
+
+test('connection intent survives partial failure and reconnect safely repairs only recorded resources', t => {
+  const f = setup(t); f.install(); const original = fs.symlinkSync;
+  fs.symlinkSync = (target, link, ...options) => {
+    if (link === f.links[0].target) {
+      const receipt = JSON.parse(fs.readFileSync(f.loc.manifest));
+      assert.equal(receipt.hooks[0].engine, 'claude'); assert.equal(receipt.links[0].path, link);
+      assert.equal(f.read('claude').hooks.Stop.length, 2);
+      throw new Error('fixture link creation interrupted');
+    }
+    return original(target, link, ...options);
+  };
+  try { assert.throws(() => connectAgent('claude', { homeDir: f.homeDir }), /fixture link/); }
+  finally { fs.symlinkSync = original; }
+  assert.equal(getAgentConnections({ homeDir: f.homeDir }).connections[0].state, 'needs_attention');
+  assert.equal(connectAgent('claude', { homeDir: f.homeDir }).connections[0].state, 'connected');
+  assert.equal(f.read('claude').hooks.Stop.length, 2); assert.deepEqual(f.read('codex'), f.config);
+  assert.equal(f.uninstall().status, 'uninstalled'); assert.deepEqual(f.read('claude'), f.config);
+});
+
+test('changed owned hooks are preserved and reported by disconnect until the user restores them', t => {
+  const f = setup(t); f.install(); connectAgent('claude', { homeDir: f.homeDir });
+  const original = fs.readFileSync(f.loc.configs.claude), config = f.read('claude');
+  config.hooks.Stop[1].hooks[0].timeout = 123; f.write('claude', config);
+  assert.throws(() => disconnectAgent('claude', { homeDir: f.homeDir }), /변경되었거나 중복/);
+  assert.equal(getAgentConnections({ homeDir: f.homeDir }).connections[0].state, 'needs_attention');
+  assert.equal(f.read('claude').hooks.Stop[1].hooks[0].timeout, 123); assert.ok(present(f.plan.runtimeRoot));
+  assert.throws(() => connectAgent('claude', { homeDir: f.homeDir }), /변경되었거나 중복/);
+  fs.writeFileSync(f.loc.configs.claude, original);
+  assert.equal(disconnectAgent('claude', { homeDir: f.homeDir }).connections[0].state, 'disconnected');
+  assert.deepEqual(f.read('claude'), f.config);
+});
+
+test('connection mutation shares the installation lock and cannot claim unrecorded hooks', t => {
+  const f = setup(t); f.install();
+  const lock = path.join(f.loc.data, 'installation.lock'); fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+  for (const operation of [connectAgent, disconnectAgent]) assert.throws(() => operation('codex', { homeDir: f.homeDir }), /이미 실행 중/);
+  fs.unlinkSync(lock); connectAgent('codex', { homeDir: f.homeDir });
+  const config = f.read('codex'); disconnectAgent('codex', { homeDir: f.homeDir }); f.write('codex', config);
+  assert.throws(() => connectAgent('codex', { homeDir: f.homeDir }), /소유 기록이 없는/);
+  assert.deepEqual(f.read('codex'), config);
+  const receipt = JSON.parse(fs.readFileSync(f.loc.manifest)); receipt.created_directories.push(f.homeDir);
+  fs.writeFileSync(f.loc.manifest, JSON.stringify(receipt)); assert.throws(() => f.uninstall(), /디렉터리 소유 경로/);
+});
+
+test('uninstall removes only owned hooks, links and binaries; later user settings, co-located hooks and SQLite data survive', t => {
+  const f = setup(t); f.install(); f.connect();
   for (const engine of ['claude', 'codex']) {
     const config = f.read(engine); config.model = 'changed-after-install'; config.userAdded = true;
     config.hooks.Stop[1].hooks.push({ type: 'command', command: 'user-added-hook-in-same-group' });
@@ -82,16 +232,16 @@ test('uninstall removes only owned hooks, links and binaries; later user setting
     assert.deepEqual(config.hooks.Stop, [f.config.hooks.Stop[0], { hooks: [{ type: 'command', command: 'user-added-hook-in-same-group' }] }]);
     assert.deepEqual(config.hooks.Custom, f.config.hooks.Custom); assert.equal(config.hooks.UserPromptSubmit, undefined);
   }
-  for (const link of f.plan.links) assert.equal(present(link.target), false);
+  for (const link of f.links) assert.equal(present(link.target), false);
   assert.equal(present(f.loc.app), false); assert.equal(present(f.plan.runtimeRoot), false);
   assert.equal(fs.readFileSync(db, 'utf8'), 'persistent-user-data'); assert.ok(present(path.join(externalSkill, 'SKILL.md')));
   assert.equal(fs.readFileSync(path.join(f.homeDir, '.claude/CLAUDE.md'), 'utf8'), 'User owned instructions\n');
-  fs.mkdirSync(f.loc.app); fs.writeFileSync(path.join(f.loc.app, 'new-owner.txt'), 'keep new app');
+  fs.mkdirSync(f.loc.app, { recursive: true }); fs.writeFileSync(path.join(f.loc.app, 'new-owner.txt'), 'keep new app');
   assert.equal(f.uninstall().status, 'uninstalled'); assert.equal(fs.readFileSync(path.join(f.loc.app, 'new-owner.txt'), 'utf8'), 'keep new app');
 });
 
 for (const change of ['timeout', 'duplicate', 'remove-marker', 'malformed']) test(`uninstall preserves ${change} hook edits and dependent runtime, then safely resumes`, t => {
-  const f = setup(t); f.install(); const original = fs.readFileSync(f.loc.configs.claude, 'utf8');
+  const f = setup(t); f.install(); f.connect(); const original = fs.readFileSync(f.loc.configs.claude, 'utf8');
   const config = f.read('claude');
   if (change === 'timeout') config.hooks.Stop[1].hooks[0].timeout = 8;
   if (change === 'duplicate') config.hooks.Stop.push(structuredClone(config.hooks.Stop[1]));
@@ -106,7 +256,7 @@ for (const change of ['timeout', 'duplicate', 'remove-marker', 'malformed']) tes
 });
 
 for (const kind of ['different-link', 'regular-file', 'directory']) test(`uninstall preserves a skill path replaced with a ${kind}`, t => {
-  const f = setup(t); f.install(); const link = f.plan.links[0].target; fs.unlinkSync(link);
+  const f = setup(t); f.install(); f.connect(); const link = f.links[0].target; fs.unlinkSync(link);
   const external = path.join(f.dir, 'user-owned'); fs.mkdirSync(external); fs.writeFileSync(path.join(external, 'keep.txt'), 'keep');
   if (kind === 'different-link') fs.symlinkSync(external, link);
   if (kind === 'regular-file') fs.writeFileSync(link, 'replacement');
@@ -115,18 +265,22 @@ for (const kind of ['different-link', 'regular-file', 'directory']) test(`uninst
   assert.equal(fs.readFileSync(path.join(external, 'keep.txt'), 'utf8'), 'keep');
 });
 
-test('pre-existing or dangling instruction symlink blocks installation without changing user hooks', t => {
-  const f = setup(t); const link = f.plan.links[0].target;
+test('pre-existing or dangling instruction symlink blocks only explicit connection', t => {
+  const f = setup(t), link = f.links[0].target;
   fs.mkdirSync(path.dirname(link), { recursive: true }); fs.symlinkSync(path.join(f.dir, 'missing-user-target'), link);
-  assert.throws(() => f.install(), /덮어쓰지/); assert.deepEqual(f.read('claude'), f.config);
-  assert.equal(present(f.loc.app), false); assert.equal(fs.readlinkSync(link), path.join(f.dir, 'missing-user-target'));
+  assert.equal(f.install().status, 'installed');
+  assert.throws(() => connectAgent('claude', { homeDir: f.homeDir }), /덮어쓰지/);
+  assert.deepEqual(f.read('claude'), f.config); assert.ok(present(f.loc.app));
+  assert.equal(fs.readlinkSync(link), path.join(f.dir, 'missing-user-target'));
+  assert.equal(getAgentConnections({ homeDir: f.homeDir }).connections[0].state, 'disconnected');
+  assert.equal(f.uninstall().status, 'uninstalled'); assert.ok(present(link));
 });
 
 test('uninstall never follows a replaced config file or parent directory symlink', t => {
-  const f = setup(t); f.install();
+  const f = setup(t); f.install(); f.connect();
   const outside = path.join(f.dir, 'outside.json'); fs.writeFileSync(outside, JSON.stringify({ keep: true }));
   fs.unlinkSync(f.loc.configs.claude); fs.symlinkSync(outside, f.loc.configs.claude);
-  const skills = path.dirname(f.plan.links[1].target), originalSkills = `${skills}-moved`;
+  const skills = path.dirname(f.links[1].target), originalSkills = `${skills}-moved`;
   fs.renameSync(skills, originalSkills); fs.symlinkSync(originalSkills, skills);
   assert.equal(f.uninstall().status, 'needs_attention');
   assert.equal(fs.readFileSync(outside, 'utf8'), JSON.stringify({ keep: true }));
@@ -134,7 +288,7 @@ test('uninstall never follows a replaced config file or parent directory symlink
 });
 
 test('changed app files and new runtime files preserve complete installation trees', t => {
-  const f = setup(t); f.install();
+  const f = setup(t); f.install(); f.connect();
   const changed = path.join(f.loc.app, 'Contents/MacOS/WorkLog'); fs.writeFileSync(changed, 'user-replaced-app');
   const added = path.join(f.plan.runtimeRoot, 'new-user-file.txt'); fs.writeFileSync(added, 'keep');
   assert.equal(f.uninstall().status, 'needs_attention');
@@ -143,7 +297,7 @@ test('changed app files and new runtime files preserve complete installation tre
 });
 
 test('missing ownership receipt and path-tampered receipt never authorize deleting similarly named resources', t => {
-  const f = setup(t); f.install(); const original = fs.readFileSync(f.loc.manifest, 'utf8'); fs.unlinkSync(f.loc.manifest);
+  const f = setup(t); f.install(); f.connect(); const original = fs.readFileSync(f.loc.manifest, 'utf8'); fs.unlinkSync(f.loc.manifest);
   assert.equal(f.uninstall().status, 'unmanaged'); assert.ok(present(f.loc.app));
   const modified = JSON.parse(original); modified.trees[0].path = f.homeDir; fs.writeFileSync(f.loc.manifest, JSON.stringify(modified));
   assert.throws(() => f.uninstall(), /허용 경로/); assert.ok(present(f.loc.app)); assert.equal(f.read('claude').hooks.Stop.length, 2);
@@ -170,7 +324,7 @@ test('activation failure keeps its receipt; uninstall stops only verified owned 
 });
 
 test('a service reusing the label with other program arguments is not stopped and blocks removal', t => {
-  const f = setup(t); f.install();
+  const f = setup(t); f.install(); f.connect();
   const receipt = JSON.parse(fs.readFileSync(f.loc.manifest)); receipt.files[0].activation = 'registered'; fs.writeFileSync(f.loc.manifest, JSON.stringify(receipt));
   const calls = [];
   const result = f.uninstall({ deactivate: true, launchctl: (command, args) => {
@@ -205,7 +359,7 @@ function serviceFixture(f, { delayed = 0, neverStops = false } = {}) {
 }
 
 test('uninstall waits for asynchronous launchd removal instead of treating the first pending print as a failure', t => {
-  const f = setup(t); f.install(); const service = serviceFixture(f, { delayed: 2 });
+  const f = setup(t); f.install(); f.connect(); const service = serviceFixture(f, { delayed: 2 });
   const result = f.uninstall({ deactivate: true, launchctl: service.launchctl });
   assert.equal(result.status, 'uninstalled', JSON.stringify(result));
   assert.equal(service.calls.filter(args => args[0] === 'bootout').length, 3);
@@ -214,7 +368,7 @@ test('uninstall waits for asynchronous launchd removal instead of treating the f
 });
 
 test('uninstall timeout preserves files and hooks until a later confirmed service stop', t => {
-  const f = setup(t); f.install(); const service = serviceFixture(f, { neverStops: true });
+  const f = setup(t); f.install(); f.connect(); const service = serviceFixture(f, { neverStops: true });
   const result = f.uninstall({ deactivate: true, launchctl: service.launchctl, stopTimeoutMs: 1 });
   assert.equal(result.status, 'needs_attention'); assert.deepEqual(result.removed, []);
   assert.ok(result.preserved.every(row => row.reason.includes('대기 시간이 초과')));
@@ -224,7 +378,7 @@ test('uninstall timeout preserves files and hooks until a later confirmed servic
 });
 
 test('GUI quit preserves user work and runtime while stopping the manager; reopening cancels draining without duplicate services', async t => {
-  const f = setup(t); f.install(); const service = serviceFixture(f);
+  const f = setup(t); f.install(); f.connect(); const service = serviceFixture(f);
   let release; const pending = new Promise(resolve => { release = resolve; });
   const stopping = service.control('stop', { runtimeRequest: async (dir, role, endpoint) => {
     assert.equal(dir, f.loc.data); assert.equal(role, 'runtime'); assert.equal(endpoint, '/lifecycle/quit');
@@ -244,7 +398,7 @@ test('GUI quit preserves user work and runtime while stopping the manager; reope
 });
 
 test('GUI quit without user work stops backend services but preserves installation; dormant runtime is restarted on open', async t => {
-  const f = setup(t); f.install(); const service = serviceFixture(f, { delayed: 1 });
+  const f = setup(t); f.install(); f.connect(); const service = serviceFixture(f, { delayed: 1 });
   assert.equal((await service.control('stop', { runtimeRequest: async () => ({ status: 'draining', remaining_user_runs: 0 }) })).status, 'stopped');
   assert.deepEqual([...service.registered.keys()], ['local.worklog.gui']);
   assert.ok(present(f.loc.app)); assert.equal(f.read('codex').hooks.Stop.length, 2);
@@ -256,7 +410,7 @@ test('GUI quit without user work stops backend services but preserves installati
 });
 
 test('reopening recovers when a draining runtime exits after its PID was observed', async t => {
-  const f = setup(t); f.install(); const service = serviceFixture(f); let attempts = 0;
+  const f = setup(t); f.install(); f.connect(); const service = serviceFixture(f); let attempts = 0;
   const result = await service.control('start', { runtimeRequest: async () => {
     if (++attempts === 1) { service.registered.get('local.worklog.runtime').pid = null; throw new Error('connection closed during draining'); }
     assert.ok(service.registered.get('local.worklog.runtime').pid); return { status: 'running' };
@@ -286,7 +440,7 @@ test('make install/uninstall uses real CLI entrypoints against an isolated home;
 });
 
 test('concurrent install/uninstall is blocked by the same live-owner lock without changing hooks', t => {
-  const f = setup(t); f.install();
+  const f = setup(t); f.install(); f.connect();
   const lock = path.join(f.loc.data, 'installation.lock'); fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, nonce: 'other-operation' }));
   assert.throws(() => f.install(), /이미 실행 중/); assert.throws(() => f.uninstall(), /이미 실행 중/);
   assert.equal(f.read('codex').hooks.Stop.length, 2); assert.ok(present(f.loc.app));
@@ -294,12 +448,12 @@ test('concurrent install/uninstall is blocked by the same live-owner lock withou
 });
 
 test('installed request skill delegates natural language to classification and a Codex protocol worker, and hooks feed the work item before uninstall', async t => {
-  const f = setup(t, true); f.install();
+  const f = setup(t, true); f.install(); f.connect();
   const h = new Harness(f.loc.data); h.executable = path.join(f.plan.runtimeRoot, 'node'); h.serviceRoot = path.join(f.plan.runtimeRoot, 'harness');
   h.testMode = false; h.env = { HARNESS_CODEX_BIN: path.join(ROOT, 'tests/fixtures/cli-double.mjs') };
   t.after(() => h.close(false)); await h.start('runtime'); await h.start('manager');
   const requestFile = path.join(f.dir, 'request.json'); fs.writeFileSync(requestFile, JSON.stringify({ prompt: '초대 기능 PRD를 작성해 주세요.' }));
-  const helper = path.join(f.plan.links[0].target, 'scripts/harness');
+  const helper = path.join(f.links[0].target, 'scripts/harness');
   const child = spawnSync(helper, ['run', '--input', requestFile, '--wait'], { cwd: f.dir, encoding: 'utf8', timeout: 15000 });
   assert.equal(child.status, 0, child.stderr); const run = JSON.parse(child.stdout);
   assert.equal(run.status, 'completed'); assert.equal(run.task, 'prd.create'); assert.equal(run.engine, 'codex'); assert.ok(present(run.artifact.file));
@@ -318,7 +472,7 @@ test('packaged custom task settings survive uninstall and reinstall unchanged an
   const fixtures = path.join(f.sourceApp, 'Contents/Resources/harness/tests/fixtures');
   fs.mkdirSync(fixtures, { recursive: true });
   fs.copyFileSync(path.join(ROOT, 'tests/fixtures/worker.mjs'), path.join(fixtures, 'worker.mjs'));
-  f.install();
+  f.install(); f.connect();
   const h = new Harness(f.loc.data); h.executable = path.join(f.plan.runtimeRoot, 'node'); h.serviceRoot = path.join(f.plan.runtimeRoot, 'harness');
   t.after(() => h.close(false)); await h.start('runtime'); await h.start('manager');
   const initial = await h.manager('/execution-settings');

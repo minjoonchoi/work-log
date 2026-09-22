@@ -26,6 +26,8 @@ test('session contains original I/O and results; worker details open on demand a
   await expect(session.locator('.session-result')).toContainText('PRD 작성');
   await expect(session.locator('.session-result')).toBeHidden();
   await session.locator('.session-results > summary').click();
+  await expect(session.locator('.event')).toHaveCount(0);
+  await session.locator('.raw-history > summary').click();
   await expect(session.locator('.event')).toHaveCount(2); await expect(session.locator('.event').first()).toHaveAttribute('data-kind', 'output');
   await expect(page.locator('#detail')).not.toContainText(run.id);
   await session.getByRole('button', { name: '실행 상세', exact: true }).click();
@@ -55,10 +57,14 @@ test('unlinked result is visible until its original hook input arrives, then mov
   await eventually(() => h.manager('/items/waiting-ui'), d => d.runs[0]?.status === 'completed');
   await open(page); await expect(page.locator('.unlinked-results .session-result')).toHaveCount(1);
   await expect(page.locator('.session-card')).toHaveCount(0);
+  await expect(page.locator('.unlinked-results .session-result')).toBeHidden();
+  await page.locator('.unlinked-results > summary').click();
+  await expect(page.locator('.unlinked-results .session-result')).toBeVisible();
   await h.ingest(pair('late-ui', '09:00:00', '09:05:00', 'one', { work_item_id: 'waiting-ui', text: '늦게 수집한 요청' }));
   await expect(page.locator('.unlinked-results')).toHaveCount(0);
   await expect(page.locator('.session-card')).toHaveCount(1); await page.locator('.session-card > summary').click();
   await page.locator('.session-results > summary').click();
   await expect(page.locator(`.session-card [data-run-id="${run.id}"]`)).toBeVisible();
-  await expect(page.locator('.session-result')).toHaveCount(1); await expect(page.locator('.event')).toHaveCount(2);
+  await expect(page.locator('.session-result')).toHaveCount(1); await expect(page.locator('.event')).toHaveCount(0);
+  await page.locator('.raw-history > summary').click(); await expect(page.locator('.event')).toHaveCount(2);
 });

@@ -101,6 +101,25 @@ export function notificationStore({ store, writings, integrations }) {
         });
       }
     }
+    if (one("SELECT name FROM sqlite_master WHERE type='table' AND name='jira_result_comments'")) {
+      const comments = all(`SELECT comment.* FROM jira_result_comments comment JOIN
+        (SELECT link_operation,MAX(seq) AS seq FROM jira_result_comments GROUP BY link_operation) latest ON latest.seq=comment.seq`);
+      for (const comment of comments) {
+        if (!['failed', 'unknown'].includes(comment.state)) continue;
+        const link = links.find(link => link.operation_id === comment.link_operation && link.state === 'linked');
+        if (!link || store.canonical(comment.work_item_id) !== store.canonical(link.work_item_id)) continue;
+        // The transition already has its own actionable notification if it failed or is uncertain.
+        const transition = one('SELECT state FROM jira_changes WHERE operation_id=?', comment.transition_operation);
+        if (!['applied', 'observed'].includes(transition?.state)) continue;
+        add('jira_result_comment', comment.link_operation, comment.work_item_id,
+          [comment.operation_id, comment.state, comment.message], {
+            title: comment.state === 'failed' ? 'Jira 완료 결과 댓글 작성에 실패했습니다' : 'Jira 완료 결과 댓글 전송 결과를 확인하세요',
+            message: comment.message || 'Jira 상태 변경은 유지됩니다. 업무 상세에서 댓글 기록을 확인하세요.',
+            occurred_at: comment.updated_at, link_operation_id: comment.link_operation,
+            ...(comment.run_id ? { run_id: comment.run_id } : {}), action_label: 'Jira 연결 확인'
+          });
+      }
+    }
     return result.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at) || a.id.localeCompare(b.id));
   }
   function list() {

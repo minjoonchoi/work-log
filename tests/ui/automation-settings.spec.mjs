@@ -38,7 +38,8 @@ test('GUI persists automatic writing thresholds and the collected second respons
   const result = await eventually(() => h.manager(`/items/${item.id}`), detail => detail.metadata_rewrite?.state === 'completed', 20000);
   await expect(page.locator('.metadata-writing .writing-status')).toContainText('작성 완료');
   await expect(page.locator('.work-item-title')).toHaveText(result.item.title);
-  await expect(page.locator('.work-item-description h3')).toHaveText(['작업 배경', '목적', '범위', '결과']);
+  await expect(page.locator('.work-item-description h3')).toHaveText(['배경', '목표', '요구사항', '작업 범위', '참고사항']);
+  expect(result.item.description.match(/^h2\. .+$/gm)).toEqual(['h2. 배경', 'h2. 목표', 'h2. 요구사항', 'h2. 작업 범위', 'h2. 참고사항']);
   expect(result.runs.filter(run => run.internal && run.task === 'text.rewrite')).toHaveLength(1);
   await page.screenshot({ path: 'output/playwright/automatic-metadata-result.png', fullPage: true });
 });

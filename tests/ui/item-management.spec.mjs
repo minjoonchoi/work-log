@@ -113,6 +113,9 @@ test('bulk deletion previews selected visible items, cancellation sends nothing,
   expect(historyIds(restored)).toEqual(expect.arrayContaining(historyIds(before)));
   expect(restored.events.filter(record => record.session_id === restored.sessions[0].id && ['input', 'output'].includes(record.kind))).toHaveLength(4);
   await row(page, a).locator('.item-open').click(); await page.locator('.session-card > summary').click();
+  await page.locator('.session-card .raw-history > summary').click();
+  await expect(page.locator('.event')).toHaveCount(4);
+  for (const record of await page.locator('.event > summary').all()) await record.click();
   await expect(page.locator('.event pre')).toContainText(['삭제 후 추가된 같은 업무 이력', '삭제 후 추가된 같은 업무 이력', '선택 삭제 A', '선택 삭제 A']);
   expect(JSON.stringify(issue)).toBe(originalIssue); expect(f.state.calls.filter(call => call.method !== 'GET')).toHaveLength(0);
 });

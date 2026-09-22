@@ -15,7 +15,10 @@ async function open(page) { await page.goto(`http://127.0.0.1:${readEndpoint(h.d
 
 const secretPath = '/api/integrations/atlassian/client-secret';
 const clientSettings = { client_id: 'fixture-client', client_secret: 'fixture-secret' };
-const showSettings = page => page.getByRole('button', { name: '연결 설정' }).click();
+const showSettings = async page => {
+  await page.getByRole('button', { name: '연결 설정', exact: true }).click();
+  await page.getByRole('button', { name: 'Atlassian 설정', exact: true }).click();
+};
 const clientField = page => page.getByLabel('Client ID', { exact: true });
 const secretField = page => page.getByLabel('Client Secret', { exact: true });
 const reveal = page => page.getByRole('button', { name: 'Client Secret 보기', exact: true });
@@ -148,10 +151,11 @@ test('manual ticket creation → live session summary and Jira worklog status wi
   expect(adfText(f.state.issues[0].fields.description)).toBe(item.description);
   await h.ingest(pair('jira-ui', '09:25:00', '09:27:00', 'two', { text: '정리한 요구사항으로 화면을 설계합니다.' }));
   await expect(page.locator('.session-card')).toHaveCount(2);
-  const oldSession = page.locator('.session-card').last(); await oldSession.locator('summary').click();
+  const oldSession = page.locator('.session-card').last(); await oldSession.locator(':scope > summary').click();
   await expect(oldSession.locator('.summary-text')).toBeVisible({ timeout: 20000 });
   await expect(oldSession.locator('.sync-status')).toContainText('Jira 동기화됨', { timeout: 15000 });
   await expect(page.getByRole('heading', { name: '연결 미확인 출력', exact: true })).toHaveCount(0);
+  await oldSession.locator('.raw-history > summary').click();
   await expect(oldSession.locator('.event').first()).toHaveAttribute('data-kind', 'output');
   await expect(oldSession).toContainText('5분 0초');
   await page.screenshot({ path: 'output/playwright/jira-session-worklog.png', fullPage: true });

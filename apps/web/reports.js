@@ -143,7 +143,7 @@ export function reportsUI({ api, esc, modal, toast, absoluteTime, navigate, acti
     };
   }
   function reportHTML(body) {
-    return descriptionHTML(reportBodyMarkdown(body), esc);
+    return descriptionHTML(reportBodyMarkdown(body), esc, { format: 'markdown' });
   }
   function bindReferences(container, data) {
     container.querySelectorAll('[data-report-reference]').forEach(button => button.onclick = async () => {

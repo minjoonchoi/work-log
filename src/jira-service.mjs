@@ -1,9 +1,10 @@
 import { assert, json, now } from './shared.mjs';
 import { jiraDescription } from './jira-adf.mjs';
 import { canonicalJson } from './schema.mjs';
+import { jiraResultComments } from './jira-result-comments.mjs';
 
 // Jira status is independent of local work item completion. Cache reads; journal external writes.
-export function jiraService({ store, integrations, client, notify }) {
+export function jiraService({ dir, store, integrations, client, notify, fixture = false }) {
   const db = store.db;
   db.exec(`CREATE TABLE IF NOT EXISTS jira_issue_views (
     issue_key TEXT PRIMARY KEY, data TEXT, observed_at TEXT, checked_at TEXT NOT NULL, error TEXT);
@@ -20,6 +21,7 @@ export function jiraService({ store, integrations, client, notify }) {
   const one = (sql, ...p) => db.prepare(sql).get(...p), exec = (sql, ...p) => db.prepare(sql).run(...p);
   const keyOf = issue => `${issue.cloud_id}:${issue.id}`;
   const queues = new Map(), refreshing = new Map();
+  const results = jiraResultComments({ dir, store, integrations, client, notify, exclusive, fixture });
   function exclusive(key, fn) {
     const task = (queues.get(key) || Promise.resolve()).catch(() => {}).then(fn);
     queues.set(key, task);
@@ -64,6 +66,7 @@ export function jiraService({ store, integrations, client, notify }) {
   }
   function finish(op, state, message = null) {
     exec('UPDATE jira_changes SET state=?,message=?,updated_at=? WHERE operation_id=?', state, message, now(), op); notify();
+    results.observeTransition(op);
   }
   async function fetchState(issue, checkVisible) {
     checkVisible();
@@ -137,6 +140,7 @@ export function jiraService({ store, integrations, client, notify }) {
         selected = current.transitions.find(t => t.id === input.transition_id);
         assert(selected, '이슈에서 가능한 상태 변경이 달라졌습니다. 다시 선택하세요.', 409);
         assert(!selected.required_fields.length, '추가 필수 입력이 필요한 상태 변경입니다. Jira 이슈 링크에서 변경하세요.', 409);
+        if (selected.to.category === 'done') results.prepare(operation, input.operation_id);
       } catch (e) { finish(input.operation_id, 'failed', e.message); throw e; }
       exec("UPDATE jira_changes SET state='sending',target_status=?,updated_at=? WHERE operation_id=?", selected.to.id, now(), input.operation_id); notify();
       try { await client.transitionIssue(issue, selected.id, { beforeSend: checkVisible }); }
@@ -202,7 +206,8 @@ export function jiraService({ store, integrations, client, notify }) {
   }
   function decorate(detail) {
     return { ...detail, jira_links: detail.jira_links.map(l => l.issue && l.state === 'linked'
-      ? { ...l, view: view(keyOf(l.issue)), change: change(keyOf(l.issue)), content_change: contentChange(keyOf(l.issue)) } : l) };
+      ? { ...l, view: view(keyOf(l.issue)), change: change(keyOf(l.issue)), content_change: contentChange(keyOf(l.issue)), result_comment: results.view(l.operation_id) } : l) };
   }
-  return { link, refresh, refreshItem, transition, updateContent, decorate };
+  return { link, refresh, refreshItem, transition, updateContent, decorate, tickResults: results.tick,
+    retryResult: results.retry, reconcileResult: results.reconcile };
 }

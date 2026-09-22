@@ -4,6 +4,9 @@ import { Harness, pair } from '../helpers.mjs';
 import { atlFixture, authorize, createIssue, adfText } from '../fixtures/atlassian.mjs';
 import { AtlassianClient } from '../../src/atlassian.mjs';
 import { KeychainClientCredentials, KeychainTokens } from '../../src/credentials.mjs';
+import { isJiraWiki } from '../../apps/web/description-syntax.js';
+import { descriptionHTML } from '../../apps/web/description.js';
+import { jiraDescription } from '../../src/jira-adf.mjs';
 
 async function setup(t) {
   const h = new Harness(), f = await atlFixture(h);
@@ -23,6 +26,66 @@ async function setup(t) {
 const nodes = doc => [doc, ...(doc.content || []).flatMap(nodes)];
 const text = doc => doc.type === 'text' ? doc.text : doc.type === 'hardBreak' ? '\n'
   : (doc.content || []).map(text).join(['doc', 'bulletList', 'orderedList', 'listItem'].includes(doc.type) ? '\n' : '');
+
+test('format detection skips complete fences and literal macro bodies before choosing the first real heading', () => {
+  for (const marker of ['`', '~']) {
+    const source = `${marker.repeat(4)}\n${marker.repeat(3)}\nh2. fenced example\n${marker.repeat(4)}\n## Markdown title`;
+    assert.equal(isJiraWiki(source), false);
+    assert.deepEqual(nodes(jiraDescription(source)).filter(node => node.type === 'heading').map(node => node.content[0].text), ['Markdown title']);
+  }
+  for (const macro of ['code', 'noformat', 'panel', 'quote']) {
+    const source = `{${macro}}\n# literal heading\n{${macro}}\nh2. 위키 제목`;
+    assert.equal(isJiraWiki(source), true);
+    assert.deepEqual(nodes(jiraDescription(source)).filter(node => node.type === 'heading').map(node => node.content[0].text), ['위키 제목']);
+  }
+});
+
+test('raw HTML attributes and wiki image options preserve inline syntax as literal source', () => {
+  const literals = ['<img alt="*literal stars*" data-doc="[label|https://example.test]">', '!chart.png|title=*literal stars*!', '<a title="quoted > *stars*" data-code="{{literal}}">'];
+  const source = `h2. 참고사항\n${literals.join('\n')}`, adf = jiraDescription(source);
+  for (const literal of literals) assert.ok(text(adf).includes(literal));
+  assert.ok(nodes(adf).every(node => !node.marks?.length));
+  const escaped = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  const html = descriptionHTML(source, escaped);
+  for (const literal of literals) assert.ok(html.includes(escaped(literal)));
+  assert.doesNotMatch(html, /<(?:a|img|strong|code)(?:>|\s)/);
+  for (const literal of literals) assert.ok(text(jiraDescription(`h2. 참고사항\n*outside ${literal} outside*`)).includes(literal), 'outer delimiters must not consume syntax inside a literal resource');
+});
+
+test('Jira wiki source stays unchanged while create and update send the five sections and inline formatting as ADF', async t => {
+  const { h, f, client, setDescription } = await setup(t);
+  const headings = ['배경', '목표', '요구사항', '작업 범위', '참고사항'];
+  const description = 'h2. 배경\n* 기존의 *초대 실패*를 확인했습니다.\n\nh2. 목표\n* 재초대 흐름을 명확히 합니다.\n\nh2. 요구사항\n* [관련 명세|https://example.com/spec?q=1&v=2]\n* *{{invite(user)}}* 호출\n\nh2. 작업 범위\n* 생성 API\n* 상태 화면\n\nh2. 참고사항\n* 검증 전 초안입니다.';
+  const item = await setDescription(description), linked = await createIssue(h, item);
+  const created = f.state.issues[0].fields.description, all = nodes(created);
+  assert.equal(f.state.issues[0].fields.summary, item.title);
+  assert.deepEqual(created.content.filter(node => node.type === 'heading').map(node => [node.attrs.level, node.content[0].text]), headings.map(value => [2, value]));
+  assert.deepEqual(created.content.map(node => node.type), headings.flatMap(() => ['heading', 'bulletList']));
+  assert.deepEqual(all.find(node => node.text === '초대 실패').marks, [{ type: 'strong' }]);
+  assert.deepEqual(all.find(node => node.text === '관련 명세').marks, [{ type: 'link', attrs: { href: 'https://example.com/spec?q=1&v=2' } }]);
+  assert.deepEqual(all.find(node => node.text === 'invite(user)').marks, [{ type: 'code' }]);
+  assert.equal((await h.manager(`/items/${item.id}`)).item.description, description);
+  const changed = description.replace('검증 전 초안입니다.', '*검토 완료*');
+  await client.updateJiraIssue(linked.issue, { title: '확정한 업무 제목', description: changed });
+  const request = f.state.calls.find(call => call.method === 'PUT' && call.path.endsWith('/issue/1'));
+  assert.equal(request.body.fields.summary, '확정한 업무 제목');
+  assert.deepEqual(request.body.fields.description.content.filter(node => node.type === 'heading').map(node => node.content[0].text), headings);
+  assert.deepEqual(nodes(request.body.fields.description).find(node => node.text === '검토 완료').marks, [{ type: 'strong' }]);
+  assert.equal((await h.manager(`/items/${item.id}`)).item.description, description, 'sending a Jira update must not rewrite saved source');
+});
+
+test('Jira wiki macros, resources, raw HTML and unsafe links remain literal in issue ADF', async t => {
+  const { f, client } = await setup(t), issue = f.addIssue();
+  const source = 'h2. 참고사항\n* [위험|javascript:alert(1)]\n* [첨부|data:text/html,hello]\n* [계정|https://user:pass@example.com]\n* !https://example.com/image.png!\n* <img src=x onerror=alert(1)>\n* {toc}\n\n{panel:title=*문자 그대로*}\nh2. 제목 아님\n* 강조 아님\n{panel}\n\n{code:html}\n<script>alert(1)</script>\n\nh2. 코드 속 제목\n{code}';
+  await client.updateJiraIssue({ cloud_id: 'cloud-test', id: issue.id }, { title: '안전한 위키 미리보기', description: source });
+  const adf = issue.fields.description, all = nodes(adf);
+  assert.equal(all.filter(node => node.type === 'heading').length, 1);
+  assert.ok(all.every(node => ['doc', 'heading', 'paragraph', 'text', 'hardBreak', 'bulletList', 'listItem'].includes(node.type)));
+  assert.ok(all.every(node => !node.marks?.length));
+  assert.ok(all.every(node => node.type !== 'text' || node.text.length > 0), 'blank macro lines use hardBreak instead of invalid empty ADF text nodes');
+  for (const literal of ['[위험|javascript:alert(1)]', '[첨부|data:text/html,hello]', '[계정|https://user:pass@example.com]',
+    '!https://example.com/image.png!', '<img src=x onerror=alert(1)>', '{toc}', '{panel:title=*문자 그대로*}', 'h2. 제목 아님', '* 강조 아님', '<script>alert(1)</script>', 'h2. 코드 속 제목']) assert.ok(text(adf).includes(literal), literal);
+});
 
 test('work item Markdown remains the source while Jira create and update send headings, lists, strong and links as ADF', async t => {
   const { h, f, client, setDescription } = await setup(t);

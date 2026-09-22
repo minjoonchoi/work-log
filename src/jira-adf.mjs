@@ -1,4 +1,6 @@
-// A bounded Markdown subset for work item descriptions. Keep unsupported input
+import { isJiraWiki, parseJiraWiki } from '../apps/web/description-syntax.js';
+
+// Bounded Jira wiki and legacy Markdown for work item descriptions. Keep unsupported input
 // as literal text; never interpret HTML or create executable/resource nodes.
 const textNode = (text, marks = []) => ({ type: 'text', text, ...(marks.length ? { marks } : {}) });
 const document = content => ({ version: 1, type: 'doc', content });
@@ -46,6 +48,14 @@ const listItem = line => /^([-+*]|\d{1,9}[.)])[ \t]+(.+)$/.exec(line);
 const listKind = match => /^\d/.test(match[1]) ? 'orderedList' : 'bulletList';
 
 export function jiraDescription(text) {
+  if (isJiraWiki(text)) {
+    const inline = nodes => nodes.map(node => textNode(node.text, node.marks.map(mark => mark.type === 'link'
+      ? { type: 'link', attrs: { href: mark.href } } : mark)));
+    return document(parseJiraWiki(text).map(block => block.type === 'heading'
+      ? { type: 'heading', attrs: { level: block.level }, content: inline(block.content) }
+      : block.type === 'paragraph' ? { type: 'paragraph', content: block.lines.flatMap((line, index) => [...(index ? [{ type: 'hardBreak' }] : []), ...inline(line)]) }
+      : { type: block.type, ...(block.type === 'orderedList' ? { attrs: { order: 1 } } : {}), content: block.items.map(item => ({ type: 'listItem', content: [{ type: 'paragraph', content: inline(item) }] })) }));
+  }
   const source = String(text), lines = source.replaceAll('\r\n', '\n').split('\n');
   // Legacy descriptions retain exact line breaks and literal text.
   if (!lines.some(line => heading(line) || listItem(line) || /^(`{3,}|~{3,})/.test(line))

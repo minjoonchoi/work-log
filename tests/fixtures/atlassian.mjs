@@ -6,10 +6,12 @@ import assert from 'node:assert/strict';
 // Protocol simulators: never contact Atlassian, op, or the user's Keychain.
 export const oauthClient = { client_id: 'fixture-client', client_secret: 'fixture-secret' };
 export async function atlFixture(h) {
-  const state = { tokenCalls: [], calls: [], issues: [], worklogs: [], pages: [],
+  const state = { tokenCalls: [], calls: [], issues: [], worklogs: [], comments: [], pages: [],
     spaces: [{ id: '10', key: 'TEAM', name: '팀 업무', status: 'current' }, { id: '20', key: 'DOCS', name: '프로젝트 문서', status: 'current' }, { id: '30', key: 'OPS', name: '운영 기록', status: 'current' }],
     pageFailure: null, losePage: false, refresh: 'fixture-refresh-1', access: 'fixture-access-1', revision: 1,
-    scopes: ['read:jira-work', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'], rejectRefresh: false, rejectAccessOnce: false, worklogFailure: null, loseIssue: false, loseWorklog: false,
+    scopes: ['read:jira-work', 'read:jira-user', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'], rejectRefresh: false, rejectAccessOnce: false, worklogFailure: null, loseIssue: false, loseWorklog: false,
+    user: { accountId: 'fixture-current-user', active: true, displayName: 'Fixture 사용자' }, myselfFailure: null,
+    commentFailure: null, commentReadFailure: null, loseComment: false,
     transitionFailure: null, issueReadFailure: null, issueUpdateFailure: null, issueUpdateResponseLost: false,
     loseTransition: false, noTransitions: false, updated: 0 };
   const statuses = { todo: { id: '10000', name: '해야 할 일', statusCategory: { key: 'new' } },
@@ -49,6 +51,14 @@ export async function atlFixture(h) {
         state.resourceCalls = (state.resourceCalls || 0) + 1;
         if (state.resourceDelayAt === state.resourceCalls) await new Promise(resolve => setTimeout(resolve, state.resourceDelay || 250));
         return send([{ id: 'cloud-test', name: 'Fixture 팀', url: 'https://fixture.atlassian.net', scopes: state.scopes }]);
+      }
+      if (url.pathname === '/ex/jira/cloud-test/rest/api/3/myself') {
+        assert.equal(req.method, 'GET');
+        const user = structuredClone(state.user);
+        if (state.myselfDelay) await new Promise(resolve => setTimeout(resolve, state.myselfDelay));
+        if (state.myselfFailure) return send({}, state.myselfFailure);
+        if (!state.scopes.includes('read:jira-user')) return send({}, 403);
+        return send(user);
       }
       if (url.pathname.endsWith('/search/jql')) {
         const jql = url.searchParams.get('jql'), token = url.searchParams.get('nextPageToken');
@@ -101,6 +111,9 @@ export async function atlFixture(h) {
         const page = state.pages.find(row => row.id === pageId); return send(page || {}, page ? 200 : 404);
       }
       if (url.pathname.endsWith('/issue') && req.method === 'POST') {
+        if (state.issueCreateFailure) return send({}, state.issueCreateFailure);
+        assert.deepEqual(body.fields.reporter, { accountId: state.user.accountId });
+        assert.deepEqual(body.fields.assignee, { accountId: state.user.accountId });
         const issue = addIssue(body.fields); issue.properties = body.properties;
         if (state.loseIssue) { state.loseIssue = false; return res.destroy(); }
         return send(issue, 201);
@@ -119,6 +132,26 @@ export async function atlFixture(h) {
         res.writeHead(204); return res.end();
       }
       if (issue && url.pathname.endsWith('/properties/work-log')) return send(issue.properties[0]);
+      if (issue && url.pathname.endsWith('/comment')) {
+        if (req.method === 'GET') {
+          if (state.commentReadFailure) return send({}, state.commentReadFailure);
+          assert.equal(url.searchParams.get('expand'), 'properties');
+          const start = Number(url.searchParams.get('startAt') || 0);
+          const size = Math.min(Number(url.searchParams.get('maxResults') || 100), state.commentPageSize || 100);
+          const comments = state.comments.filter(comment => comment.issueId === issue.id);
+          const result = { comments: comments.slice(start, start + size), startAt: start, maxResults: size, total: comments.length };
+          return send(state.commentPageTransform ? state.commentPageTransform(result) : result);
+        }
+        assert.equal(req.method, 'POST');
+        if (state.commentDelay) await new Promise(resolve => setTimeout(resolve, state.commentDelay));
+        if (state.commentFailure) return send({}, state.commentFailure);
+        assert.equal(body.body.type, 'doc'); assert.equal(body.body.content.length, 1);
+        assert.equal(body.body.content[0].type, 'paragraph');
+        const comment = { ...body, id: String(state.comments.length + 1000), issueId: issue.id };
+        state.comments.push(comment);
+        if (state.loseComment) { state.loseComment = false; return res.destroy(); }
+        return send(state.malformedCommentResponse ? {} : comment, 201);
+      }
       if (issue && /\/worklog(?:\/\d+)?$/.test(url.pathname)) {
         const wid = url.pathname.match(/\/worklog\/(\d+)$/)?.[1];
         if (req.method === 'GET') {

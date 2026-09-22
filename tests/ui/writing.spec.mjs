@@ -33,12 +33,17 @@ test('GUI rewrites an active session, then item metadata, and can repeat both wh
   await expect(summaryButton).toHaveText('재요약');
   await expect(summaryButton).toBeEnabled();
   await page.screenshot({ path: 'output/screenshots/session-collapsed-summary.png', fullPage: true });
-  await session.locator('summary').click();
+  await session.locator(':scope > summary').click();
   await expect(session.locator('.summary-text')).toContainText('수용 조건');
   await expect(session.locator('.summary-text ul li')).toHaveCount(2);
   expect((await session.locator('.summary-text li').allTextContents()).every(text => !text.startsWith('- '))).toBe(true);
   await expect(session.locator('.writing-status')).toContainText('작성 완료');
   await expect(session).toHaveAttribute('open', '');
+  await expect(session.locator('.event')).toHaveCount(0);
+  await expect(session.locator('.raw-history')).not.toHaveAttribute('open', '');
+  await page.screenshot({ path: 'output/screenshots/session-summary-first.png', fullPage: true });
+  await session.screenshot({ path: 'output/screenshots/session-summary-raw-collapsed.png' });
+  await session.locator('.raw-history > summary').click();
   await expect(session.locator('.event')).toHaveCount(2);
   await expect(session.locator('.event').first()).toHaveAttribute('data-kind', 'output');
   const first = (await h.manager(`/items/${item.id}`)).sessions[0].rewrite;
@@ -96,7 +101,7 @@ test('legacy paragraph summaries become at most five readable bullets without al
     const writes = f.state.calls.filter(call => ['POST', 'PUT'].includes(call.method)).length;
     await open(page);
     const session = page.locator('.session-card').filter({ has: page.locator(`[data-rewrite-summary="${before.sessions[0].id}"]`) });
-    await session.locator('summary').click();
+    await session.locator(':scope > summary').click();
     const bullets = session.locator('.summary-text ul li');
     await expect(bullets).toHaveCount(5);
     await expect(bullets.nth(0)).toHaveText('버전 1.2.3과 비율 3.14를 확인했습니다.');
@@ -134,12 +139,12 @@ test('editing metadata during regeneration preserves saved edits and reports sta
 test('failed session rewrite keeps the last accepted summary and offers a fresh retry', async ({ page }) => {
   await h.ingest(pair('retry-ui', '09:00:00', '09:05:00'));
   const item = (await h.manager('/items'))[0], sessionId = (await h.manager(`/items/${item.id}`)).sessions[0].id;
-  await open(page); const session = page.locator(`.session-card[data-session-id="${sessionId}"]`); await session.locator('summary').click();
+  await open(page); const session = page.locator(`.session-card[data-session-id="${sessionId}"]`); await session.locator(':scope > summary').click();
   const button = session.locator('[data-rewrite-summary]');
   await button.click(); await expect(session.locator('.summary-text')).toBeVisible({ timeout: 15000 });
   const accepted = await session.locator('.summary-text').innerText();
   await h.stop('manager'); h.env.HARNESS_TEST_WRITING_FIXTURE = JSON.stringify({ scenario: 'rewrite-six-lines' }); await h.start('manager');
-  await open(page); await session.locator('summary').click(); await button.click();
+  await open(page); await session.locator(':scope > summary').click(); await button.click();
   await expect(session.locator('.writing-status')).toContainText('작성 실패', { timeout: 15000 });
   await expect(session.locator('.summary-text')).toHaveText(accepted, { useInnerText: true });
   await expect(button).toBeEnabled();
@@ -154,7 +159,7 @@ test('failed session rewrite keeps the last accepted summary and offers a fresh 
   await expect(quick.locator('[data-group=notifications] .quick-notification')).toHaveCount(1);
   await quick.close();
   await h.stop('manager'); h.env.HARNESS_TEST_WRITING_FIXTURE = JSON.stringify({ rewriteVariant: true }); await h.start('manager');
-  await open(page); await session.locator('summary').click(); await button.click();
+  await open(page); await session.locator(':scope > summary').click(); await button.click();
   await expect(session.locator('.summary-text')).toContainText('작업 기록', { timeout: 15000 });
   await expect(session.locator('.writing-status')).toContainText('작성 완료');
   await page.getByRole('button', { name: '알림', exact: true }).click();

@@ -1,10 +1,26 @@
-// A small, escaped Markdown view for local work item descriptions. The source
+import { isJiraWiki, parseJiraWiki } from './description-syntax.js';
+
+// Small, escaped Jira wiki and legacy Markdown views. The source
 // remains editable text; no HTML, images or embedded content is executed.
 export function descriptionPreview(source) {
+  if (isJiraWiki(source)) return parseJiraWiki(source).flatMap(block => block.content ? [block.content] : block.items || block.lines)
+    .map(line => line.map(node => node.text).join('')).join(' ').replace(/\s+/g, ' ').trim();
   return source.replace(/^(?:#{1,6}\s+|\s*[-*+]\s+|\s*\d+[.)]\s+)/gm, '')
     .replace(/\*\*([^*\n]+)\*\*/g, '$1').replace(/`([^`\n]+)`/g, '$1').replace(/\s+/g, ' ').trim();
 }
-export function descriptionHTML(source, esc) {
+export function descriptionHTML(source, esc, { format = 'auto' } = {}) {
+  if (format !== 'markdown' && isJiraWiki(source)) {
+    const inline = nodes => nodes.map(node => {
+      let value = esc(node.text);
+      for (const mark of [...node.marks].reverse()) value = mark.type === 'link'
+        ? `<a href="${esc(mark.href)}" target="_blank" rel="noopener noreferrer">${value}</a>`
+        : `<${mark.type === 'strong' ? 'strong' : 'code'}>${value}</${mark.type === 'strong' ? 'strong' : 'code'}>`;
+      return value;
+    }).join('');
+    return parseJiraWiki(source).map(block => block.type === 'heading' ? `<h3>${inline(block.content)}</h3>`
+      : block.type === 'paragraph' ? `<p>${block.lines.map(inline).join('<br>')}</p>`
+      : `<${block.type === 'bulletList' ? 'ul' : 'ol'}>${block.items.map(item => `<li>${inline(item)}</li>`).join('')}</${block.type === 'bulletList' ? 'ul' : 'ol'}>`).join('');
+  }
   const inline = value => {
     let result = '', cursor = 0;
     for (const match of value.matchAll(/\*\*([^*\n]+)\*\*|`([^`\n]+)`/g)) {

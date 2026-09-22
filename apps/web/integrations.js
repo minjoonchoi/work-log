@@ -31,7 +31,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     const ticket = ++opening;
     const [s, health] = await Promise.all([api('/integrations/atlassian'), api('/health')]);
     if (ticket !== opening) return;
-    modal(`<h2>연결 설정</h2><p>Jira 연결은 선택 사항입니다. 업무·세션 이력·요약·유형 태그는 연결 없이 로컬에서 사용할 수 있습니다.</p><p>Atlassian OAuth 앱의 Client ID와 Client Secret을 입력하세요.</p>
+    modal(`<h2>Atlassian 연결 설정</h2><p>Jira 연결은 선택 사항입니다. 업무·세션 이력·요약·유형 태그는 연결 없이 로컬에서 사용할 수 있습니다.</p><p>Atlassian OAuth 앱의 Client ID와 Client Secret을 입력하세요.</p>
       <div id="dialog-error" class="error" role="alert" hidden></div>
       <label for="atlassian-client-id">Client ID</label><input id="atlassian-client-id" maxlength="200" autocomplete="off" spellcheck="false" value="${esc(s.config?.client_id || '')}">
       <label for="atlassian-client-secret">Client Secret</label><div class="credential-field"><input id="atlassian-client-secret" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false" aria-describedby="client-secret-help"><button id="toggle-client-secret" type="button" class="secondary" aria-controls="atlassian-client-secret" aria-pressed="false" aria-label="Client Secret 보기">보기</button></div>

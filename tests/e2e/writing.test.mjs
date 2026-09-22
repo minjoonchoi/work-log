@@ -45,7 +45,7 @@ test('GUI command API snapshots all merged sessions and accepted summaries into 
   assert.deepEqual(run.request.input.sessions.flatMap(s => s.events).map(e => e.text), originalEvents.map(e => e.text));
   detail = await h.manager(`/items/${item.id}`);
   assert.equal(detail.item.version, item.version + 1); assert.match(detail.item.description, /2개 세션/);
-  assert.deepEqual([...detail.item.description.matchAll(/^## (.+)$/gm)].map(match => match[1]), ['작업 배경', '목적', '범위', '결과']);
+  assert.deepEqual([...detail.item.description.matchAll(/^h2\. (.+)$/gm)].map(match => match[1]), ['배경', '목표', '요구사항', '작업 범위', '참고사항']);
   assert.equal(detail.item.manual, 1); assert.equal((await h.manager('/items')).length, 1);
   assert.deepEqual(detail.events.filter(e => e.role === 'user'), originalEvents);
   assert.equal((await rewriteItem(h, item, queued.operation_id)).run_id, done.run_id);
@@ -253,19 +253,19 @@ test('text.rewrite rejects unknown formats/fields and enforces the session five-
   assert.equal(legacy.status, 'failed'); assert.equal(legacy.artifact, null);
 });
 
-test('metadata default requests four Markdown sections and keeps missing results explicitly unconfirmed', async t => {
+test('metadata default requests five Jira wiki sections and keeps missing results explicitly unconfirmed', async t => {
   const h = await setup(t);
   await h.ingest([event('metadata-unconfirmed', 'input', '09:00:00', 'first', { text: '권한 관리 화면을 검토해 주세요.' })]);
   const item = (await h.manager('/items'))[0];
   await rewriteItem(h, item, 'metadata-no-result');
   assert.equal((await finished(h, 'metadata-no-result')).state, 'completed');
   const detail = await h.manager(`/items/${item.id}`);
-  assert.deepEqual([...detail.item.description.matchAll(/^## (.+)$/gm)].map(match => match[1]), ['작업 배경', '목적', '범위', '결과']);
-  assert.match(detail.item.description, /## 결과\n- 미완료:.*미확인/);
+  assert.deepEqual([...detail.item.description.matchAll(/^h2\. (.+)$/gm)].map(match => match[1]), ['배경', '목표', '요구사항', '작업 범위', '참고사항']);
+  assert.match(detail.item.description, /h2\. 참고사항\n\* 미완료:.*미확인/);
   const run = await h.runtime(`/runs/${detail.metadata_rewrite.run_id}`);
   assert.equal(run.attempts.length, 1, 'metadata generation uses one model call');
   const prompt = fs.readFileSync(path.join(run.attempts[0].directory, 'prompt.txt'), 'utf8');
-  for (const heading of ['작업 배경', '목적', '범위', '결과']) assert.ok(prompt.includes(`## ${heading}`));
+  for (const heading of ['배경', '목표', '요구사항', '작업 범위', '참고사항']) assert.ok(prompt.includes(`h2. ${heading}`));
   assert.match(prompt, /결과가 없거나 확인되지 않았으면 미완료·미확인/);
 });
 

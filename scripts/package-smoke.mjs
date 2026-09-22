@@ -4,24 +4,25 @@ import os from 'node:os';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { Harness, eventually } from '../tests/helpers.mjs';
-import { ROOT, atomic } from '../src/shared.mjs';
+import { ROOT, atomic, readEndpoint } from '../src/shared.mjs';
 import { prepareInstall, applyInstall } from './install.mjs';
 
-const app = path.join(ROOT, 'dist/WorkLog.app');
+const packageRoot = process.env.WORKLOG_PACKAGE_DIR || path.join(ROOT, 'dist');
+const app = path.join(packageRoot, 'WorkLog.app');
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-package-install-'));
 const homeDir = path.join(sandbox, 'home');
 const plan = prepareInstall({ output: path.join(sandbox, 'plan'), homeDir, sourceApp: app });
 const h = new Harness(plan.dataDir); h.executable = path.join(plan.runtimeRoot, 'node');
 h.serviceRoot = path.join(plan.runtimeRoot, 'harness'); h.testMode = false;
+h.env = { HOME: homeDir };
 const report = { checked_at: new Date().toISOString(), app, checks: [] };
 try {
   const installed = applyInstall(plan, { activate: false }); assert.equal(installed.status, 'installed');
   assert.deepEqual(plan.skills, ['work']);
   assert.deepEqual(fs.readdirSync(path.join(app, 'Contents/Resources/harness/skills')), ['work']);
-  for (const link of plan.links) assert.equal(fs.readlinkSync(link.target), link.source);
-  const helper = spawnSync(path.join(plan.links[0].target, 'scripts/harness'), [], { encoding: 'utf8' });
-  assert.equal(helper.status, 0, helper.stderr); assert.ok(JSON.parse(helper.stdout).usage);
-  report.checks.push('packaged app installs into an isolated home with one request skill and owned links');
+  assert.deepEqual(plan.links, []);
+  for (const name of ['.claude', '.codex', '.agents']) assert.equal(fs.existsSync(path.join(homeDir, name)), false);
+  report.checks.push('packaged app installs without touching Claude or Codex settings');
   assert.ok(!fs.readFileSync(path.join(app, 'Contents/Info.plist'), 'utf8').includes('HarnessDataRoot')); report.checks.push('release app contains no development data-root override');
   assert.match(fs.readFileSync(path.join(app, 'Contents/Info.plist'), 'utf8'), /<key>CFBundleIconFile<\/key><string>WorkLog.icns<\/string>/);
   assert.equal(fs.readFileSync(path.join(app, 'Contents/Resources/WorkLog.icns')).subarray(0, 4).toString(), 'icns');
@@ -36,21 +37,38 @@ try {
   await h.start('runtime'); await h.start('manager');
   assert.equal((await h.runtime('/health')).role, 'execution'); assert.equal((await h.manager('/health')).role, 'management');
   report.checks.push('bundled Node and bundled service code start independently');
+  const syntax = await fetch(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}/description-syntax.js`);
+  assert.equal(syntax.status, 200); assert.match(await syntax.text(), /export function parseJiraWiki/);
+  assert.ok(fs.existsSync(path.join(h.serviceRoot, 'src/hook-events.mjs')));
+  report.checks.push('shared Jira renderer and database-independent hook collector are bundled');
+  const initial = await h.manager('/agent-connections'); assert.equal(initial.available, true);
+  assert.ok(initial.connections.every(c => c.state === 'disconnected'));
+  for (const engine of ['claude', 'codex']) {
+    const connected = await h.manager(`/agent-connections/${engine}`, { method: 'POST', body: {} });
+    assert.equal(connected.connections.find(c => c.engine === engine).state, 'connected');
+  }
+  const helper = spawnSync(path.join(homeDir, '.agents/skills/work/scripts/harness'), [], { encoding: 'utf8' });
+  assert.equal(helper.status, 0, helper.stderr); assert.ok(JSON.parse(helper.stdout).usage);
+  report.checks.push('packaged management API connects both agents explicitly and exposes the bundled request skill');
   for (const engine of ['codex', 'claude']) {
     h.hook(engine, { hook_event_name: 'UserPromptSubmit', session_id: 'package-session', turn_id: 'one', prompt: `${engine} 설치 패키지 검증` });
     h.hook(engine, { hook_event_name: 'Stop', session_id: 'package-session', turn_id: 'one', last_assistant_message: '패키지 훅 이력 검증' });
   }
   const items = await eventually(() => h.manager('/items'), rows => rows.length === 2 && rows.every(r => r.session_count === 1));
-  for (const item of items) assert.equal((await h.manager(`/items/${item.id}`)).sessions[0].pending, false);
+  for (const item of items) await eventually(() => h.manager(`/items/${item.id}`), detail => detail.sessions[0]?.pending === false);
+  assert.ok((await h.manager('/agent-connections')).connections.every(c => c.collection.state === 'observed'));
+  assert.equal(fs.existsSync(path.join(plan.dataDir, 'hook-state.sqlite')), false);
   report.checks.push('bundled hooks feed SQLite and management API for both engines');
   await assert.rejects(h.run(), /지원하지 않는 엔진/); report.checks.push('fixture execution disabled in normal packaged service');
   const catalog = await h.runtime('/catalog');
   assert.ok(['test.scenarios.plan', 'checks.run', 'verification.report'].every(id => catalog.jobs.some(j => j.id === id)));
   assert.equal(catalog.jobs.find(j => j.id === 'prd.create').execution_profile, 'document');
-  assert.equal(catalog.execution_profiles.document.stages.produce.codex.model, 'gpt-5.6-terra');
+  assert.equal(catalog.execution_profiles.document.stages.produce.codex.model, 'gpt-5.6-luna');
   assert.equal(catalog.execution_profiles.metadata.stages.produce.codex.model, 'gpt-5.6-luna');
   assert.equal(catalog.execution_profiles.document.stages.produce.claude.effort, 'medium');
   const executionSettings = await h.runtime('/execution-settings');
+  const resultTask = executionSettings.tasks.find(task => task.id === 'work-item.result.summarize');
+  assert.ok(resultTask); assert.deepEqual(Object.keys(resultTask.backends.codex.defaults), ['produce']);
   assert.equal(executionSettings.tasks.find(task => task.id === 'prd.create').backend, 'codex');
   assert.ok(executionSettings.tasks.every(task => task.instruction && task.backends.codex.defaults));
   assert.ok(catalog.check_profiles.every(p => !p.id.startsWith('fixture.')));
@@ -66,12 +84,13 @@ try {
   report.checks.push('packaged task instructions and backend model/effort defaults are available to the GUI');
   report.checks.push('bundled schemas validate structured inputs; local workflow produces a report with recorded transitions');
   assert.equal(spawnSync('codesign', ['--verify', '--deep', '--strict', app]).status, 0); report.checks.push('ad-hoc signature verification');
-  assert.equal(spawnSync('unzip', ['-tq', path.join(ROOT, 'dist/WorkLog-macos-arm64.zip')]).status, 0); report.checks.push('distribution ZIP integrity');
+  assert.equal(spawnSync('unzip', ['-tq', path.join(packageRoot, 'WorkLog-macos-arm64.zip')]).status, 0); report.checks.push('distribution ZIP integrity');
   await h.close(false);
   const removed = spawnSync(h.executable, [path.join(h.serviceRoot, 'scripts/uninstall.mjs'), '--apply', '--home-dir', homeDir, '--no-deactivate'], { encoding: 'utf8', timeout: 30000 });
   assert.equal(removed.status, 0, removed.stderr); assert.equal(JSON.parse(removed.stdout).status, 'uninstalled');
   assert.ok(fs.existsSync(path.join(plan.dataDir, 'memory.sqlite')));
   assert.equal(fs.existsSync(plan.targetApp), false); assert.equal(fs.existsSync(plan.runtimeRoot), false);
+  for (const name of ['.claude', '.codex', '.agents']) assert.equal(fs.existsSync(path.join(homeDir, name)), false);
   report.checks.push('packaged uninstaller removes owned hooks, links and executables while retaining SQLite');
   report.passed = true;
 } finally { await h.close(false); fs.rmSync(sandbox, { recursive: true, force: true }); }

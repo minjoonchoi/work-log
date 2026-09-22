@@ -1,5 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { getAgentConnections, connectAgent, disconnectAgent } from '../scripts/agent-connections.mjs';
+import { withAgentCollection } from './agent-collection.mjs';
 import { ROOT, dataRoot, lockService, serve, body, request, json, assert, digest, atomic, now, id } from './shared.mjs';
 import { managerStore } from './manager-store.mjs';
 import { integrationStore } from './integration-store.mjs';
@@ -15,6 +18,12 @@ import { reportsCoordinator } from './reports-coordinator.mjs';
 import { confluenceReports } from './confluence-reports.mjs';
 
 const dir = dataRoot(); lockService(dir, 'manager');
+// Test and development data roots must never fall back to the user's agent settings.
+const connectionHome = process.env.HARNESS_TEST_MODE === '1' ? process.env.HARNESS_TEST_HOME : os.homedir();
+const connectionOptions = connectionHome && path.resolve(dir) === path.join(path.resolve(connectionHome), 'Library/Application Support/WorkLog')
+  ? { homeDir: path.resolve(connectionHome) } : null;
+const unavailableConnections = () => ({ available: false, connections: ['claude', 'codex'].map(engine => ({ engine,
+  state: 'disconnected', message: '설치된 WorkLog 앱에서 에이전트를 연결할 수 있습니다.', paths: [] })) });
 let writings;
 const store = managerStore(dir);
 const spoolDir = path.join(dir, 'spool'); fs.mkdirSync(spoolDir, { recursive: true, mode: 0o700 });
@@ -27,7 +36,7 @@ function notify() {
   for (const res of subscribers) if (!res.write(frame)) res.destroy();
 }
 const integrations = integrationStore(store), atlassian = atlassianClient(dir, notify);
-const jira = jiraService({ store, integrations, client: atlassian, notify });
+const jira = jiraService({ dir, store, integrations, client: atlassian, notify, fixture: process.env.HARNESS_TEST_MODE === '1' });
 const automaticSummaries = process.env.HARNESS_TEST_MODE !== '1' || process.env.HARNESS_TEST_SESSION_SUMMARIES === '1';
 writings = writingStore(store, integrations);
 const writer = writingCoordinator({ dir, writings, notify, automatic: automaticSummaries,
@@ -110,6 +119,8 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
   publicHandler: async (req, res, url) => {
     const routes = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/history.js': ['history.js', 'text/javascript'], '/integrations.js': ['integrations.js', 'text/javascript'], '/jira.js': ['jira.js', 'text/javascript'], '/writing.js': ['writing.js', 'text/javascript'], '/execution-settings.js': ['execution-settings.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
       '/icons.css': ['icons.css', 'text/css'],
+      '/agent-connections.js': ['agent-connections.js', 'text/javascript'],
+      '/description-syntax.js': ['description-syntax.js', 'text/javascript'],
       '/description.js': ['description.js', 'text/javascript'], '/automation-settings.js': ['automation-settings.js', 'text/javascript'], '/item-tags.js': ['item-tags.js', 'text/javascript'], '/reports.js': ['reports.js', 'text/javascript'], '/report-body.js': ['report-body.js', 'text/javascript'],
       '/quick': ['quick.html', 'text/html; charset=utf-8'], '/quick.js': ['quick.js', 'text/javascript'], '/quick.css': ['quick.css', 'text/css'] };
     if (req.method !== 'GET' || !routes[url.pathname]) return false;
@@ -120,6 +131,17 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
   },
   handler: async (req, url) => {
     const p = url.pathname;
+    if (p === '/api/agent-connections' && req.method === 'GET')
+      return withAgentCollection(store, connectionOptions ? getAgentConnections(connectionOptions) : unavailableConnections());
+    const agentConnection = p.match(/^\/api\/agent-connections\/(claude|codex)$/);
+    if (agentConnection && ['POST', 'DELETE'].includes(req.method)) {
+      assert(connectionOptions, '설치된 WorkLog 앱에서 에이전트를 연결하거나 해제하세요.');
+      const input = await body(req);
+      assert(input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).length === 0
+        && [...url.searchParams].length === 0, '연결 설정에는 별도의 경로나 실행 명령을 지정할 수 없습니다.');
+      const result = await (req.method === 'POST' ? connectAgent : disconnectAgent)(agentConnection[1], connectionOptions);
+      notify(); return withAgentCollection(store, result);
+    }
     if (p === '/api/integrations/atlassian' && req.method === 'GET') return atlassian.status();
     if (p === '/api/integrations/atlassian' && req.method === 'PUT') return atlassian.save(await body(req));
     if (p === '/api/integrations/atlassian/client-secret' && req.method === 'POST') return atlassian.clientSecret(await body(req));
@@ -134,6 +156,13 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (p === '/api/integrations/atlassian/jira-search' && req.method === 'GET') return atlassian.searchIssues(url.searchParams.get('cloud_id'), url.searchParams.get('query'), url.searchParams.get('next_page_token'));
     if (p === '/api/integrations/atlassian/confluence-page' && req.method === 'GET') return atlassian.confluencePage(url.searchParams.get('cloud_id'), url.searchParams.get('id'));
     if (p === '/api/execution-settings' && req.method === 'GET') return request(dir, 'runtime', '/execution-settings');
+    if (p === '/api/execution-settings/custom-task-drafts' && req.method === 'POST')
+      return request(dir, 'runtime', '/execution-settings/custom-task-drafts', { method: 'POST', body: await body(req) });
+    const taskDraft = p.match(/^\/api\/execution-settings\/custom-task-drafts\/([^/]+)(?:\/(cancel))?$/);
+    if (taskDraft && req.method === 'GET' && !taskDraft[2])
+      return request(dir, 'runtime', `/execution-settings/custom-task-drafts/${taskDraft[1]}`);
+    if (taskDraft && req.method === 'POST' && taskDraft[2] === 'cancel')
+      return request(dir, 'runtime', `/execution-settings/custom-task-drafts/${taskDraft[1]}/cancel`, { method: 'POST', body: await body(req) });
     if (p === '/api/execution-settings/custom-tasks' && req.method === 'POST') return request(dir, 'runtime', '/execution-settings/custom-tasks', { method: 'POST', body: await body(req) });
     const customSetting = p.match(/^\/api\/execution-settings\/custom-tasks\/([^/]+)$/);
     if (customSetting && req.method === 'DELETE') return request(dir, 'runtime', `/execution-settings/custom-tasks/${customSetting[1]}`, { method: 'DELETE', body: await body(req) });
@@ -250,6 +279,8 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (m && req.method === 'POST') return jira.transition(m[1], await body(req));
     m = p.match(/^\/api\/jira-links\/([^/]+)\/content$/);
     if (m && req.method === 'POST') return jira.updateContent(m[1], await body(req));
+    m = p.match(/^\/api\/jira-links\/([^/]+)\/result-comment\/(retry|reconcile)$/);
+    if (m && req.method === 'POST') return m[2] === 'retry' ? jira.retryResult(m[1], await body(req)) : jira.reconcileResult(m[1], await body(req));
     m = p.match(/^\/api\/jira-links\/([^/]+)\/resolve$/);
     if (m && req.method === 'POST') {
       const link = integrations.links().find(l => l.operation_id === m[1]);
@@ -288,9 +319,10 @@ console.log(json({ ready: true, role: 'manager', ...endpoint }));
 timer = setInterval(collect, 200); void collect();
 const integrationTimer = setInterval(() => void coordinator.tick().catch(() => {}), 1000);
 const reportTimer = setInterval(() => void reportWriter.tick().catch(() => {}), 1000);
+const resultTimer = setInterval(() => void jira.tickResults().catch(() => {}), 1000);
 async function stop() {
   if (stopping) return; stopping = true;
-  clearInterval(timer); clearInterval(integrationTimer); clearInterval(reportTimer); atlassian.close();
+  clearInterval(timer); clearInterval(integrationTimer); clearInterval(reportTimer); clearInterval(resultTimer); atlassian.close();
   for (const res of subscribers) res.end();
   server.close();
   await stopCredentialProcesses();

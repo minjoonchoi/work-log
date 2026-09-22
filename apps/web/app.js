@@ -1,4 +1,5 @@
 import { integrationUI } from './integrations.js';
+import { agentConnectionsUI } from './agent-connections.js';
 import { writingUI } from './writing.js';
 import { historyUI } from './history.js';
 import { executionSettingsUI } from './execution-settings.js';
@@ -47,6 +48,7 @@ function modal(html) {
   content.querySelectorAll('[data-close]').forEach(button => button.onclick = () => dialog.close());
 }
 const integrations = integrationUI({ api, esc, modal, toast, absoluteTime, refresh: async id => { await openDetail(id, undefined, true, true); await load(); } });
+const agentConnections = agentConnectionsUI({ api, esc, modal, showAtlassian: integrations.showSettings });
 const writing = writingUI({ api, esc, toast, absoluteTime, refresh: async id => { await openDetail(id, undefined, true); await load(); } });
 const history = historyUI({ api, esc, eventHTML, invalidated: scheduleRefresh });
 const executionSettings = executionSettingsUI({ api, esc, modal, toast });
@@ -228,7 +230,7 @@ function focusNotification(id) {
 function renderNotifications() {
   const focused = document.activeElement?.closest('.notification-row')?.dataset.notificationId;
   const wasDismiss = document.activeElement?.hasAttribute('data-dismiss-notification');
-  const labels = { run: '작업 실행', metadata: '업무 정보', summary: '세션 요약', jira_issue: 'Jira 이슈', jira_worklog: 'Jira 업무 로그', jira_transition: 'Jira 상태', jira_content: 'Jira 내용' };
+  const labels = { run: '작업 실행', metadata: '업무 정보', summary: '세션 요약', jira_issue: 'Jira 이슈', jira_worklog: 'Jira 업무 로그', jira_transition: 'Jira 상태', jira_content: 'Jira 내용', jira_result_comment: 'Jira 완료 결과' };
   $('#notification-list-label').textContent = `알림 · ${state.notifications.length}`;
   $('#notification-list').innerHTML = state.notifications.length ? state.notifications.map(n => `<article class="notification-row" data-notification-id="${esc(n.id)}">
     <div class="notification-heading"><span class="notification-category">${esc(labels[n.kind] || '작업')}</span><time datetime="${esc(n.occurred_at)}" title="${esc(absoluteTime(n.occurred_at))}">${esc(eventTime(n.occurred_at))}</time></div>
@@ -269,7 +271,7 @@ async function openNotification(notice) {
     target = [...$('#detail').querySelectorAll('[data-run-id]')].find(node => node.dataset.runId === notice.run_id);
     if (target) for (let parent = target.parentElement; parent && parent !== $('#detail'); parent = parent.parentElement) if (parent.tagName === 'DETAILS') parent.open = true;
   } else if (notice.kind === 'metadata') target = $('#detail .metadata-writing');
-  else if (notice.session_id) {
+  else if (notice.session_id && notice.kind !== 'jira_result_comment') {
     const session = [...$('#detail').querySelectorAll('[data-session-id]')].find(node => node.dataset.sessionId === notice.session_id);
     target = session?.querySelector(notice.kind === 'jira_worklog' ? '.session-sync' : '.session-summary');
   }
@@ -280,7 +282,7 @@ function eventHTML(e) {
   const names = { input: '프롬프트 입력', output: '응답 출력', 'turn.failed': '실패', 'turn.interrupted': '중단', 'session.started': '에이전트 시작', 'session.ended': '에이전트 종료', 'tool.started': '도구 시작', 'tool.finished': '도구 종료' };
   const source = e.source === 'system_hook' ? (e.hook_event_name || (e.kind === 'input' ? 'UserPromptSubmit' : 'Stop'))
     : e.source === 'runtime' || e.engine === 'harness' ? '하네스 기록' : '수집 기록';
-  return `<div class="event" data-event-id="${esc(e.uid)}" data-kind="${esc(e.kind)}"><div class="event-header"><span class="event-label-title">${names[e.kind] || esc(e.kind)}${e.resolution === 'unresolved' ? ' · 연결 미확인' : ''}</span><time datetime="${esc(e.event_at)}" title="${esc(absoluteTime(e.event_at))}">${eventTime(e.event_at)}</time><span class="event-source" title="${esc(`레코드: ${e.uid}\n수집 시각: ${absoluteTime(e.ingested_at)}`)}">${esc(source)}</span></div><pre>${esc(e.text ?? (e.kind === 'output' ? '응답 본문이 제공되지 않았습니다.' : e.kind === 'input' ? '입력 본문이 제공되지 않았습니다.' : ''))}</pre></div>`;
+  return `<details class="event" data-event-id="${esc(e.uid)}" data-kind="${esc(e.kind)}"><summary><span class="event-header"><span class="event-label-title">${names[e.kind] || esc(e.kind)}${e.resolution === 'unresolved' ? ' · 연결 미확인' : ''}</span><time datetime="${esc(e.event_at)}" title="${esc(absoluteTime(e.event_at))}">${eventTime(e.event_at)}</time><span class="event-source" title="${esc(`레코드: ${e.uid}\n수집 시각: ${absoluteTime(e.ingested_at)}`)}">${esc(source)}</span></span></summary><pre>${esc(e.text ?? (e.kind === 'output' ? '응답 본문이 제공되지 않았습니다.' : e.kind === 'input' ? '입력 본문이 제공되지 않았습니다.' : ''))}</pre></details>`;
 }
 const taskLabels = { 'prd.create': 'PRD 작성', 'mockup.html.create': 'HTML 목업 작성', 'entity.design': '엔티티 설계',
   'text.rewrite': '내용 다시 작성', 'session.summarize': '세션 요약', 'checks.run': '검사 실행', 'verification.report': '검사 보고서', 'test.scenarios.plan': '검증 시나리오 작성' };
@@ -337,9 +339,11 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
   const panel = $('#detail');
   const expanded = refresh ? [...$('#detail').querySelectorAll('[data-session-id][open]')].map(e => e.dataset.sessionId) : [];
   const expandedResults = refresh ? [...$('#detail').querySelectorAll('[data-results-session][open]')].map(e => e.dataset.resultsSession) : [];
+  const unlinkedResultsOpen = refresh && !!panel.querySelector('.unlinked-results[open]');
   const scrollTop = refresh ? $('#detail').scrollTop : 0;
   const focused = refresh && panel.contains(document.activeElement) ? document.activeElement : null;
   const focusId = focused?.id, focusSession = focused?.closest('[data-session-id]')?.dataset.sessionId;
+  const focusHistory = focused?.closest('[data-raw-history-key]')?.dataset.rawHistoryKey;
   const bounds = panel.getBoundingClientRect();
   const anchor = refresh && scrollTop > 0 ? [...panel.querySelectorAll('.event')].find(e => {
     const r = e.getBoundingClientRect(); return r.bottom > bounds.top && r.top < bounds.bottom;
@@ -364,24 +368,25 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
         <small class="session-source" title="${esc(s.agent_session_id)}">${esc(s.engine === 'codex' ? 'Codex' : s.engine === 'claude' ? 'Claude' : '하네스')} 대화</small>
         ${writing.sessionHTML(s)}${integrations.sessionHTML(s, data)}
         ${results.length ? `<details class="session-results" data-results-session="${esc(s.id)}"><summary>연결된 작업 ${results.length}개</summary>${results.map(runHTML).join('')}</details>` : ''}
-        <div class="conversation-heading"><h4>입력·응답 <small>${s.history.count}건</small></h4><span>기록 시각 · 최신순</span></div>${history.html(s.id)}</details>`;
+        ${history.html(s.id)}</details>`;
     }).join('') || '<small>첫 입력을 기다리고 있습니다.</small>'}</section>
-    ${unlinkedRuns.length ? `<section class="detail-section unlinked-results"><h3>세션 연결 대기 <small>${unlinkedRuns.length}</small></h3><p class="help">원본 입력을 확인하면 해당 세션에 표시합니다.</p>${unlinkedRuns.map(runHTML).join('')}</section>` : ''}
+    ${unlinkedRuns.length ? `<details class="detail-section unlinked-results" ${unlinkedResultsOpen ? 'open' : ''}><summary>세션 연결 대기 · 작업 ${unlinkedRuns.length}개</summary><p class="help">원본 입력을 확인하면 해당 세션에 표시합니다.</p>${unlinkedRuns.map(runHTML).join('')}</details>` : ''}
     ${data.unlinked_history.count ? `<section class="detail-section"><h3>연결 미확인 출력 <small>${data.unlinked_history.count}건</small></h3>${history.html(null)}</section>` : ''}`;
   for (const node of $('#detail').querySelectorAll('[data-session-id]')) if (expanded.includes(node.dataset.sessionId)) node.open = true;
   for (const node of panel.querySelectorAll('[data-results-session]')) if (expandedResults.includes(node.dataset.resultsSession)) node.open = true;
+  history.mount(panel);
   $('#detail').scrollTop = scrollTop;
   if (anchorId) {
     const current = [...panel.querySelectorAll('.event')].find(e => e.dataset.eventId === anchorId);
     if (current) panel.scrollTop += current.getBoundingClientRect().top - anchorTop;
   }
-  const restoreFocus = focusId ? document.getElementById(focusId) : focusSession
+  const restoreFocus = focused?.isConnected ? focused : focusId ? document.getElementById(focusId) : focusHistory
+    ? [...panel.querySelectorAll('[data-raw-history-key]')].find(e => e.dataset.rawHistoryKey === focusHistory)?.querySelector('summary') : focusSession
     ? [...panel.querySelectorAll('[data-session-id]')].find(e => e.dataset.sessionId === focusSession)?.querySelector('summary') : null;
   restoreFocus?.focus({ preventScroll: true });
   integrations.bindDetail(data);
   writing.bindDetail(data);
   itemTags.bindDetail(item);
-  history.mount(panel);
   if (sessionId && !refresh) {
     const selectedSession = [...panel.querySelectorAll('[data-session-id]')].find(node => node.dataset.sessionId === sessionId);
     selectedSession?.scrollIntoView({ block: 'start' });
@@ -393,7 +398,7 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
   }));
   $('#close-detail').onclick = closeDetail;
   $('#edit-item').onclick = () => {
-    modal(`<h2>업무 정보 편집</h2><p>직접 편집한 값은 자동 갱신에서 보호됩니다.</p><label for="edit-title">제목</label><input id="edit-title" maxlength="200" value="${esc(item.title)}"><label for="edit-description">설명</label><textarea id="edit-description" maxlength="5000">${esc(item.description)}</textarea><div class="dialog-actions"><button data-close>취소</button><button class="primary" id="save-item">저장</button></div>`);
+    modal(`<h2>업무 정보 편집</h2><p>직접 편집한 값은 자동 갱신에서 보호됩니다.</p><label for="edit-title">제목</label><input id="edit-title" maxlength="200" value="${esc(item.title)}"><label for="edit-description">설명</label><textarea id="edit-description" maxlength="5000" aria-describedby="edit-description-help">${esc(item.description)}</textarea><p id="edit-description-help" class="help">Jira 위키 형식으로 h2. 배경, h2. 목표, h2. 요구사항, h2. 작업 범위, h2. 참고사항을 작성하고 목록은 * 로 시작하세요. 기존 Markdown과 일반 텍스트도 원문 그대로 저장됩니다.</p><div class="dialog-actions"><button data-close>취소</button><button class="primary" id="save-item">저장</button></div>`);
     $('#save-item').onclick = safe(async () => { await api(`/items/${item.id}`, { method: 'PATCH', body: { version: item.version, title: $('#edit-title').value, description: $('#edit-description').value } }); $('#modal').close(); await openDetail(item.id); await load(); });
   };
   $('#detail').querySelectorAll('[data-cancel],[data-resume]').forEach(b => b.onclick = safe(async () => {
@@ -638,7 +643,7 @@ document.addEventListener('keydown', safe(async e => {
 function move(direction) { if (state.calendarView === 'month') state.date = new Date(state.date.getFullYear(), state.date.getMonth() + direction, 1); else state.date = addDays(state.date, direction * (state.calendarView === 'week' ? 7 : 1)); return renderCalendar(); }
 $('#previous').onclick = safe(() => move(-1)); $('#next').onclick = safe(() => move(1));
 $('#today').onclick = safe(() => { state.date = new Date(); calendarFocusNow = true; return renderCalendar(); });
-$('#settings').onclick = safe(integrations.showSettings);
+$('#settings').onclick = safe(agentConnections.showSettings);
 $('#execution-settings').onclick = safe(executionSettings.showSettings);
 $('#automation-settings').onclick = safe(automationSettings.showSettings);
 window.addEventListener('harness:navigate', safe(async e => {
@@ -647,7 +652,7 @@ window.addEventListener('harness:navigate', safe(async e => {
   if (!route || !['items', 'current', 'notifications', 'calendar', 'settings'].includes(route.view)) return;
   $('#modal').close(); $('#search').value = ''; $('#tag-filter').value = 'all';
   if (state.detail) $('#close-detail').click();
-  if (route.view === 'settings') return integrations.showSettings();
+  if (route.view === 'settings') return agentConnections.showSettings();
   if (route.view === 'calendar') { state.date = new Date(); calendarFocusNow = true; return showView('calendar'); }
   if (route.view === 'notifications') {
     await showView('notifications');

@@ -155,6 +155,15 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
     }) };
   }
   function snapshot() { return renderSnapshot(read()); }
+  function draftInput(request) {
+    read();
+    return { request,
+      templates: templates.map(id => {
+        const job = builtins[id];
+        return { id, label: job.label, kind: job.kind, boundary: structuredClone(job.boundary) };
+      }),
+      existing_tasks: Object.entries(jobs).map(([id, job]) => ({ id, label: job.label, description: job.description || job.boundary.owns })) };
+  }
   function save(task, input) {
     const data = read();
     validate(task, input);
@@ -193,5 +202,5 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
     return commit(data);
   }
   read();
-  return { snapshot, resolve, save, reset, create, remove, file };
+  return { snapshot, draftInput, resolve, save, reset, create, remove, file };
 }

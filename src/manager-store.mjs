@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { database, transaction, validateEvent, stableId, id, now, json, assert, digest } from './shared.mjs';
+import { currentHookEvent, receivedTurn, resolveHookTurns } from './hook-events.mjs';
 
 const schema = `
 CREATE TABLE IF NOT EXISTS work_items (
@@ -119,7 +120,13 @@ export function managerStore(dir) {
   function project(agentId) {
     const agent = one('SELECT * FROM agent_sessions WHERE id=?', agentId);
     const rows = all('SELECT * FROM events WHERE agent_id=? ORDER BY event_at, seq', agentId);
-    const previous = new Map(all(`SELECT e.id,l.session_id,l.resolution FROM events e JOIN event_links l ON l.event_id=e.id
+    rows.sort((a, b) => {
+      if (a.event_at !== b.event_at) return a.event_at.localeCompare(b.event_at);
+      const left = JSON.parse(a.payload), right = JSON.parse(b.payload);
+      return currentHookEvent(left) && currentHookEvent(right) && left.observed_order && right.observed_order
+        ? left.observed_order.localeCompare(right.observed_order) || a.seq - b.seq : a.seq - b.seq;
+    });
+    const previous = new Map(all(`SELECT e.id,l.session_id,l.resolution,json_extract(e.payload,'$.turn_id') AS turn_id FROM events e JOIN event_links l ON l.event_id=e.id
       WHERE e.agent_id=? AND e.kind IN ('input','output')`, agentId).map(r => [r.id, r]));
     exec('UPDATE work_item_sessions SET active=0 WHERE agent_id=?', agentId);
     for (const r of rows) exec('DELETE FROM event_links WHERE event_id=?', r.id);
@@ -134,6 +141,14 @@ export function managerStore(dir) {
         exec('INSERT INTO event_links VALUES(?,?,?)', row.id, link?.session_id || null, link?.session_id ? 'parent' : 'unresolved');
       }
       return;
+    }
+    const resolved = resolveHookTurns(rows);
+    for (let index = 0; index < rows.length; index++) {
+      const payload = json(resolved[index]);
+      if (payload !== rows[index].payload) {
+        exec('UPDATE events SET payload=? WHERE id=?', payload, rows[index].id);
+        rows[index].payload = payload;
+      }
     }
     const counts = new Map();
     for (const row of rows) if (row.kind === 'input') {
@@ -171,9 +186,9 @@ export function managerStore(dir) {
       exec('INSERT INTO event_links VALUES(?,?,?)', row.id, sid, resolution);
     }
     // Appends keep paging snapshots valid. Only reassigning an existing record invalidates them.
-    if (all(`SELECT e.id,l.session_id,l.resolution FROM events e JOIN event_links l ON l.event_id=e.id
+    if (all(`SELECT e.id,l.session_id,l.resolution,json_extract(e.payload,'$.turn_id') AS turn_id FROM events e JOIN event_links l ON l.event_id=e.id
       WHERE e.agent_id=? AND e.kind IN ('input','output')`, agentId).some(r => {
-      const old = previous.get(r.id); return old && (old.session_id !== r.session_id || old.resolution !== r.resolution);
+      const old = previous.get(r.id); return old && (old.session_id !== r.session_id || old.resolution !== r.resolution || old.turn_id !== r.turn_id);
     })) exec(`INSERT INTO history_revisions VALUES(?,1) ON CONFLICT(agent_id) DO UPDATE SET revision=revision+1`, agentId);
     for (const w of windows.values()) {
       exec(`INSERT INTO work_item_sessions VALUES(?,?,?,?,?,?,?,1)
@@ -192,7 +207,14 @@ export function managerStore(dir) {
         const old = one('SELECT payload FROM events WHERE id=?', uid);
         if (old) {
           const previous = JSON.parse(old.payload);
-          assert(previous.kind === e.kind && previous.event_at === e.event_at && previous.text === e.text && previous.turn_id === e.turn_id,
+          // Pre-spool-receipt hooks kept replay timestamps in their own SQLite
+          // database. Preserve those already ingested observations on upgrade.
+          const legacyHookReplay = previous.source === 'system_hook' && !currentHookEvent(previous) && currentHookEvent(e)
+            && previous.kind === e.kind && previous.text === e.text
+            && (!e.source_turn_id || previous.turn_id === e.source_turn_id);
+          if (legacyHookReplay) continue;
+          assert(previous.kind === e.kind && previous.event_at === e.event_at && previous.text === e.text && receivedTurn(previous) === receivedTurn(e)
+            && currentHookEvent(previous) === currentHookEvent(e),
             '같은 원본 키에 다른 이벤트가 있습니다.', 409);
           continue;
         }

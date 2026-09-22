@@ -33,7 +33,7 @@ test('metadata and both summary paths receive contribution evidence guidance wit
     if (request.task === 'text.rewrite') {
       const result = JSON.parse(artifact); assert.deepEqual(Object.keys(result).sort(), ['description', 'title']);
       if (request.input.format === 'work-item-metadata') {
-        assert.deepEqual([...result.description.matchAll(/^## (.+)$/gm)].map(match => match[1]), ['작업 배경', '목적', '범위', '결과']);
+        assert.deepEqual([...result.description.matchAll(/^h2\. (.+)$/gm)].map(match => match[1]), ['배경', '목표', '요구사항', '작업 범위', '참고사항']);
       } else {
         const lines = result.description.split('\n'); assert.ok(lines.length >= 1 && lines.length <= 5);
         assert.ok(lines.every(line => line.startsWith('- ')));

@@ -6,8 +6,9 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assert, json } from '../src/shared.mjs';
 import { stopOwnedServices } from './service-control.mjs';
+import { removeAgentConnection } from './agent-connections.mjs';
 import { locations, stat, safePath, locked, readManifest, saveManifest, matches, inventory,
-  canonical, readConfig, writeConfig, hookPositions, quote } from './install-state.mjs';
+  canonical, removeEmptyDirectories } from './install-state.mjs';
 
 export function prepareUninstall({ homeDir = os.homedir() } = {}) {
   const loc = locations(homeDir), receipt = readManifest(loc);
@@ -18,36 +19,6 @@ export function prepareUninstall({ homeDir = os.homedir() } = {}) {
     links: receipt.links, files: receipt.files.map(f => f.path), app: receipt.trees[0].path, runtime: receipt.trees[1].path,
     preserve: ['업무 SQLite·산출물·로그·설치 백업', '사용자 설정과 다른 훅·스킬', 'macOS Keychain OAuth 토큰'],
     note: '제거 시 현재 내용과 소유 기록을 다시 대조합니다. 변경되거나 식별이 모호한 항목은 보존합니다.' };
-}
-
-function removeHooks(loc, receipt, removed, preserved) {
-  let dependent = false;
-  for (const config of receipt.hooks) {
-    try {
-      const { raw, value } = readConfig(loc, config.path);
-      if (raw === null) continue;
-      const changed = [];
-      for (const entry of config.entries) {
-        const found = hookPositions(value, entry);
-        if (found.length !== 1) continue; // Missing, edited, or duplicated commands are never guessed.
-        const { g, h } = found[0], groups = value.hooks[entry.event], group = groups[g];
-        group.hooks.splice(h, 1);
-        if (!group.hooks.length) groups.splice(g, 1);
-        if (!groups.length && !entry.eventExisted) delete value.hooks[entry.event];
-        changed.push({ kind: 'hook', path: config.path, event: entry.event });
-      }
-      if (value.hooks && !Object.keys(value.hooks).length && !config.hooksExisted) delete value.hooks;
-      if (changed.length) { writeConfig(loc, config.path, raw, value); removed.push(...changed); }
-      const runtime = receipt.trees[1].path;
-      const references = [`WORKLOG_INSTALL_ID=${quote(receipt.id)}`, quote(path.join(runtime, 'node')), quote(path.join(runtime, 'harness/src/hook.mjs'))];
-      const referencesInstall = v => typeof v === 'string' ? references.some(ref => v.includes(ref))
-        : v && typeof v === 'object' ? Object.values(v).some(referencesInstall) : false;
-      if (referencesInstall(value)) {
-        dependent = true; preserved.push({ path: config.path, reason: '변경되었거나 중복된 WorkLog 훅을 보존했습니다. 연결된 실행 파일도 유지합니다.' });
-      }
-    } catch (e) { dependent = true; preserved.push({ path: config.path, reason: e.message }); }
-  }
-  return dependent;
 }
 
 function removeTrees(loc, receipt, removed, preserved) {
@@ -80,16 +51,8 @@ export function applyUninstall({ homeDir = os.homedir(), deactivate = true, laun
     receipt.state = 'uninstalling'; saveManifest(loc, receipt);
     preserved.push(...stopOwnedServices(loc, receipt, { launchctl, deactivate, timeoutMs: stopTimeoutMs }));
     if (!preserved.length) {
-      let dependent = removeHooks(loc, receipt, removed, preserved);
-      for (const link of receipt.links) {
-        try {
-          safePath(loc.home, link.path, { symlink: true }); const info = stat(link.path);
-          if (!info) continue;
-          assert(matches(link.path, { ...link, kind: 'symlink' })
-            && (!link.identity || (info.dev === link.identity.dev && info.ino === link.identity.ino)), '연결 대상 또는 유형이 바뀌어 지시문 경로를 보존했습니다.');
-          fs.unlinkSync(link.path); removed.push({ kind: 'symlink', path: link.path });
-        } catch (e) { dependent = true; preserved.push({ path: link.path, reason: e.message }); }
-      }
+      for (const engine of ['claude', 'codex']) removeAgentConnection(loc, receipt, engine, removed, preserved);
+      let dependent = preserved.length > 0;
       for (const f of receipt.files) {
         try {
           safePath(loc.home, f.path); if (!stat(f.path)) continue;
@@ -100,10 +63,11 @@ export function applyUninstall({ homeDir = os.homedir(), deactivate = true, laun
       if (!dependent) removeTrees(loc, receipt, removed, preserved);
       else for (const tree of receipt.trees) if (stat(tree.path)) preserved.push({ path: tree.path, reason: '보존된 연결의 실행 파일을 유지했습니다.' });
     }
+    removeEmptyDirectories(loc, receipt, removed);
     receipt.state = preserved.length ? 'needs_attention' : 'uninstalled';
     receipt.uninstall = { at: new Date().toISOString(), removed, preserved }; saveManifest(loc, receipt);
     return { status: receipt.state, installation_id: receipt.id, removed, preserved, data_root: loc.data,
-      note: '업무 DB·산출물·로그·백업·Keychain 토큰은 보존합니다. 사용자 설정 파일 자체는 삭제하지 않습니다.' };
+      note: '업무 DB·산출물·로그·백업·Keychain 토큰은 보존합니다. 기존 사용자 설정은 보존하며 WorkLog가 만든 빈 설정·디렉터리만 정리합니다.' };
   });
 }
 
