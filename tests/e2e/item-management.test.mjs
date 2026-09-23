@@ -197,15 +197,37 @@ test('soft deletion does not cancel a user-requested runtime job and its complet
   assert.ok(detail.runs.some(row => row.id === run.id && row.status === 'completed'));
 });
 
-test('hiding sessions does not invalidate a visible sibling worklog or republish synchronized logs on restore', async t => {
+test('hiding and restoring legacy split history preserves visible sibling boundaries and synchronized Jira worklogs', async t => {
   const h = new Harness(), f = await atlFixture(h);
   t.after(async () => { await h.close(); await f.close(); });
   await h.start('runtime'); await h.start('manager'); await authorize(h);
   await h.ingest([
     ...pair('shared-agent', '09:00:00', '09:05:00', 'one', { work_item_id: 'hidden-log' }),
-    ...pair('shared-agent', '09:10:00', '09:15:00', 'two', { work_item_id: 'visible-log' }),
-    ...pair('shared-agent', '09:20:00', '09:25:00', 'three', { work_item_id: 'hidden-log' })
+    ...pair('shared-agent', '09:25:00', '09:30:00', 'two', { work_item_id: 'hidden-log' }),
+    ...pair('shared-agent', '09:50:00', '09:55:00', 'three', { work_item_id: 'hidden-log' })
   ]);
+  const originalSessions = (await h.manager('/items/hidden-log')).sessions;
+  assert.deepEqual(originalSessions.map(session => session.start_at), [
+    '2026-09-17T09:00:00.000Z', '2026-09-17T09:25:00.000Z', '2026-09-17T09:50:00.000Z'
+  ], 'twenty-minute gaps retain three windows within the same agent-bound item');
+  await h.stop('manager');
+  // Older versions permitted later turns from one agent to point at another item.
+  // Seed that persisted history directly; new ingestion must not recreate the split.
+  const db = new DatabaseSync(path.join(h.dir, 'memory.sqlite'));
+  try {
+    db.exec('BEGIN');
+    db.prepare('INSERT INTO work_items(id,title,created_at) VALUES(?,?,?)').run('visible-log', '이전 버전 분리 이력', originalSessions[1].start_at);
+    db.prepare('UPDATE work_item_sessions SET work_item_id=? WHERE id=?').run('visible-log', originalSessions[1].id);
+    const rows = db.prepare("SELECT id,payload FROM events WHERE json_extract(payload,'$.agent_session_id')='shared-agent' AND json_extract(payload,'$.turn_id')='two'").all();
+    assert.equal(rows.length, 2);
+    for (const row of rows) db.prepare('UPDATE events SET payload=? WHERE id=?').run(JSON.stringify({ ...JSON.parse(row.payload), work_item_id: 'visible-log' }), row.id);
+    db.exec('COMMIT');
+  } finally { db.close(); }
+  await h.start('manager');
+  assert.equal((await h.manager('/items/visible-log')).sessions[0].id, originalSessions[1].id);
+  assert.deepEqual((await h.manager('/items/hidden-log')).sessions.map(session => session.id), [originalSessions[0].id, originalSessions[2].id]);
+  // A new user prompt requests the closed summaries; restart alone is not a trigger.
+  await h.ingest(pair('shared-agent', '09:56:00', '09:57:00', 'after-legacy-restore', { source: 'system_hook' }));
   for (const item of await h.manager('/items')) await createIssue(h, item, `jira-log-${item.id}`);
   await eventually(() => h.manager('/items/visible-log'), detail => detail.sessions[0].worklog?.state === 'synced', 20000);
   await eventually(() => h.manager('/items/hidden-log'), detail => detail.sessions[0].worklog?.state === 'synced', 20000);

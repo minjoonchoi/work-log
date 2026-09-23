@@ -18,7 +18,7 @@ let listRevision = '', notificationRevision = '', calendarMarkup = '', calendarR
 let calendarLayout = '', calendarFocusNow = false, calendarClockTimer;
 const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
 let streamConnected = false, refreshQueued = false, refreshing = false, refreshTimer;
-const statusLabels = { tracked: '이력 수집', running: '작업 실행 중', queued: '실행 대기', agent_response_pending: '에이전트 응답 대기', completed: '완료', cancelled: '취소됨', failed: '실패', blocked: '진행 불가', interrupted: '중단됨', pending: '실행 대기', session_closed: '구간 종료', session_idle: '대화 대기' };
+const statusLabels = { tracked: '이력 수집', running: '작업 실행 중', queued: '실행 대기', agent_response_pending: '작업 중', completed: '완료', cancelled: '취소됨', failed: '실패', blocked: '진행 불가', interrupted: '중단됨', pending: '실행 대기', session_closed: '구간 종료', session_idle: '대화 대기' };
 const checkLabels = { passed: '통과', failed: '실패', not_run: '미실행', running: '실행 중', interrupted: '중단', unknown: '확인 안 됨', incomplete: '검사 미완료', source_changed: '대상 변경 · 재검사 필요' };
 const time = value => new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
 const dateLabel = value => new Intl.DateTimeFormat('ko-KR', { month: 'short', day: 'numeric' }).format(new Date(value));
@@ -175,7 +175,7 @@ function renderItems() {
   const items = visibleItems(), visibleIds = new Set(items.map(item => item.id));
   for (const id of state.selected) if (!visibleIds.has(id)) state.selected.delete(id);
   const empty = state.trash ? ['휴지통이 비어 있습니다', '삭제한 업무는 이곳에서 세션 이력과 함께 복원할 수 있습니다.']
-    : state.currentOnly ? ['현재 진행 중인 업무가 없습니다', '실행 또는 에이전트 응답을 기다리는 업무가 있으면 여기에 표시합니다.']
+    : state.currentOnly ? ['현재 진행 중인 업무가 없습니다', '작업 중이거나 실행 대기 중인 업무가 있으면 여기에 표시합니다.']
     : $('#search').value || $('#jira-filter').value !== 'all' || $('#tag-filter').value !== 'all' ? ['검색 결과가 없습니다', '검색어·업무 유형·Jira 연결 필터를 변경해 보세요.']
     : ['아직 기록된 업무가 없습니다', '에이전트에서 요청하거나 CLI로 작업을 실행하면 업무와 세션 이력이 이곳에 나타납니다.'];
   $('#list-label').textContent = `${state.trash ? '삭제된 업무' : state.currentOnly ? '현재 작업' : '모든 업무'} · ${items.length}`;
@@ -363,7 +363,7 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
     ${integrations.jiraHTML(data)}
     <section class="detail-section"><h3>세션 이력 <small>${sessions.length}</small></h3><div class="history-toolbar"><span id="history-live">${liveStatus()}</span><span>발생 시각 · 최신순</span></div>${sessions.map(s => {
       const results = runs.filter(r => r.session_id === s.id).sort((a, b) => b.created_at.localeCompare(a.created_at));
-      const pendingLabel = results.some(r => r.status === 'running') ? '작업 실행 중' : results.some(r => r.status === 'pending') ? '실행 대기' : s.pending ? '에이전트 응답 대기' : '';
+      const pendingLabel = results.some(r => r.status === 'running') ? '작업 실행 중' : results.some(r => r.status === 'pending') ? '실행 대기' : s.pending ? '작업 중' : '';
       return `<details class="session-card" data-session-id="${esc(s.id)}" ${s.id === sessionId ? 'open' : ''}><summary><span class="session-time">${dateLabel(s.start_at)} ${time(s.start_at)} → ${time(s.end_at)}${pendingLabel ? ` · ${pendingLabel}` : ''}${results.length ? `<span class="session-result-count">작업 ${results.length}</span>` : ''}</span>${writing.sessionHeadingHTML(s)}</summary>
         <small class="session-source" title="${esc(s.agent_session_id)}">${esc(s.engine === 'codex' ? 'Codex' : s.engine === 'claude' ? 'Claude' : '하네스')} 대화</small>
         ${writing.sessionHTML(s)}${integrations.sessionHTML(s, data)}

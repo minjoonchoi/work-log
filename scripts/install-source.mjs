@@ -3,7 +3,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { ROOT, json, assert } from '../src/shared.mjs';
+import { ROOT, assert } from '../src/shared.mjs';
+import { createInstallReporter } from './install-output.mjs';
 import { buildMac } from './build-mac.mjs';
 import { prepareInstall, applyInstall } from './install.mjs';
 import { locations, readManifest, locked, safePath, stat, inventory, canonical } from './install-state.mjs';
@@ -47,19 +48,25 @@ export function cleanBuildCopies({ homeDir, projectRoot = ROOT, sourceApp } = {}
 }
 
 export function installFromSource({ homeDir = os.homedir(), output, sourceApp, activate = true,
-  projectRoot = ROOT, build = buildMac } = {}) {
+  projectRoot = ROOT, build = buildMac, onProgress = () => {} } = {}) {
   assert(sourceApp === undefined || (typeof sourceApp === 'string' && sourceApp.trim().length > 0),
     '--source-app에는 비어 있지 않은 앱 경로가 필요합니다.');
   const loc = locations(homeDir);
+  onProgress('설치 준비 상태를 확인합니다.');
   // Read only: applyInstall still owns the lock and validates an existing installation.
   const previous = readManifest(loc);
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-source-install-'));
   try {
     let app = sourceApp && path.resolve(sourceApp);
     if (!app && previous?.state === 'installed') app = loc.app;
-    if (!app) app = build({ outputDir: stage, archive: false }).app;
+    if (!app) {
+      onProgress('macOS 앱을 빌드합니다.');
+      // Build tools can emit arbitrary output. Keep CLI stdout for the final result.
+      app = build({ outputDir: stage, archive: false, stdio: ['ignore', 2, 2], onProgress }).app;
+    }
     const plan = prepareInstall({ homeDir, output: output || path.join(stage, 'plan'), sourceApp: app });
-    const result = applyInstall(plan, { activate });
+    const result = applyInstall(plan, { activate, onProgress });
+    onProgress('설치본과 일치하는 중복 빌드 앱을 정리합니다.');
     return { ...result, build_cleanup: cleanBuildCopies({ homeDir, projectRoot, sourceApp }) };
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }
@@ -67,10 +74,11 @@ export function installFromSource({ homeDir = os.homedir(), output, sourceApp, a
 const invokedAsProgram = process.argv[1] && fs.existsSync(process.argv[1])
   && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (invokedAsProgram) {
+  const reporter = createInstallReporter({ json: process.argv.includes('--json') });
   try {
-    const { values } = parseArgs({ options: { output: { type: 'string' }, 'home-dir': { type: 'string' },
+    const { values } = parseArgs({ options: { json: { type: 'boolean' }, output: { type: 'string' }, 'home-dir': { type: 'string' },
       'source-app': { type: 'string' }, 'no-activate': { type: 'boolean' } } });
-    console.log(json(installFromSource({ output: values.output, homeDir: values['home-dir'],
-      sourceApp: values['source-app'], activate: !values['no-activate'] })));
-  } catch (error) { console.error(json({ error: error.message })); process.exitCode = 1; }
+    reporter.result('install', installFromSource({ output: values.output, homeDir: values['home-dir'],
+      sourceApp: values['source-app'], activate: !values['no-activate'], onProgress: reporter.progress }));
+  } catch (error) { reporter.error('install', error); process.exitCode = 1; }
 }

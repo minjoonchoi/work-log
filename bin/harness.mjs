@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { ROOT, dataRoot, initRoot, request, json, sleep } from '../src/shared.mjs';
+import { attachAgentOrigin } from '../src/agent-origin.mjs';
 
 const args = process.argv.slice(2), command = args.shift(), dir = dataRoot();
 function option(name) {
@@ -78,7 +79,8 @@ try {
     // The calling agent's project directory is distinct from the background
     // service and each worker's isolated temporary directory.
     payload.workspace ??= fs.realpathSync(process.cwd());
-    result = await request(dir, 'runtime', command === 'orchestrate' ? '/plans' : '/runs', { method: 'POST', body: payload });
+    const linkedPayload = await attachAgentOrigin(dir, payload);
+    result = await request(dir, 'runtime', command === 'orchestrate' ? '/plans' : '/runs', { method: 'POST', body: linkedPayload });
     if (wait) result = await waitFor(result);
     else notify(result, '시작');
   } else if (command === 'catalog') {

@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Harness, pair, event, eventually } from '../helpers.mjs';
+import { Harness, pair as historyPair, event, eventually } from '../helpers.mjs';
 import { atlFixture, authorize, createIssue, adfText, oauthClient } from '../fixtures/atlassian.mjs';
+
+const pair = (agent, start, end, turn = 't1', extra = {}) => historyPair(agent, start, end, turn, { source: 'system_hook', ...extra });
 
 async function setup(t) {
   const h = new Harness(), f = await atlFixture(h);
@@ -73,6 +75,8 @@ test('20-minute boundary → structured summary job → exact comment/start/time
   assert.equal(posts(), 1);
   await h.stop('manager'); await h.start('manager');
   await h.ingest([event('summary-agent', 'output', '09:04:00', 'first', { text: '늦게 수집된 중간 응답' })]);
+  // Stale summaries retry on the next user prompt, never on a timer alone.
+  await h.ingest(pair('summary-agent', '09:27:00', '09:28:00', 'refresh-trigger'));
   detail = await eventually(() => h.manager(`/items/${item.id}`), d => d.sessions[0]?.worklog?.state === 'synced' && d.sessions[0]?.summary?.text?.includes('늦게'), 20000);
   assert.equal(f.state.worklogs.length, 1); assert.equal(posts(), 1);
   assert.ok(f.state.calls.some(c => c.method === 'PUT' && c.path.includes('/worklog/100')));

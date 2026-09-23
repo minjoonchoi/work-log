@@ -14,12 +14,13 @@ import { assertModelSelection } from './model-capabilities.mjs';
 import { planOrchestrator } from './plans.mjs';
 import { validateCodeInput } from './code-bundle.mjs';
 import { compileReview, reviewPolicy } from './review-policy.mjs';
+import { taskPolicy, directResponseSchema, directContent } from './task-policy.mjs';
 import { normalizeWorkspace, snapshotInputFiles, executionInputDigest, materializeInputs, verifyInputSnapshots, outputPath, publishOutput } from './artifact-handoff.mjs';
 
 const dir = dataRoot(); lockService(dir, 'runtime');
 const { definitions, rules, responseSchema, taskTypes, workflows, profiles, executionProfiles, runSchema, requestSchema } = loadCatalog();
 const settings = executionSettings({ dir, jobs: definitions.jobs, workflows, profiles: executionProfiles });
-const runtimeDigest = digest([...['runtime', 'plans', 'review-policy', 'code-bundle', 'artifact-handoff', 'executor', 'execution-settings', 'task-drafts', 'task-type-draft', 'model-capabilities', 'task-instruction', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite', 'work-report', 'result-summary'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
+const runtimeDigest = digest([...['runtime', 'plans', 'review-policy', 'task-policy', 'worker-policy', 'code-bundle', 'artifact-handoff', 'executor', 'execution-settings', 'task-drafts', 'task-type-draft', 'model-capabilities', 'task-instruction', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite', 'work-report', 'result-summary'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
   fs.readFileSync(path.join(ROOT, 'harness/model-capabilities.json'), 'utf8'),
   fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8')].join('\n'));
 const db = database(path.join(dir, 'runtime.sqlite'), `
@@ -43,7 +44,7 @@ function view(row) {
   return { id: row.id, status: row.status, task: r.task, engine: r.engine, origin: r.origin, internal: !!r.internal, plan_id: r.plan_id || null, workspace: r.workspace || null, stage: row.stage, round: row.round,
     message: row.message, created_at: row.created_at, updated_at: row.updated_at,
     definition_digest: row.definition_digest, request_digest: JSON.parse(row.definition).request_digest || null, artifact: row.artifact ? JSON.parse(row.artifact) : null,
-    review: JSON.parse(row.definition).review_decision || null,
+    review: JSON.parse(row.definition).review_decision || null, worker_policy: JSON.parse(row.definition).worker_policy || null,
     evidence: db.prepare('SELECT file,content_digest,epoch FROM check_evidence WHERE run_id=? AND epoch=?').get(row.id, row.epoch) || null };
 }
 function emit(event) { db.prepare('INSERT INTO outbox(payload) VALUES(?)').run(json(event)); }
@@ -113,7 +114,10 @@ function prepare(input, context = {}) {
   const definition = { version: definitions.version, runtime_digest: runtimeDigest, job, workflow, review_decision: review.decision, task_types: taskTypes,
     rules: Object.fromEntries(job.rules.map(k => [k, rules[k]])), request_schema: requestSchema,
     response_schema: responseSchema, limits: { ...definitions.limits }, ...(inputFiles.length ? { input_files: inputFiles } : {}) };
-  if (workflow.mode === 'artifact') definition.execution_profile = configured.profile;
+  if (workflow.mode === 'artifact') {
+    definition.execution_profile = configured.profile;
+    definition.worker_policy = taskPolicy(job, workflow, definition.limits);
+  }
   if (task === 'checks.run') definition.check_profile = profiles[normalizedInput.profile];
   if (task === 'verification.report') {
     const latest = input.work_item_id || input.origin
@@ -232,6 +236,8 @@ function publishArtifact(row, request, candidate, proof) {
 }
 async function agentStep(row, request, definition, task, candidate, issues, round) {
   const runId = row.id, job = definition.job, attempt = id('attempt-');
+  const attempts = db.prepare('SELECT COUNT(*) AS count FROM attempts WHERE run_id=? AND epoch=?').get(runId, row.epoch).count;
+  assert(!definition.worker_policy || attempts < definition.worker_policy.max_agent_attempts, '작업 유형의 모델 실행 횟수 한도에 도달했습니다.');
   const attemptDir = path.join(dir, 'runs', runId, attempt), cwd = path.join(attemptDir, 'workspace');
   fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
   if (candidate) atomic(path.join(cwd, job.file), candidate.bytes);
@@ -243,7 +249,8 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
   emitWorkEvent(request, { ...workerBase, id: `input-${attempt}`, kind: 'input', event_at: now(), turn_id: attempt, text: prompt });
   const processRun = execute({ engine: request.engine, cwd, attemptDir, stage: task, prompt, limits: definition.limits, parent, dataDir: dir,
     execution: request.engine === 'fixture' ? null : definition.execution_profile.stages[task][request.engine],
-    schema: definition.response_schema, allowedFile: job.file, fixture: { ...request.fixture, job, round, input: request.input },
+    schema: definition.worker_policy?.mode === 'direct' ? directResponseSchema : definition.response_schema,
+    workerPolicy: definition.worker_policy, allowedFile: job.file, fixture: { ...request.fixture, job, round, input: request.input, direct: definition.worker_policy?.mode === 'direct' },
     onSpawn: pid => db.prepare('UPDATE attempts SET pid=? WHERE id=?').run(pid, attempt) });
   running.set(runId, processRun);
   let returned = await processRun.promise;
@@ -251,6 +258,20 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
   catch (e) {
     returned = { ok: false, observation: { ...returned.observation, reason: 'input_integrity', error: `읽기 전용 입력 자료가 변경되었습니다: ${e.message}` } };
     atomic(path.join(attemptDir, 'process.json'), json(returned.observation));
+  }
+  if (returned.ok && definition.worker_policy?.mode === 'direct') {
+    try {
+      validateSchema(directResponseSchema, returned.result, '직접 응답');
+      const content = directContent(returned.result);
+      assert(fs.readdirSync(cwd).length === 0, '직접 응답 작업자가 작업 파일을 변경했습니다.');
+      if (content !== null) {
+        atomic(path.join(cwd, job.file), content);
+        returned = { ...returned, result: { status: 'done', result: { file: job.file } } };
+      }
+    } catch (e) {
+      returned = { ok: false, observation: { ...returned.observation, reason: 'protocol_failure', error: e.message } };
+      atomic(path.join(attemptDir, 'process.json'), json(returned.observation));
+    }
   }
   endAttempt(attempt, returned);
   emitWorkEvent(request, { ...workerBase, id: `output-${attempt}`, kind: returned.ok ? 'output' : 'turn.failed', event_at: now(), turn_id: attempt,
@@ -474,6 +495,7 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
       category: job.category, boundary: job.boundary, routing: job.routing, internal: !!job.allow_internal,
       source: job.source || 'builtin', template_id: job.template_id || null, description: job.description || '',
       review_policy: reviewPolicy(id, job, workflows[job.workflow]),
+      worker_policy: workflows[job.workflow].mode === 'artifact' ? taskPolicy(job, workflows[job.workflow], definitions.limits) : null,
       kind: job.kind, input_schema: job.input_schema, execution_profile: job.execution_profile || null })),
     task_types: taskTypes, workflows, execution_profiles: executionProfiles,
     check_profiles: Object.entries(profiles).map(([id, p]) => ({ id, label: p.label, validation_scope: p.validation_scope })) };

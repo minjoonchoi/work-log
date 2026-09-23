@@ -72,23 +72,30 @@ function itemListing(params) {
     return { ...item, jira_state: jiraState, jira_keys: keys, notification_count: counts.get(item.id) || 0 };
   }).filter(item => jiraFilter === 'all' || item.jira_state === jiraFilter);
 }
+function collectSpool(context) {
+  let changed = false;
+  const files = fs.readdirSync(spoolDir).filter(f => f.endsWith('.json'));
+  for (const file of context ? files : files.slice(0, 100)) {
+    const source = path.join(spoolDir, file);
+    try {
+      const event = JSON.parse(fs.readFileSync(source, 'utf8'));
+      if (context && (event.engine !== context.engine || event.agent_session_id !== context.session_id)) continue;
+      changed = store.ingestMany([event]).inserted > 0 || changed; fs.unlinkSync(source);
+    } catch (e) {
+      lastError = `훅 이벤트 보류: ${e.message}`;
+      const quarantine = path.join(dir, 'quarantine'); fs.mkdirSync(quarantine, { recursive: true, mode: 0o700 });
+      fs.renameSync(source, path.join(quarantine, file));
+      atomic(path.join(quarantine, `${file}.error`), e.message);
+    }
+  }
+  return changed;
+}
 async function collect() {
   if (collecting || stopping) return; collecting = true;
   const wasConnected = runtimeConnected, previousError = lastError;
   let changed = false;
   try {
-    for (const file of fs.readdirSync(spoolDir).filter(f => f.endsWith('.json')).slice(0, 100)) {
-      const source = path.join(spoolDir, file);
-      try {
-        const event = JSON.parse(fs.readFileSync(source, 'utf8'));
-        changed = store.ingestMany([event]).inserted > 0 || changed; fs.unlinkSync(source);
-      } catch (e) {
-        lastError = `훅 이벤트 보류: ${e.message}`;
-        const quarantine = path.join(dir, 'quarantine'); fs.mkdirSync(quarantine, { recursive: true, mode: 0o700 });
-        fs.renameSync(source, path.join(quarantine, file));
-        atomic(path.join(quarantine, `${file}.error`), e.message);
-      }
-    }
+    changed = collectSpool();
     try {
       const batch = await request(dir, 'runtime', `/events?after=${store.cursor('runtime')}`, { signal: AbortSignal.timeout(1500) });
       changed = store.ingestMany(batch.events, { source: 'runtime', value: batch.cursor }).inserted > 0 || changed; runtimeConnected = true;
@@ -131,6 +138,16 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
   },
   handler: async (req, url) => {
     const p = url.pathname;
+    if (p === '/api/agent-context' && req.method === 'GET') {
+      assert([...url.searchParams.keys()].every(key => ['engine', 'session_id'].includes(key))
+        && url.searchParams.getAll('engine').length === 1 && url.searchParams.getAll('session_id').length === 1,
+        'engine과 session_id를 한 번씩 지정하세요.');
+      const context = Object.fromEntries(url.searchParams);
+      // The requesting CLI may arrive before the periodic collector. Consume
+      // its already-recorded hooks before deciding this is a standalone entry.
+      if (collectSpool(context)) notify();
+      return store.agentContext(context);
+    }
     if (p === '/api/agent-connections' && req.method === 'GET')
       return withAgentCollection(store, connectionOptions ? getAgentConnections(connectionOptions) : unavailableConnections());
     const agentConnection = p.match(/^\/api\/agent-connections\/(claude|codex)$/);

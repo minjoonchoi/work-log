@@ -22,7 +22,7 @@ const finishPlan = (h, id) => eventually(() => h.runtime(`/plans/${id}`), result
 test('explicit short-text review decisions compile into different real worker graphs and are retained as evidence', async t => {
   const h = await setup(t);
   const catalog = await h.runtime('/catalog');
-  assert.deepEqual(catalog.jobs.filter(job => job.review_policy.omission_allowed).map(job => job.id), ['text.generate']);
+  assert.deepEqual(catalog.jobs.filter(job => job.review_policy.omission_allowed).map(job => job.id).sort(), ['meeting.summarize', 'progress.summarize', 'text.generate']);
   assert.equal(catalog.jobs.find(job => job.id === 'text.generate').review_policy.default_required, true);
   for (const review of [undefined, required, noReview]) {
     const run = await h.finish(await h.run({ ...simple, ...(review ? { review } : {}) }));

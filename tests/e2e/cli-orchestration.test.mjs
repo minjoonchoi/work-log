@@ -11,7 +11,7 @@ import { Harness } from '../helpers.mjs';
 
 async function cli(dir, args, env = {}) {
   const child = spawn(process.execPath, [path.join(ROOT, 'bin/harness.mjs'), ...args], {
-    cwd: dir, env: { ...process.env, HARNESS_DATA_DIR: dir, ...env }, stdio: ['ignore', 'pipe', 'pipe']
+    cwd: dir, env: { ...process.env, CODEX_THREAD_ID: '', HARNESS_DATA_DIR: dir, ...env }, stdio: ['ignore', 'pipe', 'pipe']
   });
   let stdout = '', stderr = '';
   child.stdout.on('data', c => stdout += c); child.stderr.on('data', c => stderr += c);

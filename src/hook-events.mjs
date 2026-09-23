@@ -25,9 +25,9 @@ export function spoolHookEvent(dir, event, hasSourceId) {
   atomic(path.join(dir, 'spool', `${spoolId}.json`), payload);
 }
 
-export function resolveHookTurns(rows) {
+export function resolveHookTurns(rows, { withPending = false } = {}) {
   const open = new Map();
-  return rows.map(row => {
+  const events = rows.map(row => {
     const event = JSON.parse(row.payload), current = currentHookEvent(event);
     if (event.kind === 'input') {
       open.set(row.id, event);
@@ -51,4 +51,5 @@ export function resolveHookTurns(rows) {
     if (event.kind === 'session.ended') open.clear();
     return event;
   });
+  return withPending ? { events, pending: [...open.values()] } : events;
 }

@@ -55,7 +55,9 @@ test('GUI rewrites an active session, then item metadata, and can repeat both wh
   const metadata = page.getByRole('group', { name: '제목·설명 작업', exact: true }).getByRole('button', { name: '제목·설명 다시 작성', exact: true });
   await metadata.click(); await expect(metadata).toBeDisabled();
   await expect(page.locator('.metadata-writing .writing-status')).toContainText('작성 완료', { timeout: 15000 });
-  await expect(page.locator('#detail')).toContainText('1개 세션 이력');
+  for (const name of ['배경', '목표', '요구사항', '작업 범위', '참고사항'])
+    await expect(page.locator('#detail').getByRole('heading', { name, exact: true })).toBeVisible();
+  await expect(page.locator('#detail')).toContainText('1개 세션의 사용자 요청');
   await metadata.click(); await expect(metadata).toBeDisabled();
   await expect(metadata).toBeEnabled({ timeout: 15000 });
   await expect(page.locator('.item-row')).toHaveCount(1); await expect(page.locator('.session-card')).toHaveCount(1);

@@ -142,7 +142,7 @@ test('every public artifact profile passes its real subprocess, contract, verifi
     const input = sampleInput(job), result = await h.finish(await submit(h, job.id, input, { scenario: 'prompted-rules' }));
     assert.equal(result.status, 'completed', result.message); assert.equal(result.round, 0);
     assert.ok(result.steps.some(step => step.task === 'verify' && step.outcome.status === 'done'));
-    assert.ok(result.steps.some(step => step.task === 'review' && step.outcome.status === 'done'));
+    assert.equal(result.steps.some(step => step.task === 'review' && step.outcome.status === 'done'), job.review_policy.default_required);
     assert.equal(result.steps.at(-1).task, 'render');
     for (const attempt of result.attempts) {
       const prompt = fs.readFileSync(path.join(attempt.directory, 'prompt.txt'), 'utf8');
@@ -151,12 +151,17 @@ test('every public artifact profile passes its real subprocess, contract, verifi
       assert.ok(prompt.includes(JSON.stringify(input.requirements ?? input.purpose)), `${job.id}/${attempt.stage}: requested purpose missing`);
     }
     const review = result.attempts.find(attempt => attempt.stage === 'review');
+    if (review) {
     const prompt = fs.readFileSync(path.join(review.directory, 'prompt.txt'), 'utf8');
     const rules = JSON.parse(prompt.match(/\n규칙: ([^\n]+)\n/)[1]);
     const response = JSON.parse(fs.readFileSync(path.join(review.directory, 'result.json')));
     assert.deepEqual(new Set(response.result.evaluations.map(evaluation => evaluation.rule)), new Set(Object.keys(rules)));
     assert.ok(response.result.evaluations.every(evaluation => evaluation.passed && evaluation.evidence));
     assert.ok(Object.keys(rules).some(rule => !['REQ-001', 'OUTPUT-001', 'SCOPE-001', 'JOB-BOUNDARY-001'].includes(rule)));
+    } else {
+      assert.equal(result.attempts.length, 1); assert.ok(result.artifact.generation_attempt);
+      assert.equal(result.artifact.review_attempt, undefined);
+    }
     const text = fs.readFileSync(result.artifact.file, 'utf8');
     assert.ok(text.length > 0);
     if (job.kind === 'code_bundle') {

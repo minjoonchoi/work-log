@@ -86,7 +86,7 @@ try {
   assert.equal(spawnSync('codesign', ['--verify', '--deep', '--strict', app]).status, 0); report.checks.push('ad-hoc signature verification');
   assert.equal(spawnSync('unzip', ['-tq', path.join(packageRoot, 'WorkLog-macos-arm64.zip')]).status, 0); report.checks.push('distribution ZIP integrity');
   await h.close(false);
-  const removed = spawnSync(h.executable, [path.join(h.serviceRoot, 'scripts/uninstall.mjs'), '--apply', '--home-dir', homeDir, '--no-deactivate'], { encoding: 'utf8', timeout: 30000 });
+  const removed = spawnSync(h.executable, [path.join(h.serviceRoot, 'scripts/uninstall.mjs'), '--apply', '--json', '--home-dir', homeDir, '--no-deactivate'], { encoding: 'utf8', timeout: 30000 });
   assert.equal(removed.status, 0, removed.stderr); assert.equal(JSON.parse(removed.stdout).status, 'uninstalled');
   assert.ok(fs.existsSync(path.join(plan.dataDir, 'memory.sqlite')));
   assert.equal(fs.existsSync(plan.targetApp), false); assert.equal(fs.existsSync(plan.runtimeRoot), false);

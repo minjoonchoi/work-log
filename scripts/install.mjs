@@ -5,7 +5,8 @@ import crypto from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ROOT, atomic, assert, json, digest } from '../src/shared.mjs';
+import { ROOT, atomic, assert, digest } from '../src/shared.mjs';
+import { createInstallReporter } from './install-output.mjs';
 import { OWNER, quote, locations, stat, safePath, locked, readManifest, saveManifest, recordDirectories,
   inventory, matches } from './install-state.mjs';
 
@@ -52,8 +53,9 @@ function intact(loc, receipt) {
 
 }
 
-export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, launchctl = spawnSync } = {}) {
+export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, launchctl = spawnSync, onProgress = () => {} } = {}) {
   return locked(homeDir, loc => {
+    onProgress('설치 경로와 기존 소유 기록을 확인합니다.');
     assert(plan.homeDir === loc.home && plan.dataDir === loc.data && plan.targetApp === loc.app
       && plan.runtimeRoot === path.join(loc.data, 'versions', plan.version), '설치 계획과 대상 홈이 다릅니다.');
     const previous = readManifest(loc);
@@ -77,6 +79,7 @@ export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, la
     const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-install-stage-'));
     let receipt;
     try {
+      onProgress('앱과 실행 파일을 준비합니다.');
       const stagedApp = path.join(stage, 'app'), stagedRuntime = path.join(stage, 'runtime');
       fs.cpSync(plan.sourceApp, stagedApp, { recursive: true, verbatimSymlinks: true });
       fs.mkdirSync(stagedRuntime);
@@ -97,6 +100,7 @@ export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, la
       recordDirectories(loc, receipt, [loc.app, ...receipt.files.map(f => f.path)]);
       saveManifest(loc, receipt); // Persist exact ownership before the first shared configuration write.
       readManifest(loc); // Validate the same boundaries used by the uninstaller.
+      onProgress('앱과 백그라운드 서비스 설정을 설치합니다.');
       for (const [i, source] of [stagedApp, stagedRuntime].entries()) {
         const target = receipt.trees[i].path; safePath(loc.home, target); assert(!stat(target), `설치 대상이 변경되었습니다: ${target}`);
         fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
@@ -106,6 +110,7 @@ export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, la
         safePath(loc.home, f.path); fs.mkdirSync(path.dirname(f.path), { recursive: true, mode: 0o700 });
         fs.writeFileSync(f.path, f.content, { flag: 'wx', mode: 0o600 });
       }
+      if (activate) onProgress('백그라운드 서비스와 메뉴 막대 앱을 시작합니다.');
       if (activate) for (const f of receipt.files) {
         f.activation = 'starting'; saveManifest(loc, receipt);
         const r = launchctl('launchctl', ['bootstrap', `gui/${process.getuid()}`, f.path], { encoding: 'utf8', timeout: 15000 });
@@ -126,10 +131,12 @@ const invokedAsProgram = process.argv[1]
   && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
 
 if (invokedAsProgram) {
+  const reporter = createInstallReporter({ json: process.argv.includes('--json') });
   try {
-    const { values } = parseArgs({ options: { apply: { type: 'boolean' }, output: { type: 'string' }, 'home-dir': { type: 'string' }, 'source-app': { type: 'string' }, 'no-activate': { type: 'boolean' } } });
+    const { values } = parseArgs({ options: { json: { type: 'boolean' }, apply: { type: 'boolean' }, output: { type: 'string' }, 'home-dir': { type: 'string' }, 'source-app': { type: 'string' }, 'no-activate': { type: 'boolean' } } });
+    reporter.progress('설치 계획을 준비합니다.');
     const output = values.output || fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-install-plan-'));
     const plan = prepareInstall({ output, homeDir: values['home-dir'], sourceApp: values['source-app'] });
-    console.log(json(values.apply ? applyInstall(plan, { activate: !values['no-activate'] }) : { ...plan, output }));
-  } catch (e) { console.error(json({ error: e.message })); process.exitCode = 1; }
+    reporter.result('install', values.apply ? applyInstall(plan, { activate: !values['no-activate'], onProgress: reporter.progress }) : { ...plan, output });
+  } catch (e) { reporter.error('install', e); process.exitCode = 1; }
 }

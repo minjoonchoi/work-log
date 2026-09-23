@@ -5,9 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ROOT, assert, atomic, json } from '../src/shared.mjs';
 
-function run(command, args) { const result = spawnSync(command, args, { stdio: 'inherit' }); assert(result.status === 0, `${command} 실패`); }
-
-export function buildMac({ outputDir = path.join(ROOT, 'dist'), archive = true } = {}) {
+export function buildMac({ outputDir = path.join(ROOT, 'dist'), archive = true, stdio = 'inherit', onProgress = () => {} } = {}) {
+  const run = (command, args) => { const result = spawnSync(command, args, { stdio }); assert(result.status === 0, `${command} 실패`); };
   // Check the actual runtime before replacing a previous successful build.
   const candidate = process.env.HARNESS_BUNDLE_NODE || process.execPath;
   const probe = spawnSync(candidate, [path.join(ROOT, 'scripts/node-probe.cjs'), '--portable'], { encoding: 'utf8', timeout: 15000,
@@ -28,20 +27,23 @@ export function buildMac({ outputDir = path.join(ROOT, 'dist'), archive = true }
 ${process.env.HARNESS_GUI_DATA_DIR ? `<key>HarnessDataRoot</key><string>${xml(path.resolve(process.env.HARNESS_GUI_DATA_DIR))}</string>` : ''}
 </dict></plist>`;
   atomic(path.join(contents, 'Info.plist'), plist);
+  onProgress('앱 아이콘을 생성하고 GUI를 컴파일합니다.');
   run('swift', [path.join(ROOT, 'scripts/build-icons.swift'), path.join(ROOT, 'apps/macos/assets/worklog.svg'), path.join(resources, 'WorkLog.icns')]);
   run('swiftc', ['-O', '-target', 'arm64-apple-macos13.0', '-framework', 'Cocoa', '-framework', 'WebKit', path.join(ROOT, 'apps/macos/main.swift'), '-o', path.join(contents, 'MacOS/WorkLog')]);
   run('swiftc', ['-O', '-target', 'arm64-apple-macos13.0', '-framework', 'Security', '-framework', 'LocalAuthentication', path.join(ROOT, 'apps/macos/keychain.swift'), '-o', path.join(contents, 'MacOS/WorkLogKeychain')]);
+  onProgress('실행 환경과 앱 리소스를 구성합니다.');
   fs.copyFileSync(node, path.join(contents, 'MacOS/node')); fs.chmodSync(path.join(contents, 'MacOS/node'), 0o755);
   const bundled = path.join(resources, 'harness'); fs.mkdirSync(bundled, { recursive: true });
   for (const folder of ['src', 'bin', 'harness', 'contracts', 'apps/web', 'skills']) fs.cpSync(path.join(ROOT, folder), path.join(bundled, folder), { recursive: true });
   // Recreate only this build's generated scripts directory; do not ship development fixture launchers.
   fs.rmSync(path.join(bundled, 'scripts'), { recursive: true, force: true });
   fs.mkdirSync(path.join(bundled, 'scripts'), { recursive: true });
-  for (const file of ['install.mjs', 'uninstall.mjs', 'install-state.mjs', 'agent-connections.mjs', 'service-control.mjs']) fs.copyFileSync(path.join(ROOT, 'scripts', file), path.join(bundled, 'scripts', file));
+  for (const file of ['install.mjs', 'uninstall.mjs', 'install-state.mjs', 'install-output.mjs', 'agent-connections.mjs', 'service-control.mjs']) fs.copyFileSync(path.join(ROOT, 'scripts', file), path.join(bundled, 'scripts', file));
   fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(bundled, 'package.json'));
   fs.copyFileSync(path.join(ROOT, 'package-lock.json'), path.join(bundled, 'package-lock.json'));
   for (const pkg of ['playwright', 'playwright-core', 'ajv', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'require-from-string']) fs.cpSync(path.join(ROOT, 'node_modules', pkg), path.join(bundled, 'node_modules', pkg), { recursive: true });
   for (const license of ['LICENSE', 'LICENSE.md']) if (fs.existsSync(path.join(path.dirname(node), '..', license))) fs.copyFileSync(path.join(path.dirname(node), '..', license), path.join(resources, `node-${license}`));
+  onProgress('앱에 서명하고 빌드 결과를 확인합니다.');
   run('codesign', ['--force', '--deep', '--sign', '-', app]);
   run('codesign', ['--verify', '--deep', '--strict', app]);
   let archivePath = null;

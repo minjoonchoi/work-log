@@ -5,7 +5,34 @@ import { validateSchema } from './schema.mjs';
 import { parseSessionSummary } from './session-summary.mjs';
 
 const schema = JSON.parse(fs.readFileSync(path.join(ROOT, 'contracts/text-rewrite.schema.json'), 'utf8'));
-function validateJiraDescription(description) {
+const sentenceSegmenter = new Intl.Segmenter('ko', { granularity: 'sentence' });
+function sentenceCount(text) {
+  // Links, decimals and common names must not turn one factual sentence into several.
+  const prose = text.replace(/https?:\/\/[^\s\]|]+/gu, value => `URL${value.match(/[.!?]+$/u)?.[0] || ''}`)
+    .replace(/\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc)\./giu, value => value.slice(0, -1))
+    .replace(/\b(?:e\.g|i\.e)\./giu, value => value.replaceAll('.', ''));
+  return [...sentenceSegmenter.segment(prose)].filter(part => part.segment.trim()).length;
+}
+function validateConciseBodies(bodies, expected) {
+  const limits = [3, 1, 3, 3, 2];
+  let total = 0;
+  bodies.forEach((body, index) => {
+    const lines = body.split('\n').filter(line => line.trim());
+    assert(lines.length <= limits[index], `${expected[index]} 구역은 최대 ${limits[index]}문장이어야 합니다.`);
+    assert(lines.every(line => index === 1 ? !/^\s*\*/u.test(line) : /^\* \S/u.test(line)),
+      `${expected[index]} 구역은 ${index === 1 ? '목표 한 문장' : '"* " 목록'}만 작성하세요. 별도 도입문이나 줄을 나눈 항목은 허용하지 않습니다.`);
+    for (const line of lines) {
+      let content = line.replace(/^\* /u, '').trim();
+      if (index === 0) content = content.replace(/^(?:현재 상황|문제점|작업 필요성):\s*/u, '');
+      assert([...content].length <= 120, `${expected[index]} 구역의 각 문장은 최대 120자여야 합니다. 목록·배경 라벨을 제외하고 공백·문장부호·링크 원문을 포함합니다.`);
+      assert(!/[\u2028\u2029]/u.test(content) && sentenceCount(content) <= 1,
+        `${expected[index]} 구역은 한 줄에 한 문장만 작성하세요. 여러 문장을 한 항목에 합치지 마세요.`);
+      total += 1;
+    }
+  });
+  assert(total <= 12, '업무 설명은 제목과 구역 제목을 제외하고 최대 12문장이어야 합니다.');
+}
+function validateJiraDescription(description, { concise = false } = {}) {
   const source = description.replace(/\r\n?/g, '\n').trim();
   const expected = ['배경', '목표', '요구사항', '작업 범위', '참고사항'];
   const headings = [...source.matchAll(/^[ \t]*(?:h[1-6]\.|#{1,6})[^\n]*$/gm)];
@@ -32,6 +59,7 @@ function validateJiraDescription(description) {
     try { JSON.parse(value); return false; } catch { return true; }
   };
   assert(!bodies.some(body => body.split('\n').some(placeholder)), '템플릿의 중괄호 안내문을 실제 이력 또는 미확인으로 바꾸세요.');
+  if (concise) validateConciseBodies(bodies, expected);
 }
 
 export function parseTextRewrite(text, format, { metadataFormat, requireJiraDescription = false,
@@ -45,7 +73,8 @@ export function parseTextRewrite(text, format, { metadataFormat, requireJiraDesc
     assert(lines.length <= 5 && lines.every(line => line.trim()), '세션 설명은 빈 줄 없이 최대 5줄이어야 합니다.');
     return parseSessionSummary(`${value.title}\n${value.description}`, { requireBullets: requireBulletSummary });
   }
-  if (requireJiraDescription || metadataFormat === 'work-item-jira-v1') validateJiraDescription(value.description);
+  if (requireJiraDescription || ['work-item-jira-v1', 'work-item-jira-v2'].includes(metadataFormat))
+    validateJiraDescription(value.description, { concise: metadataFormat === 'work-item-jira-v2' });
   else if (requireStructuredDescription || metadataFormat === 'work-item-v1') {
     const source = value.description.replace(/\r\n?/g, '\n').trim();
     const headings = [...source.matchAll(/^## ([^\n]+)$/gm)];

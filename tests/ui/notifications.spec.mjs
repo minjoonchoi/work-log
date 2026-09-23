@@ -71,17 +71,20 @@ test('native question tools stay raw hook evidence and never create notification
   await openNotifications(page); await expect(page.locator('.notification-row')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '사용자 답변 필요', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '확인이 필요한 작업', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: '업무 목록', exact: true }).click(); await page.locator('.item-open').first().click();
+  await page.getByRole('button', { name: '업무 목록', exact: true }).click();
+  await expect(page.locator('.item-row .badge.agent_response_pending')).toHaveText(Array(3).fill('작업 중'));
+  await page.locator('.item-open').first().click();
   await expect(page.locator('.user-questions, .question-text')).toHaveCount(0);
   await page.locator('.session-card > summary').click();
   await page.locator('.session-card .raw-history > summary').click();
   await expect(page.locator('.event')).toHaveCount(1);
-  await expect(page.locator('.session-card > summary')).toContainText('에이전트 응답 대기');
+  await expect(page.locator('.session-card > summary')).toContainText('작업 중');
   const all = await Promise.all(items.map(item => h.manager(`/items/${item.id}`)));
   expect(all.flatMap(item => item.events).filter(event => event.kind === 'tool.started')).toHaveLength(3);
   expect(all.flatMap(item => item.events).filter(event => event.kind === 'output')).toHaveLength(0);
   await page.setViewportSize({ width: 380, height: 600 }); await page.goto(url('/quick'));
   await expect(page.locator('#notification-count')).toHaveText('0'); await expect(page.locator('#current-count')).toHaveText('3');
+  await expect(page.locator('[data-group=current] .agent_response_pending')).toHaveText(Array(3).fill('작업 중'));
   await expect(page.locator('[data-group=waiting], [data-group=attention]')).toHaveCount(0);
 });
 

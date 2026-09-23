@@ -26,7 +26,7 @@ function setup(t, real = false) {
   if (real) {
     for (const name of ['src', 'bin', 'harness', 'contracts', 'apps/web']) fs.cpSync(path.join(ROOT, name), path.join(bundle, name), { recursive: true });
     fs.mkdirSync(path.join(bundle, 'scripts'), { recursive: true });
-    for (const name of ['agent-connections', 'install-state', 'install', 'uninstall', 'service-control']) fs.copyFileSync(path.join(ROOT, `scripts/${name}.mjs`), path.join(bundle, `scripts/${name}.mjs`));
+    for (const name of ['agent-connections', 'install-state', 'install-output', 'install', 'uninstall', 'service-control']) fs.copyFileSync(path.join(ROOT, `scripts/${name}.mjs`), path.join(bundle, `scripts/${name}.mjs`));
     for (const name of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(ROOT, name), path.join(bundle, name));
     for (const name of ['ajv', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'require-from-string']) fs.cpSync(path.join(ROOT, 'node_modules', name), path.join(bundle, 'node_modules', name), { recursive: true });
   }

@@ -5,9 +5,10 @@ export function integrationCoordinator({ integrations, client, notify, writings,
   let busy = false;
   const checkedUnknown = new Set();
   async function tick() {
+    // The writer has its own lock; a slow Jira request must not hold its queue.
+    await writings.tick();
     if (busy) return; busy = true;
     try {
-      await writings.tick();
       if (!enabled) return;
       const sessions = integrations.closedSessions();
       if (integrations.invalidateOpenWorklogs(new Set(sessions.map(s => s.id)))) notify();

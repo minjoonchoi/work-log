@@ -178,10 +178,10 @@ for (const engine of ['codex', 'claude']) test(`${engine} system hooks stream ne
   const session = page.locator('.session-card');
   await session.locator(':scope > summary').click(); await session.locator('.raw-history > summary').click();
   await expect(page.locator('#history-live')).toHaveText('실시간 갱신 중');
-  await expect(session).toContainText('응답 대기');
+  await expect(session.locator(':scope > summary')).toContainText('작업 중');
   h.hook(engine, { ...raw, event_id: 'output-1', hook_event_name: 'Stop', last_assistant_message: '첫 번째 응답 원문' });
   await expect(session.locator('.event pre')).toHaveText(['첫 번째 응답 원문', '실시간 세션 확인'], { timeout: 3000 });
-  await expect(session).not.toContainText('응답 대기');
+  await expect(session.locator(':scope > summary')).not.toContainText('작업 중');
   h.hook(engine, { ...raw, turn_id: 'turn-2', event_id: 'input-2', hook_event_name: 'UserPromptSubmit', prompt: '두 번째 프롬프트 원문' });
   const output = { ...raw, turn_id: 'turn-2', event_id: 'output-2', hook_event_name: 'Stop', last_assistant_message: '두 번째 응답 원문' };
   h.hook(engine, output);

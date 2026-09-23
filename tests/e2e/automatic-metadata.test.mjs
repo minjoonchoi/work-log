@@ -115,7 +115,10 @@ test('automation settings validate, persist and coalesce an already fulfilled lo
   }
   assert.deepEqual(await h.manager('/automation/settings', patch({ initial_output_count: 1000, summary_interval: 1000 })), { initial_output_count: 1000, summary_interval: 1000 });
   await h.ingest([0, 30, 60, 90, 120, 150, 180].flatMap((minute, index) => turn('settings-cadence', minute, `window-${index}`)));
-  const item = (await h.manager('/items'))[0], before = await closedAccepted(h, item, 6); await stableCount(h, 0);
+  const item = (await h.manager('/items'))[0];
+  await closedAccepted(h, item, 5);
+  await h.ingest(turn('settings-cadence', 182, 'next-summary-batch'));
+  const before = await closedAccepted(h, item, 6); await stableCount(h, 0);
   await summarize(h, before.sessions.at(-1).id, 'open-summary-before-automatic');
   assert.equal((await finished(h, 'open-summary-before-automatic')).state, 'completed');
   await h.stop('manager'); await h.start('manager');
@@ -125,7 +128,7 @@ test('automation settings validate, persist and coalesce an already fulfilled lo
   const initial = await h.runtime(`/runs/${value.metadata_rewrite.run_id}`);
   assert.equal(initial.request.input.sessions.filter(session => session.summary && session.events.length === 0).length, 6);
   const open = initial.request.input.sessions.find(session => session.id === before.sessions.at(-1).id);
-  assert.equal(open.summary, null); assert.equal(open.events.length, 2);
+  assert.equal(open.summary, null); assert.equal(open.events.length, 4);
   await h.manager('/automation/settings', patch({ summary_interval: 1 })); await stableCount(h, 1);
   await h.ingest(turn('settings-cadence', 210, 'new-counted-window'));
   await closedAccepted(h, item, 7); await applied(h, item, 2);

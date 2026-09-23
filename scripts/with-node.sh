@@ -133,7 +133,10 @@ if [ "$action" = build ]; then
   exec "$selected_npm" run build:mac
 fi
 if [ "$action" = install ]; then
-  if [ "$need_npm" -eq 1 ]; then "$selected_npm" ci; fi
+  if [ "$need_npm" -eq 1 ]; then
+    printf '%s\n' 'WorkLog: 설치에 필요한 패키지를 준비합니다.' >&2
+    "$selected_npm" ci >&2
+  fi
   exec "$selected_node" "$script_dir/install-source.mjs" "$@"
 fi
 if [ "$action" = npm ]; then exec "$selected_npm" "$@"; fi

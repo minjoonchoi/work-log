@@ -9,7 +9,7 @@ import { ROOT, digest } from '../../src/shared.mjs';
 test('prompt entry CLI waits for the complete workflow and returns one final JSON without GUI or manager', async t => {
   const h = await new Harness().start('runtime'); t.after(() => h.close());
   const child = spawn(process.execPath, [path.join(ROOT, 'bin/harness.mjs'), 'run', '초대 기능의 PRD 작성', '--engine', 'fixture', '--wait'],
-    { cwd: h.dir, env: { ...process.env, HARNESS_DATA_DIR: h.dir }, stdio: ['ignore', 'pipe', 'pipe'] });
+    { cwd: h.dir, env: { ...process.env, CODEX_THREAD_ID: '', HARNESS_DATA_DIR: h.dir }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '', stderr = ''; child.stdout.on('data', c => stdout += c); child.stderr.on('data', c => stderr += c);
   const exit = await new Promise(resolve => child.on('exit', resolve));
   assert.equal(exit, 0, stderr); const final = JSON.parse(stdout);
@@ -23,7 +23,7 @@ test('prompt entry CLI waits for the complete workflow and returns one final JSO
 test('CLI selects local checks and report jobs, exposes their catalog and evidence, and preserves failure exit code', async t => {
   const h = await new Harness().start('runtime'); t.after(() => h.close());
   const cli = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'bin/harness.mjs'), ...args],
-    { cwd: h.dir, env: { ...process.env, HARNESS_DATA_DIR: h.dir }, encoding: 'utf8', timeout: 15000 });
+    { cwd: h.dir, env: { ...process.env, CODEX_THREAD_ID: '', HARNESS_DATA_DIR: h.dir }, encoding: 'utf8', timeout: 15000 });
   const catalog = cli('catalog'); assert.equal(catalog.status, 0);
   assert.ok(JSON.parse(catalog.stdout).jobs.some(j => j.id === 'test.scenarios.plan'));
   const file = path.join(h.dir, 'request.json');
@@ -41,7 +41,7 @@ test('CLI selects local checks and report jobs, exposes their catalog and eviden
 test('catalog CLI discovers bounded tasks without every schema, then loads only a selected full contract', async t => {
   const h = await new Harness().start('runtime'); t.after(() => h.close());
   const cli = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'bin/harness.mjs'), ...args],
-    { cwd: h.dir, env: { ...process.env, HARNESS_DATA_DIR: h.dir }, encoding: 'utf8', timeout: 15000 });
+    { cwd: h.dir, env: { ...process.env, CODEX_THREAD_ID: '', HARNESS_DATA_DIR: h.dir }, encoding: 'utf8', timeout: 15000 });
   const full = JSON.parse(cli('catalog').stdout);
   const summarized = cli('catalog', '--summary'); assert.equal(summarized.status, 0, summarized.stderr);
   const summary = JSON.parse(summarized.stdout); assert.equal(summary.version, full.version);
@@ -61,7 +61,7 @@ test('catalog CLI discovers bounded tasks without every schema, then loads only 
 test('independent CLI requests reuse a prior published file through an explicit frozen input reference', async t => {
   const h = await new Harness().start('runtime'); t.after(() => h.close());
   const cli = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'bin/harness.mjs'), ...args],
-    { cwd: h.dir, env: { ...process.env, HARNESS_DATA_DIR: h.dir }, encoding: 'utf8', timeout: 15000 });
+    { cwd: h.dir, env: { ...process.env, CODEX_THREAD_ID: '', HARNESS_DATA_DIR: h.dir }, encoding: 'utf8', timeout: 15000 });
   const first = cli('run', '초대 기능의 PRD 작성', '--engine', 'fixture', '--wait');
   assert.equal(first.status, 0, first.stderr);
   const prior = JSON.parse(first.stdout), source = prior.artifact.output_file;

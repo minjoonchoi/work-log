@@ -280,12 +280,14 @@ test('make install bootstraps before npm ci and delegates temporary build/instal
     const require=createRequire(import.meta.url);
     ${report.replace('process.argv.slice(1)', 'process.argv.slice(2)')}
   `);
-  const result = spawnSync('/usr/bin/make', ['install', 'INSTALL_ARGS=--no-activate'], {
+  const result = spawnSync('/usr/bin/make', ['install', 'INSTALL_ARGS=--no-activate --json'], {
     cwd: f.root, env: f.env, encoding: 'utf8', timeout: 15000
   });
   assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
-  const calls = result.stdout.trim().split('\n').map(line => JSON.parse(line));
-  assert.deepEqual(calls.map(call => call.args), [['ci'], ['--no-activate']]);
+  const npmCalls = result.stderr.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line));
+  const final = JSON.parse(result.stdout);
+  const calls = [...npmCalls, final];
+  assert.deepEqual(calls.map(call => call.args), [['ci'], ['--no-activate', '--json']]);
   for (const call of calls) selected(call, f.cachedNode);
   assert.equal(f.calls().filter(value => value === archiveUrl).length, 1);
 });

@@ -29,6 +29,7 @@ test('compact panel shows bounded groups and opens exact item or full-window des
   await openQuick(page);
   await expect(page.locator('#current-count')).toHaveText('7');
   await expect(page.locator('[data-group=current] .quick-item')).toHaveCount(5);
+  await expect(page.locator('[data-group=current] .agent_response_pending')).toHaveText(Array(5).fill('작업 중'));
   await expect(page.locator('[data-group=current]')).toContainText('+2개 더 보기');
   await expect(page.locator('[data-group=recent] .quick-item')).toHaveCount(5);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBe(true);

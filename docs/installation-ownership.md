@@ -2,6 +2,19 @@
 
 `make install`은 의존성 설치·임시 macOS 앱 빌드·사용자 설치를 수행한다. 설치 대상은 현재 사용자의 `~/Applications/WorkLog.app`, WorkLog 전용 LaunchAgent 3개와 고정 실행 파일이다. Claude/Codex의 설정·훅·스킬 연결은 설치하지 않는다. GUI의 **연결 설정**에서 엔진별로 명시적으로 연결한다. `make uninstall`은 설치 소유 기록을 확인해 앱·서비스와 이후 GUI에서 만든 WorkLog 연결을 제거한다. `make install-plan`, `make uninstall-plan`은 사용자 설정을 바꾸지 않고 대상을 출력한다. ZIP에도 각각의 설치·제거 명령이 포함된다.
 
+기본 출력은 한국어 단계 안내와 최종 결과다. 자동화는 다음과 같이 `--json`을 전달한다.
+
+```sh
+make install INSTALL_ARGS='--json'
+make uninstall UNINSTALL_ARGS='--json'
+make install-plan INSTALL_ARGS='--json'
+make uninstall-plan UNINSTALL_ARGS='--json'
+```
+
+직접 실행할 때도 `node scripts/install.mjs --json`, `node scripts/uninstall.mjs --json`, `node scripts/install-source.mjs --json`을 사용한다. 앞의 두 명령은 계획만 출력하며 실제 적용은 `--apply`를 추가한다. `install-source.mjs`는 소스 빌드·설치를 수행한다. JSON 모드는 완료·확인 필요 결과의 최종 객체 하나를 stdout에 쓴다. CLI 오류는 JSON을 stderr에 쓰며 stdout은 비어 있다. Node·npm 등 준비 단계의 오류는 stderr의 일반 텍스트일 수 있고, 준비 안내와 외부 빌드 도구 출력도 stderr로 보낸다.
+
+설치·제거 Node CLI의 종료 코드는 `0` 완료, `1` 오류, `2` 확인 필요로 유지한다. `make` 자체는 자식 명령 실패 시 `2`를 반환하므로 CLI 오류와 확인 필요를 구분하려면 Node CLI를 직접 실행한다. 출력 형식은 설치·제거의 소유 확인, 적용 조건, 보존 정책을 바꾸지 않는다.
+
 ## 설치용 빌드와 개발·배포용 빌드
 
 `make install`은 `scripts/with-node.sh install`에서 Node 선택과 `npm ci`를 수행한 뒤 `scripts/install-source.mjs`를 실행한다. 앱을 임시 폴더에 빌드하고 ZIP 생성 없이 설치한다. 임시 빌드 폴더는 빌드 또는 설치의 성공·실패와 관계없이 정리한다. 정상 설치가 이미 있으면 소유 기록을 확인하고 `already_installed`로 유지하며 앱을 다시 빌드하지 않는다. 이 경우에도 앞 단계의 Node 준비와 `npm ci`는 수행될 수 있다.

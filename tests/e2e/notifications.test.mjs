@@ -83,7 +83,7 @@ test('a later summary admission failure is not hidden by a completed writer for 
   await eventually(() => h.manager('/writing/accepted-small-summary'), row => row.state === 'completed', 20000);
   const events = Array.from({ length: 1000 }, (_, index) => pair('admission-notification', '09:10:00', '09:15:00', `more-${index}`)).flat();
   for (let offset = 0; offset < events.length; offset += 500) await h.ingest(events.slice(offset, offset + 500));
-  await h.ingest(pair('admission-notification', '09:35:00', '09:40:00', 'closed'));
+  await h.ingest(pair('admission-notification', '09:35:00', '09:40:00', 'closed', { source: 'system_hook' }));
   const [notification] = await eventually(() => h.manager('/notifications'), rows => rows.length === 1);
   assert.equal(notification.kind, 'summary'); assert.equal(notification.session_id, sid); assert.match(notification.message, /2000/);
   assert.equal('run_id' in notification, false); assert.equal((await h.manager('/writing/accepted-small-summary')).state, 'completed');

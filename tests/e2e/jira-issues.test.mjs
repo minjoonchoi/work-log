@@ -207,7 +207,8 @@ test('linked existing issue receives closed session worklogs; merged issues keep
   const second = (await h.manager('/items')).find(i => i.id !== item.id), other = f.addIssue({}, 'DEV-81');
   await connect(h, second, other, { operation_id: 'other-issue-link' });
   await h.manager('/merge', { method: 'POST', body: { ids: [item.id, second.id], target: item.id, operation_id: 'jira-merge-items' } });
-  await h.ingest([...pair('jira-issues', '09:25:00', '09:26:00', 'next'), ...pair('another-jira-item', '09:25:00', '09:26:00', 'next')]);
+  await h.ingest([...pair('jira-issues', '09:25:00', '09:26:00', 'next', { source: 'system_hook' }),
+    ...pair('another-jira-item', '09:25:00', '09:26:00', 'next', { source: 'system_hook' })]);
   const d = await eventually(() => detail(h, item), d => d.sessions.filter(s => s.worklog?.state === 'synced').length === 2, 20000);
   assert.equal(d.jira_links.length, 2); assert.equal(f.state.worklogs.length, 2);
   assert.deepEqual(f.state.worklogs.map(w => w.issueId).sort(), [issue.id, other.id].sort());

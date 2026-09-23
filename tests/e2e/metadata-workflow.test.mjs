@@ -132,6 +132,6 @@ test('format-only workflow cannot weaken ordinary artifact jobs', t => {
   definitions.jobs['prd.create'].workflow = 'create-checked'; fs.writeFileSync(jobs, JSON.stringify(definitions));
   const child = spawnSync(process.execPath, [path.join(root, 'src/runtime.mjs')], {
     env: { ...process.env, HARNESS_DATA_DIR: h.dir, HARNESS_TEST_MODE: '1' }, encoding: 'utf8', timeout: 5000 });
-  assert.notEqual(child.status, 0); assert.match(child.stderr, /독립 검토 생략은 .*세션 요약·메타데이터/);
+  assert.notEqual(child.status, 0); assert.match(child.stderr, /독립 검토 생략은 등록된 사실 요약·GUI 텍스트 생성/);
   assert.doesNotMatch(child.stdout, /"ready":true/);
 });

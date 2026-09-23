@@ -36,7 +36,11 @@ else if (stage === 'review') {
 } else {
   let text = job.kind === 'html' ? `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>검증용 목업</title></head><body><h1>권한 신청</h1><button id="save">저장</button><p id="result" hidden>저장되었습니다</p><script>document.querySelector('#save').onclick=()=>{document.querySelector('#result').hidden=false}</script></body></html>`
     : `# ${job.label}\n\n${job.requiredSections.map(s => `## ${s}\nREQ-001: 사용자 요청에 따른 ${s}입니다.\n`).join('\n')}\n${round > 0 ? '거절 상태의 수용 기준: 거절 결과를 표시합니다.' : ''}\n`;
-  if (fixture.copyInputSnapshot) {
+  if (fixture.copyInputSnapshot && fixture.direct && prompt.includes("고정된 자료 본문")) {
+    const references = JSON.parse(prompt.match(/\n고정된 자료 본문[^:]+: ([^\n]+)\n/)[1]);
+    text += `\n# 제공된 원문\n${references.map(reference => reference.content).join('\n')}`;
+  }
+  if (fixture.copyInputSnapshot && !fixture.direct) {
     const references = JSON.parse(prompt.match(/\n자료 파일 참조[^:]+: ([^\n]+)\n/)[1]);
     text += `\n# 제공된 원문\n${references.map(reference => fs.readFileSync(reference.path, 'utf8')).join('\n')}`;
   }
@@ -108,9 +112,14 @@ else if (stage === 'review') {
   }
   if (job.kind === 'text_rewrite') {
     const events = fixture.input.sessions.flatMap(s => s.events), messages = events.filter(e => e.text?.trim()).map(e => e.text.trim().replace(/\s+/g, ' ').slice(0, 400));
+    const firstInput = events.find(event => event.kind === 'input' && event.text?.trim())?.text.trim().replace(/\s+/g, ' ');
+    const brief = firstInput && [...firstInput].length <= 120 && [...new Intl.Segmenter('ko', { granularity: 'sentence' }).segment(firstInput)].length === 1
+      ? firstInput : '제공된 업무 요청의 핵심 요구를 정리합니다.';
     const value = {
       title: (messages[0] || '작업 세션').slice(0, 200),
       description: fixture.input.format === 'session-summary' ? messages.slice(-5).map(message => `- ${message}`).join('\n') || '- 응답 본문 미확인'
+        : job.metadata_format === 'work-item-jira-v2'
+          ? `h2. 배경\n* 현재 상황: ${fixture.input.sessions.length}개 세션의 사용자 요청을 정리합니다.\n* 문제점: 구체적인 문제 원인은 미확인입니다.\n* 작업 필요성: 요청한 내용을 확인합니다.\n\nh2. 목표\n${brief}\n\nh2. 요구사항\n* ${brief}\n\nh2. 작업 범위\n* 제공된 사용자 요청 범위에 한정합니다.\n\nh2. 참고사항\n* ${events.some(event => event.kind === 'output' && event.text) ? '상세 결과는 결과 요약 댓글에서 확인합니다.' : '미완료: 확인된 응답이 없어 결과 미확인입니다.'}`
         : job.metadata_format === 'work-item-jira-v1'
           ? `h2. 배경\n${fixture.input.sessions.length}개 세션 이력에 근거합니다.\n\n* 현재 상황: ${messages[0] || '미확인'}\n* 문제점: 구체적인 문제 원인은 미확인입니다.\n* 작업 필요성: 요청한 내용을 확인합니다.\n\nh2. 목표\n${messages[0] || '목표 미확인'}\n\nh2. 요구사항\n* ${messages[0] || '요구사항 미확인'}\n\nh2. 작업 범위\n${messages.slice(-5).map(message => `* ${message}`).join('\n') || '* 요청 범위 미확인'}\n\nh2. 참고사항\n* ${events.some(event => event.kind === 'output' && event.text) ? '수집된 응답을 확인했습니다. 실제 완료 여부는 원문 기준으로 확인해야 합니다.' : '미완료: 확인된 응답이 없어 결과 미확인입니다.'}`
           : `## 작업 배경\n- ${fixture.input.sessions.length}개 세션 이력\n\n## 목적\n- ${messages[0] || '목적 미확인'}\n\n## 범위\n${messages.slice(-5).map(message => `- ${message}`).join('\n') || '- 요청 범위 미확인'}\n\n## 결과\n- ${events.some(event => event.kind === 'output' && event.text) ? '수집된 응답을 확인했습니다. 실제 완료 여부는 원문 기준으로 확인해야 합니다.' : '미완료: 확인된 응답이 없어 결과 미확인입니다.'}`
@@ -124,13 +133,19 @@ else if (stage === 'review') {
     if (['rewrite-empty-section', 'rewrite-empty-jira-section'].includes(scenario)) value.description = value.description.replace(/(h2\. 참고사항|## 결과)[\s\S]*$/, '$1');
     if (scenario === 'rewrite-legacy-markdown') value.description = '## 작업 배경\n배경\n\n## 목적\n목적\n\n## 범위\n범위\n\n## 결과\n미확인';
     if (scenario === 'rewrite-placeholder') value.description = value.description.replace(/h2\. 요구사항\n[^\n]+/, 'h2. 요구사항\n* {현재 확인된 요구사항}');
+    if (scenario === 'rewrite-long-sentence') value.description = value.description.replace(/h2\. 요구사항\n[^\n]+/, `h2. 요구사항\n* ${'가'.repeat(121)}`);
+    if (scenario === 'rewrite-many-sentences') value.description = value.description.replace(/h2\. 요구사항\n[^\n]+/, 'h2. 요구사항\n* 첫째 조건.\n* 둘째 조건.\n* 셋째 조건.\n* 넷째 조건.');
+    if (scenario === 'rewrite-compound-sentences') value.description = value.description.replace(/h2\. 요구사항\n[^\n]+/, 'h2. 요구사항\n* 첫째 조건입니다. 둘째 조건입니다.');
     text = JSON.stringify(value);
   }
   if (scenario === 'bad-html') text = text.replace("document.querySelector('#result').hidden=false", "throw new Error('broken button')");
   if (scenario === 'missing-section') text = '# 내용 누락';
+  if (fixture.direct) result = { status: 'done', result: { content: text } };
+  else {
   if (scenario === 'symlink') fs.symlinkSync(fixture.target, job.file);
   else fs.writeFileSync(job.file, text);
   result = { status: 'done', result: { file: job.file } };
+  }
 }
 process.stdout.write(JSON.stringify({ event: 'progress', stage }) + '\n');
 fs.writeFileSync(output, JSON.stringify(result));

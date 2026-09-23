@@ -197,6 +197,20 @@ test('queued requests survive runtime absence and manager restart; lost submit r
   assert.equal(detail.item.version, item.version + 1);
 });
 
+test('a stale generation with a lost submission receipt is cancelled after manager restart', async t => {
+  const h = await setup(t, { delayMs: 15000 });
+  await h.ingest(pair('lost-receipt-stale', '09:00:00', '09:05:00'));
+  const item = (await h.manager('/items'))[0]; await rewriteItem(h, item, 'stale-lost-receipt');
+  const accepted = await running(h, 'stale-lost-receipt'); await h.stop('manager');
+  const db = new DatabaseSync(path.join(h.dir, 'memory.sqlite'));
+  db.prepare("UPDATE writing_requests SET state='pending',run_id=NULL WHERE operation_id='stale-lost-receipt'").run();
+  db.prepare('UPDATE work_items SET version=version+1 WHERE id=?').run(item.id); db.close();
+  await h.start('manager');
+  assert.equal((await finished(h, 'stale-lost-receipt')).state, 'superseded');
+  const cancelled = await eventually(() => h.runtime(`/runs/${accepted.run_id}`), run => run.status === 'cancelled');
+  assert.equal(cancelled.internal, true); assert.equal(cancelled.artifact, null);
+});
+
 test('tampered final artifact cannot overwrite metadata even when runtime reports completed', async t => {
   const h = await setup(t, { delayMs: 400 });
   await h.ingest(pair('tampered-writing', '09:00:00', '09:05:00'));
@@ -273,7 +287,7 @@ test('oversized automatic summary is reported without blocking unrelated manual 
   const h = await setup(t); await h.stop('manager'); h.env.HARNESS_TEST_SESSION_SUMMARIES = '1'; await h.start('manager');
   const events = Array.from({ length: 1001 }, (_, i) => pair('large-writing', '09:00:00', '09:05:00', `t${i}`)).flat();
   for (let i = 0; i < events.length; i += 500) await h.ingest(events.slice(i, i + 500));
-  await h.ingest([...pair('large-writing', '09:25:00', '09:30:00', 'next'), ...pair('normal-writing', '10:00:00', '10:05:00', 'normal')]);
+  await h.ingest([...pair('large-writing', '09:25:00', '09:30:00', 'next', { source: 'system_hook' }), ...pair('normal-writing', '10:00:00', '10:05:00', 'normal')]);
   const items = await h.manager('/items'), large = items.find(i => i.session_count === 2), normal = items.find(i => i.session_count === 1);
   const failed = await eventually(() => h.manager(`/items/${large.id}`), d => d.sessions[0].summary?.state === 'failed');
   assert.match(failed.sessions[0].summary.message, /2000/); assert.equal(failed.runs.length, 0);

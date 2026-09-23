@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
  id TEXT PRIMARY KEY, engine TEXT NOT NULL, source_id TEXT NOT NULL, work_item_id TEXT NOT NULL,
  role TEXT NOT NULL, UNIQUE(engine, source_id)
 );
+CREATE TABLE IF NOT EXISTS agent_item_bindings (
+ agent_id TEXT PRIMARY KEY, work_item_id TEXT NOT NULL REFERENCES work_items(id)
+);
+INSERT OR IGNORE INTO agent_item_bindings SELECT id,work_item_id FROM agent_sessions;
 CREATE TABLE IF NOT EXISTS events (
  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, agent_id TEXT NOT NULL,
  kind TEXT NOT NULL, event_at TEXT NOT NULL, ingested_at TEXT NOT NULL, payload TEXT NOT NULL
@@ -117,8 +121,17 @@ export function managerStore(dir) {
     exec('INSERT OR IGNORE INTO work_items(id,title,created_at) VALUES(?,?,?)', item, '새 작업', at);
     return item;
   }
-  function project(agentId) {
-    const agent = one('SELECT * FROM agent_sessions WHERE id=?', agentId);
+  function bindItem(agentId, requested, at) {
+    // Reserve a parent's identity even if its worker reaches the manager first.
+    // Keep the original owner alias: merges must not create new time windows.
+    const owner = one('SELECT work_item_id FROM agent_item_bindings WHERE agent_id=?', agentId)?.work_item_id
+      || one('SELECT work_item_id FROM agent_sessions WHERE id=?', agentId)?.work_item_id
+      || requested || stableId('item-', agentId);
+    ensureItem(owner, at);
+    exec('INSERT OR IGNORE INTO agent_item_bindings VALUES(?,?)', agentId, owner);
+    return owner;
+  }
+  function orderedAgentEvents(agentId) {
     const rows = all('SELECT * FROM events WHERE agent_id=? ORDER BY event_at, seq', agentId);
     rows.sort((a, b) => {
       if (a.event_at !== b.event_at) return a.event_at.localeCompare(b.event_at);
@@ -126,6 +139,28 @@ export function managerStore(dir) {
       return currentHookEvent(left) && currentHookEvent(right) && left.observed_order && right.observed_order
         ? left.observed_order.localeCompare(right.observed_order) || a.seq - b.seq : a.seq - b.seq;
     });
+    return rows;
+  }
+  function agentContext({ engine, session_id }) {
+    assert(['codex', 'claude'].includes(engine) && typeof session_id === 'string'
+      && session_id.length > 0 && session_id.length <= 500 && !/[\u0000-\u001f\u007f]/.test(session_id), '에이전트 세션 식별자를 확인하세요.');
+    const agent = one("SELECT * FROM agent_sessions WHERE engine=? AND source_id=? AND role='user'", engine, session_id);
+    const binding = one('SELECT work_item_id FROM agent_item_bindings WHERE agent_id=?', stableId('agent-', `${engine}:${session_id}`));
+    assert(agent || binding, '등록된 에이전트 세션이 없습니다.', 404);
+    const owner = binding?.work_item_id || agent.work_item_id;
+    assert(!isDeleted(owner), '삭제한 업무입니다. 업무를 복원한 뒤 다시 요청하세요.', 409);
+    // A worker can reserve its parent before the first native hook arrives.
+    // This is a known owner with an unobserved input, not a standalone request.
+    if (!agent) return { work_item_id: canonical(owner), origin: null };
+    const rows = orderedAgentEvents(agent.id).filter(row => JSON.parse(row.payload).source === 'system_hook');
+    const { pending } = resolveHookTurns(rows, { withPending: true });
+    const input = pending.length === 1 ? pending[0] : null;
+    return { work_item_id: canonical(owner),
+      origin: input ? { engine, agent_session_id: session_id, turn_id: input.turn_id } : null };
+  }
+  function project(agentId) {
+    const agent = one('SELECT * FROM agent_sessions WHERE id=?', agentId);
+    const rows = orderedAgentEvents(agentId);
     const previous = new Map(all(`SELECT e.id,l.session_id,l.resolution,json_extract(e.payload,'$.turn_id') AS turn_id FROM events e JOIN event_links l ON l.event_id=e.id
       WHERE e.agent_id=? AND e.kind IN ('input','output')`, agentId).map(r => [r.id, r]));
     exec('UPDATE work_item_sessions SET active=0 WHERE agent_id=?', agentId);
@@ -219,8 +254,17 @@ export function managerStore(dir) {
           continue;
         }
         let agent = one('SELECT * FROM agent_sessions WHERE id=?', aid);
-        const owner = e.work_item_id || e.parent?.work_item_id || agent?.work_item_id || stableId('item-', aid);
-        ensureItem(owner, e.event_at);
+        let parentOwner;
+        if (e.role !== 'user' && typeof e.parent?.engine === 'string' && e.parent.engine
+          && typeof e.parent?.agent_session_id === 'string' && e.parent.agent_session_id) {
+          parentOwner = bindItem(stableId('agent-', `${e.parent.engine}:${e.parent.agent_session_id}`),
+            e.parent.work_item_id || e.work_item_id, e.event_at);
+        }
+        const owner = bindItem(aid, parentOwner || e.work_item_id || e.parent?.work_item_id, e.event_at);
+        if (e.work_item_id && e.work_item_id !== owner) e.requested_work_item_id = e.work_item_id;
+        e.work_item_id = owner;
+        if (parentOwner) e.parent = { ...e.parent, work_item_id: parentOwner,
+          ...(e.parent.work_item_id && e.parent.work_item_id !== parentOwner ? { requested_work_item_id: e.parent.work_item_id } : {}) };
         if (!agent) {
           exec('INSERT INTO agent_sessions VALUES(?,?,?,?,?)', aid, e.engine, e.agent_session_id, owner, e.role);
           agent = { role: e.role };
@@ -498,7 +542,7 @@ export function managerStore(dir) {
     }
     return [...grouped.values()].flat();
   }
-  return { db, ingestMany, items, quickOverview, detail, history, runEvents, sessionMessages, merge, edit, tagList, editTags, calendar, canonical, sessionList, sessionEntries, isDeleted, visibilityRevision, deleteItems, restoreItems,
+  return { db, ingestMany, agentContext, items, quickOverview, detail, history, runEvents, sessionMessages, merge, edit, tagList, editTags, calendar, canonical, sessionList, sessionEntries, isDeleted, visibilityRevision, deleteItems, restoreItems,
     cursor: source => one('SELECT value FROM cursors WHERE source=?', source)?.value || '0',
     stats: () => ({ events: one('SELECT COUNT(*) AS n FROM events').n, unresolved: one("SELECT COUNT(*) AS n FROM event_links l JOIN events e ON e.id=l.event_id WHERE l.resolution='unresolved' AND e.kind='output'").n }) };
 }

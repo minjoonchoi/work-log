@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Harness, pair, eventually } from '../helpers.mjs';
+import { Harness, pair as historyPair, eventually } from '../helpers.mjs';
 import { atlFixture, authorize, createIssue, adfText } from '../fixtures/atlassian.mjs';
+
+const pair = (agent, start, end, turn = 't1', extra = {}) => historyPair(agent, start, end, turn, { source: 'system_hook', ...extra });
 
 const post = body => ({ method: 'POST', body });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -40,7 +42,7 @@ test('local history, summaries, metadata, artifacts, calendar, merge and restora
   await h.manager('/items/offline-item/metadata/regenerate', post({ operation_id: 'offline-metadata-rewrite', version: initial.item.version }));
   const writing = await finished(h, 'offline-metadata-rewrite'); assert.equal(writing.state, 'completed');
   const generated = await h.runtime(`/runs/${writing.run_id}`); assert.equal(generated.internal, true); assert.equal(generated.attempts.length, 1);
-  const current = await detail(h, 'offline-item'); assert.match(current.item.description, /## 작업 배경/);
+  const current = await detail(h, 'offline-item'); assert.match(current.item.description, /^h2\. 배경/m);
   const history = await h.manager(`/items/offline-item/history?session_id=${current.sessions[0].id}`);
   assert.equal(history.records.length, 2); assert.equal(history.records[0].kind, 'output');
   assert.equal((await h.manager('/items?q=' + encodeURIComponent('offline-item'))).length, 1);

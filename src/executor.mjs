@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { runProcess } from './process-runner.mjs';
 import { ROOT, atomic, assert, json, redact, redactValue } from './shared.mjs';
 import { assertModelSelection } from './model-capabilities.mjs';
+import { codexDirectArguments, observeWorker, validateWorkerPolicy } from './worker-policy.mjs';
 const versions = new Map();
 
 function errorMessage(value) {
@@ -27,6 +28,7 @@ function errorMessage(value) {
 
 export function commandFor(engine, context) {
   const { cwd, schemaPath, outputPath, stage, execution } = context;
+  const policy = validateWorkerPolicy(context.workerPolicy);
   if (['codex', 'claude'].includes(engine)) {
     assert(execution && typeof execution.model === 'string' && execution.model.trim(), `${engine} 모델 설정이 필요합니다.`);
     assertModelSelection(engine, execution);
@@ -34,13 +36,16 @@ export function commandFor(engine, context) {
   if (engine === 'codex') return {
     command: process.env.HARNESS_CODEX_BIN || 'codex', args: ['exec', '--json', '--model', execution.model,
       '-c', `model_reasoning_effort="${execution.effort}"`, '--dangerously-bypass-approvals-and-sandbox',
+      ...(policy?.mode === 'direct' ? codexDirectArguments() : []),
       '--output-schema', schemaPath, '-o', outputPath, '-C', cwd, '--skip-git-repo-check', '-']
   };
   if (engine === 'claude') return {
     command: process.env.HARNESS_CLAUDE_BIN || 'claude', args: ['-p', '--model', execution.model, ...(execution.effort == null ? [] : ['--effort', execution.effort]),
-      '--output-format', 'json', '--json-schema', fs.readFileSync(schemaPath, 'utf8'),
+      '--output-format', policy ? 'stream-json' : 'json', ...(policy ? ['--verbose', '--max-turns', String(policy.max_model_turns)] : []),
+      '--json-schema', fs.readFileSync(schemaPath, 'utf8'),
       '--allow-dangerously-skip-permissions', '--permission-mode', 'bypassPermissions',
-      '--tools', stage === 'review' ? 'Read' : 'Read,Write,Edit,Bash', '--no-session-persistence']
+      ...(policy?.mode === 'direct' ? ['--safe-mode', '--disable-slash-commands', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disallowedTools', 'mcp__*'] : []),
+      '--tools', policy?.mode === 'direct' ? '' : stage === 'review' ? 'Read' : 'Read,Write,Edit,Bash', '--no-session-persistence']
   };
   assert(engine === 'fixture' && process.env.HARNESS_TEST_MODE === '1', '허용되지 않은 실행 엔진입니다.');
   return { command: process.execPath, args: [path.join(ROOT, 'tests/fixtures/worker.mjs'), outputPath, stage] };
@@ -49,6 +54,7 @@ export function commandFor(engine, context) {
 export function execute(context) {
   const { engine, cwd, attemptDir, stage, prompt, limits, onSpawn, parent, fixture, execution } = context;
   const outputPath = path.join(attemptDir, 'result.json');
+  const workerPolicy = validateWorkerPolicy(context.workerPolicy), observer = observeWorker(engine, workerPolicy);
   const schemaPath = path.join(attemptDir, 'schema.json');
   atomic(schemaPath, json(context.schema || JSON.parse(fs.readFileSync(path.join(ROOT, 'contracts/task-result.schema.json'), 'utf8'))));
   atomic(path.join(attemptDir, 'prompt.txt'), redact(prompt));
@@ -70,8 +76,9 @@ export function execute(context) {
     env.HARNESS_FIXTURE_FILE = path.join(attemptDir, 'fixture-input.json');
     atomic(env.HARNESS_FIXTURE_FILE, json(fixture || {}));
   }
-  const processRun = runProcess({ command, args, cwd, env, stdin: prompt, attemptDir, limits, onSpawn });
-  const promise = processRun.promise.then(({ ok, stdout, observation: observed }) => {
+  const processRun = runProcess({ command, args, cwd, env, stdin: prompt, attemptDir, limits, onSpawn, onStdout: chunk => observer.push(chunk) });
+  const promise = processRun.promise.then(({ ok, stdout, stderr, observation: observed }) => {
+    const violation = observer.finish();
     let nativeSession = null, usage = null, terminalFailure = null, streamError = null;
     if (engine === 'codex') {
       for (const line of stdout.split('\n')) {
@@ -86,19 +93,25 @@ export function execute(context) {
         } catch { /* Only recognized protocol events carry metadata. */ }
       }
     } else if (engine === 'claude') {
-      try { const outer = JSON.parse(stdout); nativeSession = outer.session_id || null; usage = outer.usage || null; } catch {}
+      try { const outer = observer.final || JSON.parse(stdout); nativeSession = outer.session_id || null; usage = outer.usage || null;
+        if (outer.is_error) terminalFailure = errorMessage(outer.errors?.join('\n') || outer.result) || 'Claude 작업이 실패했습니다.';
+      } catch {}
     }
     const failure = terminalFailure || (!ok && streamError);
-    const observation = { ...observed, ...(failure ? { reason: observed.reason || 'engine_failure', error: failure } : {}),
+    const unsupported = !ok && /(?:unexpected argument|unknown option|unrecognized (?:option|argument)|unknown field)/i.test(stderr || '');
+    const observation = { ...observed, ...observer.metrics(),
+      ...(violation ? { reason: observed.reason || violation, error: '작업 유형의 worker 실행 한도를 초과했습니다.' } : {}),
+      ...(unsupported ? { reason: observed.reason || 'worker_capability_unavailable', error: errorMessage(stderr) } : {}),
+      ...(failure ? { reason: observed.reason || 'engine_failure', error: failure } : {}),
       engine, model: execution?.model || null, effort: execution?.effort || null,
       permission_mode: ['codex', 'claude'].includes(engine) ? 'bypass' : null,
       cli_version: versions.get(command), native_session_id: nativeSession, usage };
     atomic(path.join(attemptDir, 'process.json'), json(observation));
-    if (!ok || terminalFailure) return { ok: false, observation };
+    if (!ok || terminalFailure || violation) return { ok: false, observation };
     try {
       let result;
       if (engine === 'claude') {
-        const outer = JSON.parse(stdout);
+        const outer = observer.final || JSON.parse(stdout);
         assert(!outer.is_error && outer.structured_output, 'Claude의 구조화 결과가 없습니다.');
         result = outer.structured_output;
       } else {

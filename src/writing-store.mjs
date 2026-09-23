@@ -1,4 +1,4 @@
-import { assert, transaction, json, digest, id, now } from './shared.mjs';
+import { assert, transaction, json, digest, id, now, stableId } from './shared.mjs';
 import { loadCatalog } from './catalog.mjs';
 import { validateSchema } from './schema.mjs';
 
@@ -10,6 +10,9 @@ export function writingStore(store, integrations) {
     format TEXT NOT NULL, target_id TEXT NOT NULL, snapshot TEXT NOT NULL,
     task TEXT NOT NULL, run_key TEXT NOT NULL, state TEXT NOT NULL, run_id TEXT,
     result TEXT, message TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS writing_cancellations(run_id TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS summary_prompt_receipts (
+      prompt_key TEXT PRIMARY KEY, event_seq INTEGER NOT NULL, selected_count INTEGER NOT NULL, processed_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS writing_target ON writing_requests(format,target_id,seq);
     CREATE TABLE IF NOT EXISTS metadata_automation_settings (
       singleton INTEGER PRIMARY KEY CHECK(singleton=1), initial_output_count INTEGER NOT NULL, summary_interval INTEGER NOT NULL);
@@ -19,6 +22,9 @@ export function writingStore(store, integrations) {
   if (!db.prepare('PRAGMA table_info(writing_requests)').all().some(column => column.name === 'source')) {
     db.exec("ALTER TABLE writing_requests ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
   }
+  // Installing/upgrading never replays all historic prompts. New spool inputs
+  // are ingested after this watermark and survive an unavailable runtime.
+  db.prepare("INSERT OR IGNORE INTO cursors(source,value) SELECT 'summary-prompts-v1',CAST(COALESCE(MAX(seq),0) AS TEXT) FROM events").run();
   const decode = row => row && ({ ...row, snapshot: JSON.parse(row.snapshot) });
   const get = operation => decode(db.prepare('SELECT * FROM writing_requests WHERE operation_id=?').get(operation));
   const latest = (format, target) => decode(db.prepare('SELECT * FROM writing_requests WHERE format=? AND target_id=? ORDER BY seq DESC LIMIT 1').get(format, target));
@@ -73,11 +79,11 @@ export function writingStore(store, integrations) {
     const selected = detail ? detail.sessions : store.sessionList().filter(s => s.id === target);
     const sessions = integrations.sessionSnapshots(automatic ? selected.filter(userSession) : selected);
     assert(sessions.length, '재작성할 세션 이력이 없습니다.', 409);
-    const closed = automatic ? new Set(integrations.closedSessions().map(session => session.id)) : new Set();
+    const closed = new Set(integrations.closedSessions().map(session => session.id));
     const references = [];
     const input = { format, sessions: sessions.map(s => {
       const previous = integrations.summary(s.id);
-      const summaryOnly = automatic && closed.has(s.id) && previous?.state === 'completed'
+      const summaryOnly = format === 'work-item-metadata' && closed.has(s.id) && previous?.state === 'completed'
         && previous.accepted_digest === s.source_digest && previous.text?.trim();
       if (automatic) references.push({ id: s.id, agent_id: s.agent_id, first_event_id: s.first_event_id,
         original_work_item_id: s.original_work_item_id, start_at: s.start_at,
@@ -92,7 +98,6 @@ export function writingStore(store, integrations) {
       work_item_id: detail?.item.id || sessions[0].original_work_item_id,
       visibility_revision: store.visibilityRevision(detail?.item.id || sessions[0].work_item_id),
       base_version: detail?.item.version ?? null,
-      engine: [...sessions].reverse().find(s => ['claude', 'codex'].includes(s.engine))?.engine || 'codex',
       session: detail ? null : { id: sessions[0].id, source: sessions[0].source, source_digest: sessions[0].source_digest },
       ...(automatic ? { automatic: { references, covered } } : {}) };
   }
@@ -131,21 +136,24 @@ export function writingStore(store, integrations) {
     integrations.finishSummary(row.snapshot.session, state, { run_id: row.run_id, text: result?.text, message });
   }
   function finish(row, state, result = null, message = null) {
-    return transaction(db, () => {
-      const current = get(row.operation_id);
-      if (!active(current)) return current;
-      if (!isCurrent(current)) {
-        state = 'superseded'; message = '생성 중 이력·요약 또는 업무 정보가 변경되어 결과를 반영하지 않았습니다. 최신 내용으로 다시 작성하세요.';
-      }
-      if (state === 'completed' && row.format === 'work-item-metadata') {
-        db.prepare('UPDATE work_items SET title=?,description=?,manual=1,version=version+1 WHERE id=? AND version=?')
-          .run(result.title, result.description, row.snapshot.work_item_id, row.snapshot.base_version);
-      }
-      db.prepare('UPDATE writing_requests SET state=?,result=?,message=?,updated_at=? WHERE operation_id=?')
-        .run(state, result ? json(result) : null, message, now(), row.operation_id);
-      if (latest(row.format, row.target_id)?.operation_id === row.operation_id) summaryState(current, state, state === 'completed' ? result : null, message);
-      return get(row.operation_id);
-    });
+    return transaction(db, () => finishWithinTransaction(row, state, result, message));
+  }
+  // Call only while the caller owns the DB transaction, including prompt batches.
+  function finishWithinTransaction(row, state, result = null, message = null) {
+    const current = get(row.operation_id);
+    if (!active(current)) return current;
+    if (!isCurrent(current)) {
+      state = 'superseded'; message = '생성 중 이력·요약 또는 업무 정보가 변경되어 결과를 반영하지 않았습니다. 최신 내용으로 다시 작성하세요.';
+    }
+    if (state === 'completed' && row.format === 'work-item-metadata') {
+      db.prepare('UPDATE work_items SET title=?,description=?,manual=1,version=version+1 WHERE id=? AND version=?')
+        .run(result.title, result.description, row.snapshot.work_item_id, row.snapshot.base_version);
+    }
+    if (state === 'superseded') db.prepare('INSERT OR IGNORE INTO writing_cancellations(run_id) VALUES(?)').run(current.run_id || stableId('run-', current.run_key));
+    db.prepare('UPDATE writing_requests SET state=?,result=?,message=?,updated_at=? WHERE operation_id=?')
+      .run(state, result ? json(result) : null, message, now(), row.operation_id);
+    if (latest(row.format, row.target_id)?.operation_id === row.operation_id) summaryState(current, state, state === 'completed' ? result : null, message);
+    return get(row.operation_id);
   }
   function insert(format, target, source, operation, legacy = null, origin = 'manual') {
     const timestamp = now(), task = legacy ? 'session.summarize' : 'text.rewrite';
@@ -174,29 +182,58 @@ export function writingStore(store, integrations) {
       return insert(format, target, source, input.operation_id);
     });
   }
+  function schedulePromptSummaries(closed) {
+    const cursor = Number(db.prepare("SELECT value FROM cursors WHERE source='summary-prompts-v1'").get().value);
+    const prompts = db.prepare(`SELECT e.seq,e.id,e.agent_id,e.payload FROM events e
+      JOIN agent_sessions a ON a.id=e.agent_id
+      WHERE e.seq>? AND e.kind='input' AND a.role='user' AND a.engine IN ('claude','codex')
+        AND json_extract(e.payload,'$.source')='system_hook'
+      ORDER BY e.seq LIMIT 100`).all(cursor);
+    let changed = false;
+    for (const prompt of prompts) transaction(db, () => {
+      const event = JSON.parse(prompt.payload), key = `${prompt.agent_id}:${event.turn_id || prompt.id}`;
+      const fresh = db.prepare('INSERT OR IGNORE INTO summary_prompt_receipts VALUES(?,?,0,?)').run(key, prompt.seq, now()).changes;
+      db.prepare("UPDATE cursors SET value=? WHERE source='summary-prompts-v1'").run(String(prompt.seq));
+      if (!fresh) return;
+      // Give never-attempted history priority over a repeatedly failing source.
+      const candidates = closed.filter(userSession).map(session => ({ session,
+        previous: latest('session-summary', session.id), summary: integrations.summary(session.id) }))
+        .sort((a, b) => Number(!!(a.previous || a.summary)) - Number(!!(b.previous || b.summary))
+          || (a.previous?.updated_at || a.summary?.updated_at || a.session.start_at).localeCompare(b.previous?.updated_at || b.summary?.updated_at || b.session.start_at)
+          || a.session.id.localeCompare(b.session.id));
+      // A late event can arrive while the coordinator awaits runtime polling.
+      // Retire stale work before counting capacity, within this same transaction.
+      for (const candidate of candidates) if (active(candidate.previous) && !isCurrent(candidate.previous))
+        candidate.previous = finishWithinTransaction(candidate.previous, 'superseded');
+      const inFlight = db.prepare("SELECT COUNT(*) AS n FROM writing_requests WHERE source='automatic' AND format='session-summary' AND state IN ('pending','running')").get().n;
+      const capacity = Math.max(0, 5 - inFlight);
+      let selected = 0;
+      for (const { session, previous, summary } of candidates) {
+        if (selected >= capacity) break;
+        if (summary?.accepted_digest === session.source_digest && summary.text?.trim()) continue;
+        if (active(previous) && isCurrent(previous)) continue;
+        // One failed admission still consumes this prompt's bounded batch slot.
+        selected += 1;
+        try {
+          const source = snapshot('session-summary', session.id);
+          source.summary_trigger = { prompt_key: key, event_id: prompt.id };
+          const legacy = !previous && summary?.source_digest === session.source_digest && active(summary) ? summary : null;
+          insert('session-summary', session.id, source, id('auto-'), legacy, 'automatic');
+        } catch (error) {
+          if (![400, 409].includes(error.status)) throw error;
+          integrations.ensureSummary(session); integrations.finishSummary(session, 'failed', { message: error.message });
+        }
+      }
+      db.prepare('UPDATE summary_prompt_receipts SET selected_count=? WHERE prompt_key=?').run(selected, key);
+      changed = selected > 0 || changed;
+    });
+    return changed;
+  }
   function scheduleAutomatic({ summaries = true, metadata = false } = {}) {
     if (!summaries && !metadata) return false;
     let changed = false;
     const closed = integrations.closedSessions();
-    for (const session of summaries ? closed : []) {
-      const format = 'session-summary', previous = latest(format, session.id), summary = integrations.summary(session.id);
-      if (previous?.snapshot.source_digest === session.source_digest && previous.state !== 'superseded') continue;
-      // Respect accepted summaries and deliberate retry after a previous failure.
-      if (!active(previous) && summary?.source_digest === session.source_digest && ['completed', 'failed'].includes(summary.state)) continue;
-      if (active(previous)) finish(previous, 'superseded');
-      try {
-        const source = snapshot(format, session.id);
-        transaction(db, () => {
-          const legacy = !previous && summary?.source_digest === session.source_digest && active(summary) ? summary : null;
-          insert(format, session.id, source, id('auto-'), legacy, 'automatic');
-        });
-      } catch (e) {
-        // An oversized/unsupported conversation must not block unrelated requests.
-        if (e.status !== 400) throw e;
-        integrations.ensureSummary(session); integrations.finishSummary(session, 'failed', { message: e.message });
-      }
-      changed = true;
-    }
+    if (summaries) changed = schedulePromptSummaries(closed) || changed;
     if (metadata) for (const item of store.items()) {
       if (item.metadata_protected || active(latest('work-item-metadata', item.id))) continue;
       const covered = milestones(item.id, closed);
@@ -235,5 +272,7 @@ export function writingStore(store, integrations) {
       }) };
   }
   return { enqueue, scheduleAutomatic, automationSettings, saveAutomationSettings, isCurrent, finish, started, get, publicView, decorate,
+    cancellations: () => db.prepare('SELECT run_id FROM writing_cancellations').all(),
+    cancelled: runId => db.prepare('DELETE FROM writing_cancellations WHERE run_id=?').run(runId),
     pending: () => db.prepare("SELECT * FROM writing_requests WHERE state IN ('pending','running') ORDER BY seq").all().map(decode) };
 }

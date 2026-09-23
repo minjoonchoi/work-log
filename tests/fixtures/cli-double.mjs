@@ -39,7 +39,9 @@ if (codex && scenario) {
 const rules = JSON.parse(prompt.match(/\n규칙: ([^\n]+)\n/)[1]);
 const job = { ...loadCatalog().definitions.jobs[request.task], rules: Object.keys(rules) };
 const fixtureFile = path.join(process.cwd(), '../protocol-input.json');
-fs.writeFileSync(fixtureFile, JSON.stringify({ job, input: request.input }), { mode: 0o600 });
+const schema = codex ? JSON.parse(fs.readFileSync(args[args.indexOf('--output-schema') + 1], 'utf8')) : JSON.parse(args[args.indexOf('--json-schema') + 1]);
+const direct = schema.properties.result.anyOf.some(branch => branch.properties?.content);
+fs.writeFileSync(fixtureFile, JSON.stringify({ job, input: request.input, direct }), { mode: 0o600 });
 const result = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'worker.mjs'), output, review ? 'review' : 'produce'],
   { input: prompt, encoding: 'utf8', cwd: process.cwd(), env: { ...process.env, HARNESS_FIXTURE_FILE: fixtureFile } });
 if (result.status !== 0) process.exit(result.status || 1);

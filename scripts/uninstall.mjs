@@ -4,7 +4,8 @@ import os from 'node:os';
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { assert, json } from '../src/shared.mjs';
+import { assert } from '../src/shared.mjs';
+import { createInstallReporter } from './install-output.mjs';
 import { stopOwnedServices } from './service-control.mjs';
 import { removeAgentConnection } from './agent-connections.mjs';
 import { locations, stat, safePath, locked, readManifest, saveManifest, matches, inventory,
@@ -41,7 +42,8 @@ function removeTrees(loc, receipt, removed, preserved) {
   }
 }
 
-export function applyUninstall({ homeDir = os.homedir(), deactivate = true, launchctl = spawnSync, stopTimeoutMs = 10000 } = {}) {
+export function applyUninstall({ homeDir = os.homedir(), deactivate = true, launchctl = spawnSync, stopTimeoutMs = 10000, onProgress = () => {} } = {}) {
+  onProgress('제거할 항목과 설치 소유 기록을 확인합니다.');
   const initial = prepareUninstall({ homeDir });
   if (['not_installed', 'unmanaged', 'uninstalled'].includes(initial.status)) return initial;
   return locked(homeDir, loc => {
@@ -49,8 +51,10 @@ export function applyUninstall({ homeDir = os.homedir(), deactivate = true, laun
     if (receipt.state === 'uninstalled') return { status: 'uninstalled', removed: [] };
     const removed = [], preserved = [];
     receipt.state = 'uninstalling'; saveManifest(loc, receipt);
+    onProgress('WorkLog 소유 서비스의 종료 상태를 확인합니다.');
     preserved.push(...stopOwnedServices(loc, receipt, { launchctl, deactivate, timeoutMs: stopTimeoutMs }));
     if (!preserved.length) {
+      onProgress('WorkLog의 에이전트 연결과 서비스 설정을 제거합니다.');
       for (const engine of ['claude', 'codex']) removeAgentConnection(loc, receipt, engine, removed, preserved);
       let dependent = preserved.length > 0;
       for (const f of receipt.files) {
@@ -60,7 +64,10 @@ export function applyUninstall({ homeDir = os.homedir(), deactivate = true, laun
           fs.unlinkSync(f.path); removed.push({ kind: 'launch_agent', path: f.path });
         } catch (e) { dependent = true; preserved.push({ path: f.path, reason: e.message }); }
       }
-      if (!dependent) removeTrees(loc, receipt, removed, preserved);
+      if (!dependent) {
+        onProgress('앱과 실행 파일을 제거합니다. 업무 데이터는 보존합니다.');
+        removeTrees(loc, receipt, removed, preserved);
+      }
       else for (const tree of receipt.trees) if (stat(tree.path)) preserved.push({ path: tree.path, reason: '보존된 연결의 실행 파일을 유지했습니다.' });
     }
     removeEmptyDirectories(loc, receipt, removed);
@@ -75,10 +82,11 @@ const invokedAsProgram = process.argv[1]
   && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
 
 if (invokedAsProgram) {
+  const reporter = createInstallReporter({ json: process.argv.includes('--json') });
   try {
-    const { values } = parseArgs({ options: { apply: { type: 'boolean' }, 'home-dir': { type: 'string' }, 'no-deactivate': { type: 'boolean' } } });
-    const options = { homeDir: values['home-dir'], deactivate: !values['no-deactivate'] };
+    const { values } = parseArgs({ options: { json: { type: 'boolean' }, apply: { type: 'boolean' }, 'home-dir': { type: 'string' }, 'no-deactivate': { type: 'boolean' } } });
+    const options = { homeDir: values['home-dir'], deactivate: !values['no-deactivate'], onProgress: reporter.progress };
     const result = values.apply ? applyUninstall(options) : prepareUninstall(options);
-    console.log(json(result)); if (['needs_attention', 'unmanaged'].includes(result.status)) process.exitCode = 2;
-  } catch (e) { console.error(json({ error: e.message })); process.exitCode = 1; }
+    reporter.result('uninstall', result); if (['needs_attention', 'unmanaged'].includes(result.status)) process.exitCode = 2;
+  } catch (e) { reporter.error('uninstall', e); process.exitCode = 1; }
 }

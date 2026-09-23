@@ -2,7 +2,7 @@ const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let active = window.__HARNESS_QUICK_VISIBLE__ !== false, busy = false, queued = false, snapshot = null, revision = '', poll;
 let controller, streamController, streaming = false;
-const labels = { running: '작업 실행 중', queued: '실행 대기', agent_response_pending: '에이전트 응답 대기', completed: '완료', cancelled: '취소됨', tracked: '이력 수집' };
+const labels = { running: '작업 실행 중', queued: '실행 대기', agent_response_pending: '작업 중', completed: '완료', cancelled: '취소됨', tracked: '이력 수집' };
 const activityLabel = (activity, connected) => ['running', 'queued'].includes(activity) && !connected ? '실행 상태 미확인' : labels[activity];
 const stamp = value => new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
 function navigate(route) {
@@ -29,7 +29,7 @@ function render(data) {
     : focused?.dataset.item ? ['item', focused.dataset.item] : null;
   $('#quick-groups').innerHTML = [
     ['notifications', '알림', '현재 표시할 알림이 없습니다.', 'notifications'],
-    ['current', '현재 작업', '실행 또는 에이전트 응답을 기다리는 업무가 없습니다.', 'current'],
+    ['current', '현재 작업', '현재 진행 중인 업무가 없습니다.', 'current'],
     ['recent', '최근 업무', '에이전트에서 작업하면 이곳에 기록됩니다.', 'items']
   ].map(([key, title, empty, view]) => `<section class="quick-group" data-group="${key}">
     <div class="quick-group-heading"><h2>${title} <span>${data.counts[key]}</span></h2>${data.counts[key] > data[key].length ? `<button class="quick-more" data-view="${view}">+${data.counts[key] - data[key].length}개 더 보기</button>` : ''}</div>
