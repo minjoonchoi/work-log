@@ -29,7 +29,7 @@ GUI **연결 설정 → Atlassian 설정**에서 Atlassian OAuth 앱의 **Client
 
 사이트 주소만 변경할 때는 자격증명 버전과 토큰을 교체하지 않고 진행 중인 OAuth도 유지한다. 기존 연결된 이슈·업무 로그는 저장된 `cloud_id`를 계속 사용한다. 이 설정은 Cloud OAuth의 API origin이나 토큰 서버를 바꾸지 않는다. 토큰은 `https://auth.atlassian.com/oauth/token`에서 교환하고 API는 `https://api.atlassian.com/ex/jira/{cloudId}/…` 또는 Confluence 경로로 요청한다. 서버·게이트웨이 주소 설정이나 Jira Server/Data Center 연결 기능이 아니다. [공식 3LO 호출 경로](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)
 
-Secret 입력은 기본적으로 password 형식으로 숨긴다. 설정을 열거나 일반 상태를 조회할 때 응답에 저장된 Secret을 포함하거나 GUI로 전달하지 않는다. GUI는 사용자가 **보기**를 눌렀을 때만 인증된 로컬 API로 조회해 화면에 표시한다. 서비스 내부의 자격증명 확인·OAuth 교환에는 Keychain 값을 사용할 수 있다. 기본 데이터 디렉터리의 `integrations/atlassian.json`에는 `client_id`, 불투명한 `credential_version`, 선택한 `site_url` 등 설정 메타데이터만 저장하며 Secret·OAuth 토큰은 기록하지 않는다.
+Secret 입력은 기본적으로 password 형식으로 숨긴다. 설정을 열거나 일반 상태를 조회할 때 응답에 저장된 Secret을 포함하거나 GUI로 전달하지 않는다. GUI는 사용자가 **보기**를 눌렀을 때만 인증된 로컬 API로 조회해 화면에 표시한다. 서비스 내부의 자격증명 확인·OAuth 교환에는 Keychain 값을 사용할 수 있다. 기본 데이터 디렉터리의 `integrations/atlassian.json`에는 `client_id`, 불투명한 `credential_version`, 선택한 `site_url`·`ca_cert_path` 등 설정 메타데이터만 저장하며 Secret·OAuth 토큰은 기록하지 않는다.
 
 앱 자격증명과 OAuth 토큰은 macOS Keychain의 별도 레코드에 보관한다. 앱 자격증명 계정 키는 `client-`, OAuth 토큰 계정 키는 `oauth-` 접두사로 구분하며 로컬 데이터 디렉터리에 연결한다. 버전 메타데이터는 자격증명 변경을 식별하기 위한 값으로 Secret 자체가 아니다.
 
@@ -48,6 +48,18 @@ Jira 이슈를 생성할 때는 해당 사이트의 현재 로그인 사용자�
 Access/refresh token과 만료 정보는 **하나의 OAuth 전용 generic password 레코드**에 함께 저장한다. 회전된 두 토큰을 함께 교체하고, 동시 API 호출의 refresh는 한 번만 수행한다. 만료·회수된 refresh token은 재연결을 요구한다. Keychain 잠금·접근 실패 시 평문 파일로 대체하지 않는다. **연결 해제**는 OAuth 토큰 레코드만 지우고 앱 자격증명 레코드는 보존하며, Atlassian 계정의 앱 승인 자체는 취소하지 않는다. [Apple Keychain](https://developer.apple.com/documentation/security/adding-a-password-to-the-keychain)
 
 Swift `WorkLogKeychain` 도우미는 JSON stdin/stdout 파이프로만 앱의 레코드를 주고받는다. 비밀값을 프로세스 argv로 넘기지 않는다. 도우미는 앱 번들과 버전별 실행 디렉터리에 함께 배포한다. GUI 및 worker에는 OAuth token을 전달하지 않는다.
+
+## 회사 CA 인증서 경로
+
+**연결 설정 → Atlassian 설정 → 추가 CA 인증서 파일 경로**에서 회사가 제공한 루트·중간 CA 인증서 파일을 지정한다. 예: `~/certificates/company-ca.pem`. 절대 경로 또는 `~/`를 지원하며 저장할 때 정규화된 절대 경로를 보관한다. 확장자보다 파일 내용이 기준이며 PEM 인증서 한 개 또는 여러 CA 인증서를 이어 붙인 번들(최대 2MB)을 지원한다. 디렉터리·빈 파일·상대 경로·개인 키·서버 leaf 인증서·잘못된 PEM은 저장 전에 거부한다.
+
+저장하면 관리 서비스 재시작 없이 다음 OAuth 토큰 교환·토큰 갱신·Jira·Confluence 요청에 적용한다. 기본 신뢰 인증서에 지정한 CA를 추가하는 Atlassian 전용 HTTP dispatcher를 사용하며 인증서 체인과 서버 이름 검증은 유지한다. 프로세스 전역 TLS 설정, 다른 API 클라이언트, Claude/Codex worker, macOS Keychain의 인증서 저장소는 변경하지 않는다. Node 22.17에서도 동작하며 `NODE_EXTRA_CA_CERTS`를 터미널이나 LaunchAgent에 따로 지정할 필요가 없다. 프록시 주소·인증 설정은 별개이며 인증서 추가만으로 프록시나 방화벽 문제를 해결하지는 않는다.
+
+경로만 바꾸거나 해제해도 Client Secret·access/refresh token·진행 중 OAuth의 식별자는 유지한다. 빈 값으로 저장하면 추가 CA 설정을 해제하고 기본 신뢰 체계로 돌아간다. API에서 필드를 생략하면 기존 경로를 유지한다. 인증서 내용을 설정 JSON·Keychain·로그에 복사하지 않으며, 앱 제거·재설치 시 다른 연결 설정과 함께 경로를 보존한다. 지정한 원본 인증서 파일은 사용자가 관리한다.
+
+요청마다 파일을 읽고 검사하여 이동·삭제·읽기 권한 오류를 알리고, 내용이 바뀌면 기존 연결을 교체해 새 인증서로 연결한다. 이미 전송된 요청은 시작 시점의 신뢰 설정으로 응답을 마치며, 파일 문제가 생겼다고 기본 인증서만으로 조용히 재시도하지 않는다. TLS 오류에는 안전한 오류 코드와 인증서 확인 안내를 표시한다. DNS·시간 초과·실제 토큰 서버 HTTP 503 응답을 구분하고 요청 본문·토큰·서버 응답 원문은 오류 화면에 포함하지 않는다.
+
+검증은 임시 CA로 서명한 로컬 HTTPS OAuth/API 서버와 격리된 자격증명 도우미를 사용한다. 등록 전 실패 → 등록 후 토큰/Jira/Confluence 성공, CA 경로 변경·해제·재시작·refresh 유지, 파일 교체·삭제·잘못된 형식, 서버 이름 불일치 거부, 실제 서버 503과 로컬 TLS 오류 구분을 확인한다. 회사망과 실제 계정 연결은 별도 확인 대상이다. 구현: `src/atlassian-transport.mjs`, E2E: `tests/e2e/atlassian-certificate.test.mjs`·`tests/ui/integrations.spec.mjs`.
 
 ## 하네스로 재사용하는 요약 작업
 
@@ -84,7 +96,7 @@ Work Item 병합은 Jira 티켓을 병합하거나 이동시키지 않는다. �
 
 ## API와 구현 경계
 
-- manager: `/api/integrations/atlassian` GET/PUT/DELETE. GET은 `config.client_id`, `config.site_url?`, `has_client_secret` 등 상태 메타데이터만 반환하며 PUT은 `{client_id,client_secret?,site_url?}`를 받는다. `site_url` 생략은 기존 주소 보존, 빈 문자열은 기본 사이트 해제다. `/client-secret` POST는 **보기**에서만 `{client_id}`로 요청하는 저장 Secret 조회다. `/authorize` POST, `/sites?product=jira|confluence`(생략 시 Jira), `/projects`, `/issue-types`, `/jira-issue`, `/confluence-page` GET도 제공한다. 사이트 목록의 기본 선택 행은 `preferred:true`이며 제품별 권한과 지정 주소를 확인한 뒤 반환한다.
+- manager: `/api/integrations/atlassian` GET/PUT/DELETE. GET은 `config.client_id`, `config.site_url?`, `config.ca_cert_path?`, `has_client_secret` 등 상태 메타데이터만 반환하며 PUT은 `{client_id,client_secret?,site_url?,ca_cert_path?}`를 받는다. `site_url` 생략은 기존 주소 보존, 빈 문자열은 기본 사이트 해제다. `ca_cert_path`도 생략 시 보존, 빈 문자열로 추가 인증서 경로를 해제한다. `/client-secret` POST는 **보기**에서만 `{client_id}`로 요청하는 저장 Secret 조회다. `/authorize` POST, `/sites?product=jira|confluence`(생략 시 Jira), `/projects`, `/issue-types`, `/jira-issue`, `/confluence-page` GET도 제공한다. 사이트 목록의 기본 선택 행은 `preferred:true`이며 제품별 권한과 지정 주소를 확인한 뒤 반환한다.
 - 수동 생성: `/api/items/:id/jira` POST. 복구: `/api/jira-links/:operation/resolve` POST.
 - 기존 이슈: `/api/integrations/atlassian/jira-search` GET으로 키·제목·URL 검색, `/jira-preview` GET으로 단일 이슈 확인, `/api/items/:id/jira/link` POST로 선택한 이슈 연결. 상태: `/api/jira-links/:operation/refresh`, `/transition` POST.
 - 재작성: `/api/items/:id/metadata/regenerate`, `/api/sessions/:id/summary/regenerate` POST. 실패 요약의 기존 `/summary/retry`도 유지.

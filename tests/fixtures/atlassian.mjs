@@ -1,11 +1,12 @@
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
 // Protocol simulators: never contact Atlassian, op, or the user's Keychain.
 export const oauthClient = { client_id: 'fixture-client', client_secret: 'fixture-secret' };
-export async function atlFixture(h) {
+export async function atlFixture(h, { tls } = {}) {
   const state = { tokenCalls: [], calls: [], issues: [], worklogs: [], comments: [], pages: [],
     spaces: [{ id: '10', key: 'TEAM', name: '팀 업무', status: 'current' }, { id: '20', key: 'DOCS', name: '프로젝트 문서', status: 'current' }, { id: '30', key: 'OPS', name: '운영 기록', status: 'current' }],
     pageFailure: null, losePage: false, refresh: 'fixture-refresh-1', access: 'fixture-access-1', revision: 1,
@@ -29,13 +30,15 @@ export async function atlFixture(h) {
       ...(issue.fields.status.id !== statuses.done.id ? [{ id: '31', name: '작업 완료', to: statuses.done, fields: {} }] : []),
       { id: '41', name: '사유 입력 후 완료', to: statuses.done, fields: { resolution: { name: '해결 사유', required: true } } } ];
   }
-  const server = http.createServer(async (req, res) => {
+  const createServer = tls ? handler => https.createServer({ key: tls.key, cert: tls.cert }, handler) : http.createServer;
+  const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1'); let raw = ''; for await (const bytes of req) raw += bytes;
       const body = raw ? JSON.parse(raw) : null;
       const send = (data, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); };
       if (url.pathname === '/oauth/token') {
         state.tokenCalls.push(body);
+        if (state.tokenFailure) { res.writeHead(state.tokenFailure, { 'Content-Type': 'text/html' }); res.end('upstream-private-diagnostic'); return; }
         assert.equal(body.client_id, 'fixture-client'); assert.equal(body.client_secret, 'fixture-secret');
         if (body.grant_type === 'refresh_token') {
           if (state.rejectRefresh || body.refresh_token !== state.refresh) return send({ error: 'invalid_grant' }, 400);
@@ -184,7 +187,7 @@ export async function atlFixture(h) {
     } catch (e) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const origin = `http://127.0.0.1:${server.address().port}`;
+  const origin = `${tls ? 'https' : 'http'}://127.0.0.1:${server.address().port}`;
   const helpers = path.join(h.dir, 'test-only-credentials'); fs.mkdirSync(helpers);
   const op = path.join(helpers, 'op.mjs'), keychain = path.join(helpers, 'keychain.mjs');
   const record = path.join(helpers, 'mock-keychain.json'), clientRecord = path.join(helpers, 'mock-client-keychain.json');

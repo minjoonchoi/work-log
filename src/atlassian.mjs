@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { assert, atomic, digest, json } from './shared.mjs';
 import { KeychainClientCredentials, KeychainTokens } from './credentials.mjs';
 import { jiraDescription, plainTextADF } from './jira-adf.mjs';
+import { certificatePath, readCertificates, AtlassianTransport, connectionFailure } from './atlassian-transport.mjs';
 export { jiraDescription } from './jira-adf.mjs';
 
 export const ATLASSIAN_CALLBACK = 'http://127.0.0.1:47831/oauth/atlassian/callback';
@@ -26,16 +27,18 @@ const siteUrl = value => {
     && /^https:\/\/[^/?#@\\]+\/?$/i.test(candidate), 'https://회사명.atlassian.net 형식의 사이트 주소를 입력하세요. 경로·계정·비표준 포트는 넣지 마세요.');
   return url.origin;
 };
-// Site selection is a preference, not part of the OAuth client identity. Keep
+// Site selection and CA trust are preferences, not OAuth client identity. Keep
 // this exact legacy shape so existing token digests remain valid.
 const oauthConfiguration = config => config && ({ client_id: config.client_id, credential_version: config.credential_version });
-const publicConfiguration = config => ({ client_id: config.client_id, ...(config.site_url ? { site_url: config.site_url } : {}) });
+const publicConfiguration = config => ({ client_id: config.client_id, ...(config.site_url ? { site_url: config.site_url } : {}),
+  ...(config.ca_cert_path ? { ca_cert_path: config.ca_cert_path } : {}) });
 const configuration = input => {
   assert(input && typeof input === 'object' && !Array.isArray(input)
-    && Object.keys(input).every(k => ['client_id', 'credential_version', 'site_url'].includes(k))
+    && Object.keys(input).every(k => ['client_id', 'credential_version', 'site_url', 'ca_cert_path'].includes(k))
     && typeof input.credential_version === 'string' && /^[a-f0-9]{32}$/.test(input.credential_version), 'Atlassian 연결 설정을 다시 저장하세요.');
   const site = input.site_url === undefined ? null : siteUrl(input.site_url);
-  return { client_id: clientId(input.client_id), credential_version: input.credential_version, ...(site ? { site_url: site } : {}) };
+  const ca = input.ca_cert_path === undefined ? null : certificatePath(input.ca_cert_path);
+  return { client_id: clientId(input.client_id), credential_version: input.credential_version, ...(site ? { site_url: site } : {}), ...(ca ? { ca_cert_path: ca } : {}) };
 };
 const sameState = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const error = (message, status = 400, code) => Object.assign(new Error(message), { status, code });
@@ -46,7 +49,7 @@ export class AtlassianClient {
     this.credentials = credentials; this.tokens = tokens; this.onChange = onChange;
     this.authOrigin = authOrigin; this.apiOrigin = apiOrigin; this.callback = callback;
     this.mutations = Promise.resolve(); this.flow = null; this.listener = null; this.flowError = null; this.legacyConfig = false;
-    this.authorizationGeneration = 0; this.siteGeneration = 0;
+    this.authorizationGeneration = 0; this.siteGeneration = 0; this.transport = new AtlassianTransport();
   }
   config() {
     this.legacyConfig = false;
@@ -79,12 +82,14 @@ export class AtlassianClient {
   save(input) {
     return this.exclusive(async () => {
       assert(input && typeof input === 'object' && !Array.isArray(input)
-        && Object.keys(input).every(k => ['client_id', 'client_secret', 'site_url'].includes(k)), 'Client ID·Client Secret·회사 Jira 사이트만 입력하세요.');
+        && Object.keys(input).every(k => ['client_id', 'client_secret', 'site_url', 'ca_cert_path'].includes(k)), 'Client ID·Client Secret·회사 Jira 사이트·추가 CA 인증서 경로만 입력하세요.');
       const client_id = clientId(input.client_id);
       assert(input.client_secret === undefined || (typeof input.client_secret === 'string' && input.client_secret.length <= 4096
         && !/[\u0000-\u001f\u007f]/.test(input.client_secret)), 'Client Secret을 확인하세요.');
       const supplied = input.client_secret?.trim() ? input.client_secret : null, current = this.config();
       const site = Object.hasOwn(input, 'site_url') ? siteUrl(input.site_url) : current?.site_url || null;
+      const ca = Object.hasOwn(input, 'ca_cert_path') ? certificatePath(input.ca_cert_path) : current?.ca_cert_path || null;
+      readCertificates(ca);
       assert(supplied || current?.client_id === client_id, '처음 저장하거나 Client ID를 변경할 때는 Client Secret을 입력하세요.');
       const previous = await this.credentials.stored();
       const matches = current && previous?.client_id === current.client_id && previous.credential_version === current.credential_version
@@ -93,15 +98,17 @@ export class AtlassianClient {
       assert(supplied || matches, '저장된 Client Secret을 확인할 수 없습니다. 다시 입력하세요.');
       const client_secret = supplied || previous.client_secret;
       if (current?.client_id === client_id && matches && sameState(previous.client_secret, client_secret)) {
-        const value = { ...oauthConfiguration(current), ...(site ? { site_url: site } : {}) };
-        if ((current.site_url || null) !== site) {
+        const value = { ...oauthConfiguration(current), ...(site ? { site_url: site } : {}), ...(ca ? { ca_cert_path: ca } : {}) };
+        if ((current.site_url || null) !== site || (current.ca_cert_path || null) !== ca) {
           try { atomic(this.file, JSON.stringify(value, null, 2)); }
-          catch { throw error('회사 Jira 사이트 설정을 저장하지 못했습니다. 로컬 저장 경로를 확인하세요.', 503); }
-          this.siteGeneration++; this.onChange();
+          catch { throw error('Atlassian 연결 설정을 저장하지 못했습니다. 로컬 저장 경로를 확인하세요.', 503); }
+          if ((current.site_url || null) !== site) this.siteGeneration++;
+          if ((current.ca_cert_path || null) !== ca) { this.transport.close(); this.flowError = null; }
+          this.onChange();
         }
         return { config: publicConfiguration(value), has_client_secret: true };
       }
-      const value = { client_id, credential_version: crypto.randomBytes(16).toString('hex'), ...(site ? { site_url: site } : {}) };
+      const value = { client_id, credential_version: crypto.randomBytes(16).toString('hex'), ...(site ? { site_url: site } : {}), ...(ca ? { ca_cert_path: ca } : {}) };
       try {
         await this.credentials.write({ ...oauthConfiguration(value), client_secret });
         atomic(this.file, JSON.stringify(value, null, 2));
@@ -128,6 +135,7 @@ export class AtlassianClient {
   async begin() {
     return this.exclusive(async () => {
       const config = this.config(); assert(config, '먼저 Client ID와 Client Secret을 입력해 저장하세요.');
+      readCertificates(config.ca_cert_path);
       this.close(); this.flowError = null;
       const credentials = await this.credentials.read(config);
       const callback = new URL(this.callback);
@@ -185,8 +193,12 @@ export class AtlassianClient {
   }
   async tokenRequest(payload) {
     let response;
-    try { response = await fetch(new URL('/oauth/token', this.authOrigin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: json(payload), redirect: 'error', signal: AbortSignal.timeout(15000) }); }
-    catch { throw error('Atlassian 토큰 서버에 연결할 수 없습니다. 다시 시도하세요.', 503); }
+    try { response = await this.transport.fetch(new URL('/oauth/token', this.authOrigin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: json(payload), redirect: 'error', signal: AbortSignal.timeout(15000) }, this.config()?.ca_cert_path); }
+    catch (cause) { throw connectionFailure(cause, 'Atlassian 토큰 서버', 503, 'token_connection_failed'); }
+    if (response.status >= 500 || response.status === 429) {
+      await response.body?.cancel();
+      throw error(`Atlassian 토큰 서버가 HTTP ${response.status}을 반환했습니다. 잠시 후 다시 연결하세요.`, response.status, 'token_server_error');
+    }
     let data; try { data = await response.json(); } catch { throw error('Atlassian 토큰 응답 형식이 올바르지 않습니다.', 502); }
     if (!response.ok) throw error(data.error === 'invalid_grant' ? 'Atlassian 인증이 만료되었습니다. 다시 연결하세요.' : 'Atlassian 인증 요청이 거부되었습니다. OAuth 앱 설정을 확인하세요.', 401, data.error === 'invalid_grant' ? 'reauth_required' : 'oauth_rejected');
     return data;
@@ -226,9 +238,9 @@ export class AtlassianClient {
         if (pending?.then) await pending;
         authorization?.(token);
       } catch (e) { e.not_sent = true; throw e; }
-      try { return await fetch(new URL(apiPath, this.apiOrigin), { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
-        ...(body ? { body: json(body) } : {}), redirect: 'error', signal: AbortSignal.timeout(15000) }); }
-      catch { throw error('Atlassian API 응답을 확인하지 못했습니다.', 502, 'unconfirmed'); }
+      try { return await this.transport.fetch(new URL(apiPath, this.apiOrigin), { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        ...(body ? { body: json(body) } : {}), redirect: 'error', signal: AbortSignal.timeout(15000) }, this.config()?.ca_cert_path); }
+      catch (cause) { throw connectionFailure(cause, 'Atlassian API 응답을 확인하지 못했습니다', 502, 'unconfirmed'); }
     };
     let token;
     try { token = await this.accessToken(); } catch (e) { e.not_sent = true; throw e; }
@@ -586,7 +598,7 @@ export class AtlassianClient {
   disconnect() {
     return this.exclusive(async () => { this.close(); await this.tokens.remove(); this.flowError = null; this.onChange(); return { connected: false }; });
   }
-  close() { this.authorizationGeneration++; this.flow = null; clearTimeout(this.flowTimer); this.listener?.close(); this.listener = null; }
+  close() { this.transport.close(); this.authorizationGeneration++; this.flow = null; clearTimeout(this.flowTimer); this.listener?.close(); this.listener = null; }
 }
 
 export function atlassianClient(dir, onChange) {
@@ -594,7 +606,7 @@ export function atlassianClient(dir, onChange) {
   // Local protocol simulators are only reachable in explicit E2E mode with isolated credential helpers.
   if (process.env.HARNESS_TEST_MODE === '1' && process.env.HARNESS_ATLASSIAN_TEST_ORIGIN) {
     const origin = new URL(process.env.HARNESS_ATLASSIAN_TEST_ORIGIN);
-    assert(origin.protocol === 'http:' && origin.hostname === '127.0.0.1' && process.env.HARNESS_KEYCHAIN_BIN, 'Atlassian 테스트 환경은 로컬 모의 서버와 격리된 Keychain 도우미가 필요합니다.');
+    assert(['http:', 'https:'].includes(origin.protocol) && origin.hostname === '127.0.0.1' && process.env.HARNESS_KEYCHAIN_BIN, 'Atlassian 테스트 환경은 로컬 모의 서버와 격리된 Keychain 도우미가 필요합니다.');
     Object.assign(options, { authOrigin: origin.origin, apiOrigin: origin.origin, callback: 'http://127.0.0.1:0/oauth/atlassian/callback' });
   }
   return new AtlassianClient(options);

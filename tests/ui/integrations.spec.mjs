@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Harness, pair, eventually } from '../helpers.mjs';
 import { readEndpoint } from '../../src/shared.mjs';
 import { atlFixture, authorize, adfText } from '../fixtures/atlassian.mjs';
+import { tlsFixture } from '../fixtures/tls.mjs';
 
 let h, f;
 test.beforeEach(async ({ context }) => {
@@ -21,6 +22,7 @@ const showSettings = async page => {
 };
 const clientField = page => page.getByLabel('Client ID', { exact: true });
 const secretField = page => page.getByLabel('Client Secret', { exact: true });
+const caField = page => page.getByLabel('추가 CA 인증서 파일 경로', { exact: true });
 const reveal = page => page.getByRole('button', { name: 'Client Secret 보기', exact: true });
 const conceal = page => page.getByRole('button', { name: 'Client Secret 숨기기', exact: true });
 const saveSettings = h => h.manager('/integrations/atlassian', { method: 'PUT', body: clientSettings });
@@ -70,10 +72,12 @@ test('live status polling preserves unsaved credentials and disconnect retains t
   await open(page); await showSettings(page);
   await expect(page.locator('#atlassian-status')).toContainText('Atlassian 연결됨');
   await clientField(page).fill('unsaved-client'); await secretField(page).fill('unsaved-secret');
+  await caField(page).fill('~/Certificates/unsaved-company-ca.pem');
   const initialPolls = polls; await h.ingest(pair('live-settings', '09:00:00', '09:05:00'));
   await expect(page.locator('.item-row')).toHaveCount(1);
   await expect.poll(() => polls).toBeGreaterThan(initialPolls);
   await expect(clientField(page)).toHaveValue('unsaved-client'); await expect(secretField(page)).toHaveValue('unsaved-secret');
+  await expect(caField(page)).toHaveValue('~/Certificates/unsaved-company-ca.pem');
   await expect(secretField(page)).toHaveAttribute('type', 'password');
   await page.screenshot({ path: 'output/playwright/atlassian-settings.png', fullPage: true });
   await page.getByRole('button', { name: '닫기', exact: true }).click(); await showSettings(page);
@@ -134,6 +138,86 @@ test('late reveal responses cannot overwrite typed values, a changed Client ID, 
   await expect(reveal(page)).toHaveAttribute('aria-pressed', 'false');
 });
 
+test('saving, reopening and clearing an additional CA path retains OAuth and preserves unsaved fields during polling', async ({ page }) => {
+  const tls = tlsFixture(h.dir); await authorize(h);
+  const tokenCalls = f.state.tokenCalls.length, saves = []; let polls = 0, release;
+  page.on('response', response => {
+    if (new URL(response.url()).pathname === '/api/integrations/atlassian' && response.request().method() === 'GET') polls++;
+  });
+  const waiting = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/integrations/atlassian', async route => {
+    if (route.request().method() === 'PUT') { saves.push(route.request().postDataJSON()); await waiting; }
+    await route.continue();
+  });
+  await open(page); await showSettings(page);
+  await expect(page.locator('#atlassian-status')).toContainText('Atlassian 연결됨');
+  await expect(caField(page)).toHaveAttribute('aria-describedby', 'atlassian-ca-cert-help');
+  await expect(page.locator('#atlassian-ca-cert-help')).toContainText('루트·중간 CA');
+  await caField(page).fill(tls.caPath);
+  const before = polls; await expect.poll(() => polls).toBeGreaterThan(before);
+  await expect(caField(page)).toHaveValue(tls.caPath);
+  await page.getByRole('button', { name: '설정 저장', exact: true }).click();
+  try {
+    await expect.poll(() => saves.length).toBe(1);
+    await expect(caField(page)).toBeDisabled(); await expect(clientField(page)).toBeDisabled();
+    await expect(secretField(page)).toBeDisabled();
+  } finally { release(); }
+  await expect(page.locator('#save-atlassian')).toBeEnabled();
+  await expect(page.locator('#toast')).toHaveText('연결 설정을 저장했습니다.');
+  expect(saves[0]).toEqual({ client_id: clientSettings.client_id, ca_cert_path: tls.caPath });
+  let status = await h.manager('/integrations/atlassian');
+  expect(status.config.ca_cert_path).toBe(tls.caPath); expect(status.connected).toBe(true); expect(status.has_client_secret).toBe(true);
+  expect(f.state.tokenCalls).toHaveLength(tokenCalls);
+  expect(fs.readFileSync(path.join(h.dir, 'integrations/atlassian.json'), 'utf8')).not.toContain('BEGIN CERTIFICATE');
+  await page.getByRole('button', { name: '닫기', exact: true }).click(); await showSettings(page);
+  await expect(caField(page)).toHaveValue(tls.caPath); await expect(secretField(page)).toHaveValue('');
+  await caField(page).fill('');
+  await page.getByRole('button', { name: '설정 저장', exact: true }).click();
+  await expect(page.locator('#save-atlassian')).toBeEnabled();
+  expect(saves.at(-1)).toEqual({ client_id: clientSettings.client_id, ca_cert_path: '' });
+  status = await h.manager('/integrations/atlassian');
+  expect(status.config.ca_cert_path).toBeUndefined(); expect(status.connected).toBe(true);
+  expect(f.state.tokenCalls).toHaveLength(tokenCalls);
+  await page.getByRole('button', { name: '닫기', exact: true }).click(); await showSettings(page);
+  await expect(caField(page)).toHaveValue('');
+});
+
+test('invalid certificate paths surface backend errors without replacing a saved CA or disconnecting OAuth', async ({ page }) => {
+  const tls = tlsFixture(h.dir); await authorize(h);
+  await h.manager('/integrations/atlassian', { method: 'PUT', body: { client_id: clientSettings.client_id, ca_cert_path: tls.caPath } });
+  const invalid = path.join(h.dir, 'invalid-ca.pem'); fs.writeFileSync(invalid, 'This file is not a certificate.');
+  const tokenCalls = f.state.tokenCalls.length;
+  await open(page); await showSettings(page);
+  for (const candidate of [path.join(h.dir, 'missing-ca.pem'), invalid, tls.privateKeyPath, tls.serverCertPath]) {
+    await caField(page).fill(candidate);
+    await page.getByRole('button', { name: '설정 저장', exact: true }).click();
+    await expect(page.locator('#dialog-error')).toBeVisible();
+    await expect(page.locator('#dialog-error')).toContainText(/인증서|CA|PEM/);
+    await expect(caField(page)).toHaveValue(candidate); await expect(caField(page)).toBeEnabled();
+    const status = await h.manager('/integrations/atlassian');
+    expect(status.config.ca_cert_path).toBe(tls.caPath); expect(status.connected).toBe(true);
+  }
+  expect(f.state.tokenCalls).toHaveLength(tokenCalls);
+  await page.getByRole('button', { name: '닫기', exact: true }).click(); await showSettings(page);
+  await expect(caField(page)).toHaveValue(tls.caPath); await expect(page.locator('#dialog-error')).toBeHidden();
+});
+
+test('connect saves a changed CA path before authorization while unchanged paths omit another save', async ({ page }) => {
+  const tls = tlsFixture(h.dir); await saveSettings(h); const saves = [];
+  await page.addInitScript(() => { window.open = url => { window.__lastExternalURL = url; return null; }; });
+  await page.route('**/api/integrations/atlassian/authorize', route => route.fulfill({ json: { authorization_url: 'https://auth.atlassian.com/authorize?fixture=ca' } }));
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/integrations/atlassian' && request.method() === 'PUT') saves.push(request.postDataJSON());
+  });
+  await open(page); await showSettings(page); await caField(page).fill(tls.caPath);
+  await page.getByRole('button', { name: 'Atlassian 연결', exact: true }).click();
+  await expect(page.locator('#connect-atlassian')).toBeEnabled();
+  await expect.poll(() => page.evaluate(() => window.__lastExternalURL)).toContain('fixture=ca');
+  expect(saves).toEqual([{ client_id: clientSettings.client_id, ca_cert_path: tls.caPath }]);
+  await page.getByRole('button', { name: 'Atlassian 연결', exact: true }).click();
+  await expect(page.locator('#connect-atlassian')).toBeEnabled(); expect(saves).toHaveLength(1);
+});
+
 test('manual ticket creation → live session summary and Jira worklog status with original I/O', async ({ page }) => {
   await authorize(h);
   await h.ingest(pair('jira-ui', '09:00:00', '09:05:00', 'one', { text: '승인 정책과 권한 요구사항을 정리합니다.' }));
@@ -149,7 +233,7 @@ test('manual ticket creation → live session summary and Jira worklog status wi
   await expect(page.locator('.jira-status')).toHaveText('해야 할 일');
   expect(f.state.issues[0].fields.summary).toBe(item.title);
   expect(adfText(f.state.issues[0].fields.description)).toBe(item.description);
-  await h.ingest(pair('jira-ui', '09:25:00', '09:27:00', 'two', { text: '정리한 요구사항으로 화면을 설계합니다.' }));
+  await h.ingest(pair('jira-ui', '09:25:00', '09:27:00', 'two', { text: '정리한 요구사항으로 화면을 설계합니다.', source: 'system_hook' }));
   await expect(page.locator('.session-card')).toHaveCount(2);
   const oldSession = page.locator('.session-card').last(); await oldSession.locator(':scope > summary').click();
   await expect(oldSession.locator('.summary-text')).toBeVisible({ timeout: 20000 });

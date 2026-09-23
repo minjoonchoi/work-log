@@ -35,6 +35,8 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       <div id="dialog-error" class="error" role="alert" hidden></div>
       <label for="atlassian-site-url">Atlassian 사이트 주소</label><input id="atlassian-site-url" maxlength="300" placeholder="https://company.atlassian.net" autocomplete="url" spellcheck="false" aria-describedby="atlassian-site-help" value="${esc(s.config?.site_url || '')}">
       <p id="atlassian-site-help" class="help">선택 사항입니다. 회사 Jira·Confluence 사이트를 기본으로 선택합니다. 비워 두면 연결된 사이트 중에서 선택할 수 있습니다.</p>
+      <label for="atlassian-ca-cert-path">추가 CA 인증서 파일 경로</label><input id="atlassian-ca-cert-path" maxlength="4096" placeholder="~/Certificates/company-ca.pem" autocomplete="off" spellcheck="false" aria-describedby="atlassian-ca-cert-help" value="${esc(s.config?.ca_cert_path || '')}">
+      <p id="atlassian-ca-cert-help" class="help">선택 사항입니다. 회사에서 발급한 루트·중간 CA 인증서의 PEM 번들(.pem/.crt)을 지정하세요. 절대 경로 또는 ~/ 경로를 사용할 수 있습니다. 비워서 저장하면 추가 인증서를 해제하며, 인증서 경로만 변경해도 기존 OAuth 연결과 토큰은 유지됩니다.</p>
       <label for="atlassian-client-id">Client ID</label><input id="atlassian-client-id" maxlength="200" autocomplete="off" spellcheck="false" value="${esc(s.config?.client_id || '')}">
       <label for="atlassian-client-secret">Client Secret</label><div class="credential-field"><input id="atlassian-client-secret" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false" aria-describedby="client-secret-help"><button id="toggle-client-secret" type="button" class="secondary" aria-controls="atlassian-client-secret" aria-pressed="false" aria-label="Client Secret 보기">보기</button></div>
       <p id="client-secret-help" class="help">Client Secret은 macOS Keychain에 보관합니다. 같은 Client ID에서 비워 두면 저장된 값을 유지합니다.</p>
@@ -44,7 +46,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       <div class="settings-actions"><button id="save-atlassian" class="secondary">설정 저장</button><button id="connect-atlassian" class="primary">Atlassian 연결</button><button id="disconnect-atlassian" class="secondary">연결 해제</button></div>
       <details class="service-details"><summary>로컬 서비스 상태</summary><p>관리: 연결됨 · 실행: ${health.runtime_connected ? '연결됨' : '연결 대기'}<br>수집 이벤트 ${health.events}개 · 미확인 출력 ${health.unresolved}개<br>버전 ${esc(health.version)}</p></details>
       <div class="dialog-actions"><button data-close>닫기</button></div>`);
-    const dialog = $('#modal'), client = $('#atlassian-client-id'), secret = $('#atlassian-client-secret'), toggle = $('#toggle-client-secret'), site = $('#atlassian-site-url');
+    const dialog = $('#modal'), client = $('#atlassian-client-id'), secret = $('#atlassian-client-secret'), toggle = $('#toggle-client-secret'), site = $('#atlassian-site-url'), caCert = $('#atlassian-ca-cert-path');
     let config = s.config, hasSecret = !!s.has_client_secret, origin = null, revision = 0, revealing = 0, busy = false, disposed = false;
     const view = { status: $('#atlassian-status'), active: () => !disposed && settings === view && dialog.open && client.isConnected,
       dispose: () => { disposed = true; clearSecret(); dialog.removeEventListener('close', closed); } };
@@ -58,17 +60,19 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     function closed() { if (settings === view) { opening++; clearSettings(); } }
     settings = view; dialog.addEventListener('close', closed); present();
     const currentError = e => { if (view.active()) fail(e); };
-    const dirty = () => client.value.trim() !== config?.client_id || site.value.trim() !== (config?.site_url || '') || (!!secret.value && origin !== 'stored');
+    const dirty = () => client.value.trim() !== config?.client_id || site.value.trim() !== (config?.site_url || '')
+      || caCert.value.trim() !== (config?.ca_cert_path || '') || (!!secret.value && origin !== 'stored');
     const withBusy = fn => async () => {
       if (busy || !view.active()) return;
       busy = true; revealing++;
-      const controls = [client, secret, toggle, site, $('#save-atlassian'), $('#connect-atlassian'), $('#disconnect-atlassian')];
+      const controls = [client, secret, toggle, site, caCert, $('#save-atlassian'), $('#connect-atlassian'), $('#disconnect-atlassian')];
       controls.forEach(control => control.disabled = true);
       try { await fn(); } catch (e) { currentError(e); }
       finally { busy = false; if (view.active()) { controls.forEach(control => control.disabled = false); present(); } }
     };
     client.oninput = () => { clearSecret(); $('#dialog-error').hidden = true; };
     site.oninput = () => { $('#dialog-error').hidden = true; };
+    caCert.oninput = () => { $('#dialog-error').hidden = true; };
     secret.oninput = () => { revision++; revealing++; origin = secret.value ? 'typed' : null; toggle.disabled = busy; present(); };
     toggle.onclick = async () => {
       if (!view.active() || busy) return;
@@ -91,9 +95,11 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       if (!newSecret && (!hasSecret || clientId !== config?.client_id)) throw new Error('이 Client ID의 Client Secret을 입력하세요.');
       secret.type = 'password'; present();
       const saved = await api('/integrations/atlassian', { method: 'PUT', body: { client_id: clientId, ...(newSecret ? { client_secret: newSecret } : {}),
-        ...(site.value.trim() !== (config?.site_url || '') ? { site_url: site.value.trim() } : {}) } });
+        ...(site.value.trim() !== (config?.site_url || '') ? { site_url: site.value.trim() } : {}),
+        ...(caCert.value.trim() !== (config?.ca_cert_path || '') ? { ca_cert_path: caCert.value.trim() } : {}) } });
       if (!view.active()) return false;
       config = saved.config; hasSecret = saved.has_client_secret ?? !!(newSecret || hasSecret); client.value = config.client_id; site.value = config.site_url || '';
+      caCert.value = config.ca_cert_path || '';
       clearSecret(); $('#dialog-error').hidden = true; return true;
     };
     $('#save-atlassian').onclick = withBusy(async () => { if (await save()) { toast('연결 설정을 저장했습니다.'); await pollSettings(); } });
