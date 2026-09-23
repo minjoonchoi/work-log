@@ -61,6 +61,10 @@ export function readManifest(loc) {
   safePath(loc.home, loc.manifest);
   if (!stat(loc.manifest)) return null;
   const m = JSON.parse(fs.readFileSync(loc.manifest, 'utf8'));
+  return validateManifest(loc, m);
+}
+
+export function validateManifest(loc, m) {
   assert(m.owner === OWNER && [1, 2].includes(m.format) && /^[0-9a-f-]{36}$/.test(m.id) && m.home === loc.home, 'WorkLog 설치 소유 정보를 확인할 수 없습니다.');
   assert(typeof m.version === 'string' && /^\d+\.\d+\.\d+-[a-f0-9]{12}$/.test(m.version), '설치 버전 형식이 잘못되었습니다.');
   const runtime = path.join(loc.data, 'versions', m.version);

@@ -48,6 +48,7 @@ export function applyUninstall({ homeDir = os.homedir(), deactivate = true, laun
   if (['not_installed', 'unmanaged', 'uninstalled'].includes(initial.status)) return initial;
   return locked(homeDir, loc => {
     const receipt = readManifest(loc); assert(receipt, '설치 기록이 변경되었습니다.');
+    assert(!receipt.replacement, '중단된 재설치가 있습니다. make install로 복구한 뒤 제거하세요.');
     if (receipt.state === 'uninstalled') return { status: 'uninstalled', removed: [] };
     const removed = [], preserved = [];
     receipt.state = 'uninstalling'; saveManifest(loc, receipt);

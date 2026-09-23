@@ -26,9 +26,9 @@ function setup(t, real = false) {
   if (real) {
     for (const name of ['src', 'bin', 'harness', 'contracts', 'apps/web']) fs.cpSync(path.join(ROOT, name), path.join(bundle, name), { recursive: true });
     fs.mkdirSync(path.join(bundle, 'scripts'), { recursive: true });
-    for (const name of ['agent-connections', 'install-state', 'install-output', 'install', 'uninstall', 'service-control']) fs.copyFileSync(path.join(ROOT, `scripts/${name}.mjs`), path.join(bundle, `scripts/${name}.mjs`));
+    for (const name of ['replace-install', 'agent-connections', 'install-state', 'install-output', 'install', 'uninstall', 'service-control']) fs.copyFileSync(path.join(ROOT, `scripts/${name}.mjs`), path.join(bundle, `scripts/${name}.mjs`));
     for (const name of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(ROOT, name), path.join(bundle, name));
-    for (const name of ['ajv', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'require-from-string']) fs.cpSync(path.join(ROOT, 'node_modules', name), path.join(bundle, 'node_modules', name), { recursive: true });
+    for (const name of ['undici', 'ajv', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'require-from-string']) fs.cpSync(path.join(ROOT, 'node_modules', name), path.join(bundle, 'node_modules', name), { recursive: true });
   }
   const config = { model: 'preserve-me', disableAllHooks: true, hooks: { Stop: [{ hooks: [{ type: 'command', command: 'company-required-hook' }] }],
     Custom: [{ hooks: [{ type: 'command', command: 'echo worklog-not-owned' }] }] } };
@@ -454,7 +454,8 @@ test('installed request skill delegates natural language to classification and a
   t.after(() => h.close(false)); await h.start('runtime'); await h.start('manager');
   const requestFile = path.join(f.dir, 'request.json'); fs.writeFileSync(requestFile, JSON.stringify({ prompt: '초대 기능 PRD를 작성해 주세요.' }));
   const helper = path.join(f.links[0].target, 'scripts/harness');
-  const child = spawnSync(helper, ['run', '--input', requestFile, '--wait'], { cwd: f.dir, encoding: 'utf8', timeout: 15000 });
+  const child = spawnSync(helper, ['run', '--input', requestFile, '--wait'], { cwd: f.dir,
+    env: { ...process.env, CODEX_THREAD_ID: '' }, encoding: 'utf8', timeout: 15000 });
   assert.equal(child.status, 0, child.stderr); const run = JSON.parse(child.stdout);
   assert.equal(run.status, 'completed'); assert.equal(run.task, 'prd.create'); assert.equal(run.engine, 'codex'); assert.ok(present(run.artifact.file));
   const hook = f.read('claude').hooks.UserPromptSubmit[0].hooks[0].command;
@@ -466,7 +467,7 @@ test('installed request skill delegates natural language to classification and a
   assert.ok(present(path.join(f.loc.data, 'memory.sqlite'))); assert.ok(present(run.artifact.file));
 });
 
-test('packaged custom task settings survive uninstall and reinstall unchanged and packaged GUI serves SVG icons', async t => {
+test('packaged custom task settings survive in-place reinstall unchanged and the replaced services serve the GUI', async t => {
   const f = setup(t, true);
   // Add the protocol fixture to this fake package before its owned inventory is captured.
   const fixtures = path.join(f.sourceApp, 'Contents/Resources/harness/tests/fixtures');
@@ -488,9 +489,10 @@ test('packaged custom task settings survive uninstall and reinstall unchanged an
   } });
   const settingsFile = path.join(f.loc.data, 'execution-settings.json'), original = fs.readFileSync(settingsFile);
   await h.close(false);
-  assert.equal(f.uninstall().status, 'uninstalled'); assert.deepEqual(fs.readFileSync(settingsFile), original);
+  fs.writeFileSync(path.join(f.sourceApp, 'Contents/Resources/harness/immutable.txt'), 'v2');
   const replan = prepareInstall({ output: path.join(f.dir, 'reinstall-plan'), homeDir: f.homeDir, sourceApp: f.sourceApp });
-  assert.equal(applyInstall(replan, { activate: false }).status, 'installed');
+  assert.equal(applyInstall(replan, { activate: false, reinstall: true }).status, 'reinstalled');
+  assert.equal(fs.readFileSync(path.join(replan.runtimeRoot, 'harness/immutable.txt'), 'utf8'), 'v2');
   assert.deepEqual(fs.readFileSync(settingsFile), original);
   await h.start('runtime'); await h.start('manager');
   const restored = await h.manager('/execution-settings'), saved = restored.tasks.find(value => value.id === task);

@@ -16,8 +16,8 @@ function formatResult(operation, result) {
   const lines = [];
   const field = (label, value) => { if (value) lines.push(`  ${label}: ${value}`); };
   if (operation === 'install') {
-    if (result.status === 'installed') {
-      lines.push('[WorkLog] 설치 완료');
+    if (['installed', 'reinstalled'].includes(result.status)) {
+      lines.push(result.status === 'reinstalled' ? '[WorkLog] 재설치 완료' : '[WorkLog] 설치 완료');
       field('앱', result.installed);
       field('서비스', result.activated ? '시작됨' : '시작하지 않음 (--no-activate)');
       field('업무 데이터', result.data_root);

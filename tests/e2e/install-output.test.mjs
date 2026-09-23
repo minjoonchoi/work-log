@@ -56,8 +56,8 @@ test('CLI install and reinstall give Korean results and keep progress off stdout
   assert.match(result.stderr, /\[WorkLog\].*확인|\[WorkLog\].*설치/, 'installation progress belongs on stderr');
   assert.ok(installed.includes(f.loc.app)); assert.ok(fs.existsSync(f.loc.manifest));
   const receipt = fs.readFileSync(f.loc.manifest);
-  human(f.install('--apply'), /기존.*설치.*유지/);
-  assert.deepEqual(fs.readFileSync(f.loc.manifest), receipt);
+  human(f.install('--apply'), /재설치.*완료/);
+  assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).id, JSON.parse(receipt).id);
   for (const name of ['.claude', '.codex', '.agents']) assert.equal(fs.existsSync(path.join(f.homeDir, name)), false);
 });
 
@@ -126,7 +126,7 @@ test('JSON opt-in preserves installation, plan, reinstallation and removal resul
   assert.ok(plan.files.every(file => file.content.includes('<plist'))); assert.deepEqual(plan.links, []);
   const installed = structured(f.install('--apply', '--json'));
   assert.equal(installed.status, 'installed'); assert.equal(installed.installed, f.loc.app); assert.equal(installed.activated, false);
-  assert.equal(structured(f.install('--apply', '--json')).status, 'already_installed');
+  assert.equal(structured(f.install('--apply', '--json')).status, 'reinstalled');
   const removal = structured(f.uninstall('--json'));
   assert.equal(removal.status, 'planned'); assert.equal(removal.app, f.loc.app); assert.ok(Array.isArray(removal.preserve));
   const removed = structured(f.uninstall('--apply', '--json'));
@@ -142,7 +142,7 @@ test('make forwards human and JSON install/uninstall arguments using only the fi
   assert.equal(structured(f.make('install-plan', [...f.installArgs, '--json'])).targetApp, f.loc.app);
   human(f.make('install', f.installArgs), /설치.*완료/);
   const repeated = structured(f.make('install', [...f.installArgs, '--json']));
-  assert.equal(repeated.status, 'already_installed'); assert.deepEqual(repeated.build_cleanup, { removed: [], preserved: [] });
+  assert.equal(repeated.status, 'reinstalled'); assert.deepEqual(repeated.build_cleanup, { removed: [], preserved: [] });
   human(f.make('uninstall-plan', f.uninstallArgs), /제거.*계획/);
   assert.equal(structured(f.make('uninstall-plan', [...f.uninstallArgs, '--json'])).status, 'planned');
   human(f.make('uninstall', f.uninstallArgs), /제거.*완료/);

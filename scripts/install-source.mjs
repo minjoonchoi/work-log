@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { ROOT, assert } from '../src/shared.mjs';
 import { createInstallReporter } from './install-output.mjs';
 import { buildMac } from './build-mac.mjs';
-import { prepareInstall, applyInstall } from './install.mjs';
-import { locations, readManifest, locked, safePath, stat, inventory, canonical } from './install-state.mjs';
+import { prepareInstall, applyInstall, checkInstallation } from './install.mjs';
+import { readManifest, locked, safePath, stat, inventory, canonical } from './install-state.mjs';
 
 // Only remove known build copies whose entire contents still match the installed receipt.
 // A caller-supplied app, a modified build, and other applications remain caller-owned.
@@ -48,24 +48,21 @@ export function cleanBuildCopies({ homeDir, projectRoot = ROOT, sourceApp } = {}
 }
 
 export function installFromSource({ homeDir = os.homedir(), output, sourceApp, activate = true,
-  projectRoot = ROOT, build = buildMac, onProgress = () => {} } = {}) {
+  projectRoot = ROOT, build = buildMac, onProgress = () => {}, launchctl, stopTimeoutMs } = {}) {
   assert(sourceApp === undefined || (typeof sourceApp === 'string' && sourceApp.trim().length > 0),
     '--source-app에는 비어 있지 않은 앱 경로가 필요합니다.');
-  const loc = locations(homeDir);
   onProgress('설치 준비 상태를 확인합니다.');
-  // Read only: applyInstall still owns the lock and validates an existing installation.
-  const previous = readManifest(loc);
+  checkInstallation({ homeDir, activate, launchctl, stopTimeoutMs, onProgress });
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-source-install-'));
   try {
     let app = sourceApp && path.resolve(sourceApp);
-    if (!app && previous?.state === 'installed') app = loc.app;
     if (!app) {
       onProgress('macOS 앱을 빌드합니다.');
       // Build tools can emit arbitrary output. Keep CLI stdout for the final result.
       app = build({ outputDir: stage, archive: false, stdio: ['ignore', 2, 2], onProgress }).app;
     }
     const plan = prepareInstall({ homeDir, output: output || path.join(stage, 'plan'), sourceApp: app });
-    const result = applyInstall(plan, { activate, onProgress });
+    const result = applyInstall(plan, { activate, reinstall: true, launchctl, stopTimeoutMs, onProgress });
     onProgress('설치본과 일치하는 중복 빌드 앱을 정리합니다.');
     return { ...result, build_cleanup: cleanBuildCopies({ homeDir, projectRoot, sourceApp }) };
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }

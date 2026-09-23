@@ -6,6 +6,9 @@ import os from 'node:os';
 import { installFromSource } from '../../scripts/install-source.mjs';
 import { prepareInstall, applyInstall } from '../../scripts/install.mjs';
 import { inventory, locations } from '../../scripts/install-state.mjs';
+import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
+import { applyUninstall } from '../../scripts/uninstall.mjs';
 import { connectAgent, getAgentConnections } from '../../scripts/agent-connections.mjs';
 
 const present = file => { try { fs.lstatSync(file); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } };
@@ -93,15 +96,18 @@ test('source installation preserves malformed agent settings and unrelated work 
   for (const target of links) assert.equal(fs.readFileSync(path.join(target, 'SKILL.md'), 'utf8'), 'Existing user skill.\n');
 });
 
-test('an existing verified installation skips rebuilding and keeps an explicitly connected agent without connecting the other', t => {
+test('an existing verified installation rebuilds and keeps an explicitly connected agent without connecting the other', t => {
   const f = setup(t), original = f.existing();
   connectAgent('claude', { homeDir: f.homeDir });
   const receipt = fs.readFileSync(f.loc.manifest, 'utf8'), configurations = Object.fromEntries(Object.entries(f.loc.configs).map(([engine, file]) => [engine, fs.readFileSync(file, 'utf8')]));
   const connections = getAgentConnections({ homeDir: f.homeDir });
   assert.deepEqual(connections.connections.map(({ state }) => state), ['connected', 'disconnected']);
-  const result = f.install({ build: () => assert.fail('existing installation must not rebuild') });
-  assert.equal(result.status, 'already_installed'); assert.equal(result.installation_id, original.installation_id);
-  assert.equal(fs.readFileSync(f.loc.manifest, 'utf8'), receipt);
+  fs.writeFileSync(path.join(f.sourceApp, 'Contents/MacOS/WorkLog'), 'new GUI payload');
+  const result = f.install();
+  assert.equal(result.status, 'reinstalled'); assert.equal(result.installation_id, original.installation_id);
+  assert.equal(f.calls.length, 1);
+  assert.equal(fs.readFileSync(path.join(f.loc.app, 'Contents/MacOS/WorkLog'), 'utf8'), 'new GUI payload');
+  assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).id, JSON.parse(receipt).id);
   for (const [engine, file] of Object.entries(f.loc.configs)) assert.equal(fs.readFileSync(file, 'utf8'), configurations[engine]);
   assert.deepEqual(getAgentConnections({ homeDir: f.homeDir }), connections);
   assert.equal(present(path.join(f.projectRoot, 'dist')), false);
@@ -147,10 +153,10 @@ test('successful installation removes both identical legacy app copies while pre
   assert.deepEqual(inventory(f.loc.app), inventory(f.sourceApp));
 });
 
-test('an existing installed receipt authorizes identical legacy cleanup without a new build', t => {
+test('a rebuilt installation cleans identical legacy copies after replacement', t => {
   const f = setup(t); f.existing(); for (const app of f.legacy) f.duplicate(app);
-  const result = f.install({ build: () => assert.fail('legacy cleanup must not rebuild') });
-  assert.equal(result.status, 'already_installed'); assert.deepEqual([...result.build_cleanup.removed].sort(), [...f.legacy].sort());
+  const result = f.install(); assert.equal(f.calls.length, 1);
+  assert.equal(result.status, 'reinstalled'); assert.deepEqual([...result.build_cleanup.removed].sort(), [...f.legacy].sort());
   for (const app of f.legacy) assert.equal(present(app), false);
 });
 
@@ -209,3 +215,148 @@ test('an explicitly empty source path is rejected before building or changing in
   assert.equal(present(f.loc.manifest), false);
   assert.deepEqual(f.read('codex'), f.config);
 });
+
+for (const engines of [[], ['claude'], ['codex'], ['claude', 'codex']])
+  test(`reinstall preserves data and exact connection ownership for ${engines.join('+') || 'disconnected agents'}; uninstall still works`, t => {
+    const f = setup(t); f.existing();
+    for (const engine of engines) connectAgent(engine, { homeDir: f.homeDir });
+    const before = JSON.parse(fs.readFileSync(f.loc.manifest));
+    const configs = Object.values(f.loc.configs).map(file => [file, fs.readFileSync(file)]);
+    const links = before.links.map(link => ({ ...link, inode: fs.lstatSync(link.path).ino }));
+    const db = new DatabaseSync(path.join(f.loc.data, 'memory.sqlite'));
+    db.exec("CREATE TABLE history (body TEXT); INSERT INTO history VALUES ('업무 이력 보존')"); db.close();
+    const files = { 'custom-tasks.json': '{"user":"type"}', 'execution-settings.json': '{"model":"custom"}',
+      'integrations/atlassian.json': '{"ca_cert_path":"/company/ca.pem"}', 'runs/artifact.md': '# 결과' };
+    for (const [name, value] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(f.loc.data, name)), { recursive: true }); fs.writeFileSync(path.join(f.loc.data, name), value);
+    }
+    const stored = Object.keys(files).concat('memory.sqlite').map(file => [path.join(f.loc.data, file), fs.readFileSync(path.join(f.loc.data, file))]);
+    fs.writeFileSync(path.join(f.sourceApp, 'Contents/Resources/harness/src/hook.mjs'), '// updated hook implementation\n');
+    fs.writeFileSync(path.join(f.sourceApp, 'Contents/Resources/harness/skills/work/SKILL.md'), '---\nname: work\n---\nUpdated instructions.\n');
+    const result = f.install(); assert.equal(result.status, 'reinstalled'); assert.equal(result.installation_id, before.id);
+    const after = JSON.parse(fs.readFileSync(f.loc.manifest));
+    assert.equal(after.version, before.version); assert.ok(after.updated_at); assert.equal(after.replacement, undefined);
+    assert.deepEqual(after.hooks, before.hooks); assert.deepEqual(after.links, before.links);
+    for (const [file, contents] of [...configs, ...stored]) assert.deepEqual(fs.readFileSync(file), contents);
+    for (const link of links) {
+      assert.equal(fs.lstatSync(link.path).ino, link.inode);
+      assert.match(fs.readFileSync(path.join(link.path, 'SKILL.md'), 'utf8'), /Updated instructions/);
+    }
+    assert.deepEqual(getAgentConnections({ homeDir: f.homeDir }).connections.map(row => row.state),
+      ['claude', 'codex'].map(engine => engines.includes(engine) ? 'connected' : 'disconnected'));
+    assert.equal(applyUninstall({ homeDir: f.homeDir, deactivate: false }).status, 'uninstalled');
+    for (const [file, contents] of stored) assert.deepEqual(fs.readFileSync(file), contents);
+  });
+
+test('rebuild failure and unrecorded installed files preserve the previous app before any service stop', t => {
+  const f = setup(t); f.existing(); const before = inventory(f.loc.app), receipt = fs.readFileSync(f.loc.manifest);
+  assert.throws(() => f.install({ build: () => { throw new Error('build failed'); } }), /build failed/);
+  assert.deepEqual(inventory(f.loc.app), before); assert.deepEqual(fs.readFileSync(f.loc.manifest), receipt);
+  const extra = path.join(f.loc.app, 'user-note.txt'); fs.writeFileSync(extra, 'keep');
+  assert.throws(() => f.install({ build: () => assert.fail('must validate ownership first') }), /수정·추가/);
+  assert.equal(fs.readFileSync(extra, 'utf8'), 'keep');
+});
+
+function services(f) {
+  const receipt = JSON.parse(fs.readFileSync(f.loc.manifest));
+  for (const file of receipt.files) file.activation = 'registered';
+  fs.writeFileSync(f.loc.manifest, JSON.stringify(receipt));
+  const registered = new Set(receipt.files.map(file => file.label)), calls = [];
+  const state = { refuseStop: false, failStarts: 0, onStopped: null };
+  const launchctl = (_, args) => {
+    calls.push(args);
+    const file = args[0] === 'bootstrap' ? receipt.files.find(file => file.path === args[2])
+      : receipt.files.find(file => file.label === args[1].split('/').at(-1));
+    if (args[0] === 'bootstrap') {
+      if (state.failStarts > 0) { state.failStarts--; return { status: 5, stderr: 'fixture start failure' }; }
+      registered.add(file.label); return { status: 0 };
+    }
+    if (!registered.has(file.label)) return { status: 113, stderr: 'Could not find service' };
+    if (args[0] === 'bootout') {
+      if (state.refuseStop) return { status: 5, stderr: 'fixture stop failure' };
+      registered.delete(file.label); if (!registered.size) state.onStopped?.(); return { status: 0 };
+    }
+    return { status: 0, stdout: `program = ${file.argv[0]}\narguments = {\n${file.argv.join('\n')}\n}\n` };
+  };
+  return { state, registered, calls, launchctl };
+}
+
+test('reinstall restarts only its three owned services and refuses no-activate or failed stop without swapping files', t => {
+  const f = setup(t); f.existing(); const service = services(f), before = inventory(f.loc.app);
+  assert.throws(() => f.install({ launchctl: service.launchctl }), /종료 확인/);
+  assert.deepEqual(inventory(f.loc.app), before); assert.equal(service.calls.length, 0);
+  service.state.refuseStop = true;
+  assert.throws(() => f.install({ activate: true, launchctl: service.launchctl }), /fixture stop failure/);
+  assert.deepEqual(inventory(f.loc.app), before); assert.equal(service.registered.size, 3);
+  service.state.refuseStop = false;
+  fs.writeFileSync(path.join(f.sourceApp, 'Contents/MacOS/WorkLog'), 'v2');
+  assert.equal(f.install({ activate: true, launchctl: service.launchctl }).status, 'reinstalled');
+  assert.equal(service.registered.size, 3); assert.equal(fs.readFileSync(path.join(f.loc.app, 'Contents/MacOS/WorkLog'), 'utf8'), 'v2');
+});
+
+test('new service start failure restores previous files and services; failed rollback restart remains recoverable', t => {
+  const f = setup(t); f.existing(); const service = services(f), before = inventory(f.loc.app);
+  fs.writeFileSync(path.join(f.sourceApp, 'Contents/MacOS/WorkLog'), 'v2');
+  service.state.failStarts = 1;
+  assert.throws(() => f.install({ activate: true, launchctl: service.launchctl }), /이전 설치 파일을 복원/);
+  assert.deepEqual(inventory(f.loc.app), before); assert.equal(service.registered.size, 3);
+  service.state.failStarts = 2;
+  assert.throws(() => f.install({ activate: true, launchctl: service.launchctl }), /복구 기록과 백업/);
+  assert.deepEqual(inventory(f.loc.app), before);
+  assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).replacement.phase, 'restored');
+  assert.equal(f.install({ activate: true, launchctl: service.launchctl }).status, 'reinstalled');
+  assert.equal(service.registered.size, 3); assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).replacement, undefined);
+});
+
+test('failure after service shutdown and before journaling restarts the unchanged installation', t => {
+  const f = setup(t); f.existing(); const service = services(f), original = fs.renameSync;
+  service.state.onStopped = () => {
+    fs.renameSync = (source, target) => {
+      if (target === f.loc.manifest && JSON.parse(fs.readFileSync(source)).state === 'reinstalling') throw new Error('journal write failed');
+      return original(source, target);
+    };
+  };
+  try { assert.throws(() => f.install({ activate: true, launchctl: service.launchctl }), /journal write failed/); }
+  finally { fs.renameSync = original; }
+  assert.equal(service.registered.size, 3); assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).state, 'installed');
+});
+
+for (const boundary of ['backup-app', 'replace-app', 'backup-runtime', 'replace-runtime', 'cleanup', 'rollback-cleanup'])
+  test(`process termination at ${boundary} recovers ownership and completes the next installation`, t => {
+    const f = setup(t); f.existing(); connectAgent('codex', { homeDir: f.homeDir });
+    const configs = fs.readFileSync(f.loc.configs.codex);
+    fs.writeFileSync(path.join(f.sourceApp, 'Contents/MacOS/WorkLog'), 'new package');
+    const script = `
+      import fs from 'node:fs';
+      import { installFromSource } from ${JSON.stringify(new URL('../../scripts/install-source.mjs', import.meta.url).href)};
+      const rename = fs.renameSync, unlink = fs.unlinkSync;
+      fs.renameSync = (source, target) => {
+        if (${JSON.stringify(boundary)} === 'rollback-cleanup' && source.includes('.worklog-stage-') && source.endsWith('-1')) throw new Error('fixture replacement failure');
+        const result = rename(source, target);
+        if ((${JSON.stringify(boundary)} === 'backup-app' && target.includes('.worklog-reinstall-') && target.endsWith('-0'))
+          || (${JSON.stringify(boundary)} === 'replace-app' && source.includes('.worklog-stage-') && source.endsWith('-0'))
+          || (${JSON.stringify(boundary)} === 'backup-runtime' && target.includes('.worklog-reinstall-') && target.endsWith('-1'))
+          || (${JSON.stringify(boundary)} === 'replace-runtime' && source.includes('.worklog-stage-') && source.endsWith('-1'))) process.exit(79);
+        return result;
+      };
+      fs.unlinkSync = target => {
+        const result = unlink(target);
+        if (${JSON.stringify(boundary)} === 'cleanup' && target.includes('.worklog-reinstall-')) process.exit(79);
+        if (${JSON.stringify(boundary)} === 'rollback-cleanup' && target.startsWith(${JSON.stringify(f.loc.app + path.sep)})) process.exit(79);
+        return result;
+      };
+      installFromSource({homeDir:${JSON.stringify(f.homeDir)},projectRoot:${JSON.stringify(f.projectRoot)},sourceApp:${JSON.stringify(f.sourceApp)},activate:false});
+    `;
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      env: { ...process.env, TMPDIR: f.dir }, encoding: 'utf8', timeout: 15000 });
+    assert.equal(child.status, 79, child.stderr);
+    assert.ok(JSON.parse(fs.readFileSync(f.loc.manifest)).replacement);
+    assert.throws(() => applyUninstall({ homeDir: f.homeDir, deactivate: false }), /중단된 재설치/);
+    assert.equal(f.install().status, 'reinstalled');
+    assert.equal(fs.readFileSync(path.join(f.loc.app, 'Contents/MacOS/WorkLog'), 'utf8'), 'new package');
+    assert.deepEqual(fs.readFileSync(f.loc.configs.codex), configs);
+    assert.equal(getAgentConnections({ homeDir: f.homeDir }).connections[1].state, 'connected');
+    assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).replacement, undefined);
+    for (const folder of [path.dirname(f.loc.app), path.join(f.loc.data, 'versions')])
+      assert.ok(fs.readdirSync(folder).every(name => !name.startsWith('.worklog-')));
+  });

@@ -151,7 +151,9 @@ JSON 모드는 완료·확인 필요 결과의 최종 객체 하나를 stdout에
 
 설치·제거 Node CLI의 종료 코드는 `0` 완료, `1` 오류, `2` 확인 필요입니다. `make` 자체는 자식 명령이 실패하면 `2`를 반환하므로 CLI 오류와 확인 필요를 구분하려면 Node CLI를 직접 실행하세요. 출력 형식과 관계없이 설치·제거 정책은 같습니다.
 
-`make install`은 프로젝트 의존성을 설치하고 임시 폴더에서 앱을 빌드한 뒤 현재 사용자의 `~/Applications/WorkLog.app`에 설치합니다. 설치용 빌드는 `dist`에 앱이나 ZIP을 만들지 않으며, 임시 앱은 성공·실패 모두 정리합니다. 정상 설치가 이미 있으면 앱 빌드를 건너뛰고 기존 설치를 유지합니다. 이 경우에도 Node 준비와 `npm ci`는 수행될 수 있습니다.
+`make install`은 매번 프로젝트 의존성을 설치하고 현재 소스로 임시 앱을 빌드한 뒤 `~/Applications/WorkLog.app`에 설치합니다. 기존 설치가 있으면 소유 기록을 확인해 앱과 실행 파일을 새 빌드로 교체하므로, 먼저 제거할 필요가 없습니다. 설치용 빌드는 `dist`에 앱이나 ZIP을 만들지 않으며, 임시 빌드 폴더는 성공·실패 모두 정리합니다.
+
+재설치는 **업무 이력·산출물·사용자 작업 유형·실행 설정·Atlassian 설정과 Keychain 자격증명·토큰을 보존**합니다. Claude/Codex의 연결·해제 상태도 유지하며 외부 설정 파일, 수집 훅과 스킬 심링크를 다시 작성하지 않습니다. 파일 교체를 위해 WorkLog 앱과 전용 서비스를 재시작하므로 하네스가 실행 중인 작업은 중단될 수 있습니다. 원본 Claude/Codex 앱이나 사용자의 에이전트 세션 프로세스는 종료 대상이 아닙니다.
 
 Node는 `HARNESS_BUNDLE_NODE` → `NODE` 명시값을 우선하며, 지정하지 않으면 현재 `PATH`의 `node`, `NVM_BIN`, `${NVM_DIR:-$HOME/.nvm}/versions/node/`의 설치본, 프로젝트 캐시 순서로 찾습니다. 버전·아키텍처·`node:sqlite` 지원과 독립 실행 가능 여부를 검사합니다. Homebrew의 외부 동적 라이브러리에 의존하는 Node는 번들에 넣지 않고 다른 후보를 찾습니다. 명시한 Node가 부적합하면 다른 버전으로 바꾸지 않고 오류를 냅니다.
 
@@ -173,9 +175,9 @@ HARNESS_NODE_DOWNLOAD=0 make build
 
 설치·제거 대상을 먼저 보려면 `make install-plan`, `make uninstall-plan`을 사용합니다. 이 두 명령과 `make uninstall`, `make test`는 기존 Node만 사용하며 다운로드하지 않습니다. 제거는 빌드를 요구하지 않고, 셸에서 Node를 찾지 못하면 설치된 앱의 Node도 사용합니다.
 
-설치 후에는 `~/Applications/WorkLog.app`을 실행합니다. 일반 실행은 업무 목록 창을 열고 메뉴 막대 아이콘은 빠른 패널을 엽니다. **연결 설정**에서 사용할 Claude 또는 Codex의 **연결**을 선택하면 해당 엔진의 수집 훅과 요청 스킬을 연결합니다. 두 엔진의 연결 상태는 독립적이며 **연결 해제**도 각각 수행합니다. Atlassian은 같은 화면의 별도 설정에서 관리합니다. `make install`을 다시 실행해도 기존 설치본은 자동 교체되지 않습니다.
+설치 후에는 `~/Applications/WorkLog.app`을 실행합니다. 일반 실행은 업무 목록 창을 열고 메뉴 막대 아이콘은 빠른 패널을 엽니다. **연결 설정**에서 사용할 Claude 또는 Codex의 **연결**을 선택하면 해당 엔진의 수집 훅과 요청 스킬을 연결합니다. 두 엔진의 연결 상태는 독립적이며 **연결 해제**도 각각 수행합니다. Atlassian은 같은 화면의 별도 설정에서 관리합니다. 이후 최신 코드를 반영하려면 `make install`을 다시 실행합니다.
 
-설치가 성공했거나 정상 설치를 확인한 뒤에는 과거 빌드가 남긴 `dist/WorkLog.app`, `dist/package/WorkLog/WorkLog.app`을 확인합니다. 설치 소유 기록과 전체 파일 목록·내용·권한이 일치하는 복사본만 정리합니다. 수정·추가 파일, 앱이나 상위 경로의 심링크, 다른 버전이 있으면 보존하고 결과의 `build_cleanup.preserved` 목록에 알립니다. 예전 `dist/Work Log.app`이나 다른 위치의 앱은 자동 정리 대상이 아닙니다.
+설치·재설치가 성공한 뒤에는 과거 빌드가 남긴 `dist/WorkLog.app`, `dist/package/WorkLog/WorkLog.app`을 확인합니다. 설치 소유 기록과 전체 파일 목록·내용·권한이 일치하는 복사본만 정리합니다. 수정·추가 파일, 앱이나 상위 경로의 심링크, 다른 버전이 있으면 보존하고 결과의 `build_cleanup.preserved` 목록에 알립니다. 예전 `dist/Work Log.app`이나 다른 위치의 앱은 자동 정리 대상이 아닙니다.
 
 미리 빌드한 앱을 설치하려면 `make install INSTALL_ARGS='--source-app /path/to/WorkLog.app'`을 사용합니다. 이 경우 기존 Node로 설치하고 Node 다운로드·의존성 설치·앱 빌드를 건너뛰며, 지정한 원본 앱은 보존합니다.
 
@@ -194,7 +196,7 @@ make install-plan
 
 - `~/Applications/WorkLog.app`
 - 사용자 LaunchAgent 3개: 실행 서비스, 관리 서비스, 로그인 시 GUI 시작.
-- `~/Library/Application Support/WorkLog/versions/…`에 버전을 고정한 실행 파일.
+- `~/Library/Application Support/WorkLog/versions/…`의 설치 전용 실행 파일. 재설치할 때 기존 경로는 유지하고 내용을 교체합니다.
 
 GUI에서 Claude를 연결하면 기존 `~/.claude/settings.json`을 보존하면서 WorkLog 훅을 추가하고 `~/.claude/skills/work`를 연결합니다. Codex를 연결하면 `~/.codex/hooks.json`의 훅과 `~/.agents/skills/work`, `~/.codex/worklog/skills/work`를 연결합니다. 원래 설정은 백업하며 기존 사용자 훅·설정·동일 위치의 다른 스킬을 덮어쓰지 않습니다. Codex의 공식 자동 탐색은 `.agents/skills`를 사용하며 `.codex/worklog`는 같은 설치 원본의 참조 경로입니다. 기존 `CLAUDE.md`·`AGENTS.md`는 수정하지 않습니다.
 
@@ -202,7 +204,7 @@ GUI에서 Claude를 연결하면 기존 `~/.claude/settings.json`을 보존하�
 
 설치별 고유 ID, 앱·서비스의 파일 해시와 GUI에서 추가한 엔진별 훅·심링크 소유 근거를 `~/Library/Application Support/WorkLog/installation.json`에 기록합니다. **연결 해제**는 선택한 엔진의 WorkLog 연결만 제거하며 다른 엔진·사용자 설정은 유지합니다. `make uninstall`은 GUI에서 만든 연결까지 확인해 소유 기록과 일치하는 훅·스킬 연결·서비스·앱을 제거합니다. 사용자가 변경한 항목은 보존하고 `needs_attention`으로 보고합니다. 전체 설정 백업을 덮어 복원하거나 이름에 `worklog`가 포함됐다는 이유로 삭제하지 않습니다. **업무 DB·산출물·로그·백업·사용자 작업 유형·실행 설정·Keychain 앱 자격증명과 토큰은 보존합니다.** 자세한 동작과 검증 범위는 [설치 소유권과 연결 관리](docs/installation-ownership.md)에 있습니다.
 
-사내 정책에서 해당 훅·스킬·실행 엔진을 허용해야 합니다. 연결은 정책의 비활성화 설정을 해제하지 않습니다. 동일한 정상 설치를 다시 실행하면 앱과 기존 연결을 유지하고, 기존 사용자 파일이나 소유 기록 없는 과거 설치가 있으면 덮어쓰지 않습니다. 자동 업데이트·공증은 후속 범위입니다. 현재 워크스페이스에서는 실제 사용자 훅·LaunchAgent 설치를 수행하지 않았습니다.
+사내 정책에서 해당 훅·스킬·실행 엔진을 허용해야 합니다. 연결은 정책의 비활성화 설정을 해제하지 않습니다. 재설치는 설치 소유 파일의 전체 내용과 서비스 종료를 확인한 뒤 진행하며, 사용자가 변경·추가한 파일이나 소유 기록 없는 설치를 덮어쓰지 않습니다. 빌드 실패 시 기존 설치를 유지하고, 교체 중 실패하면 이전 설치 파일의 복원을 시도합니다. 무인 자동 업데이트·공증은 후속 범위입니다.
 
 ## 테스트
 

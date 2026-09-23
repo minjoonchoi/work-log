@@ -10,7 +10,7 @@ import { canonical, locked, matches, readManifest, safePath, saveManifest, stat 
 const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const options = { encoding: 'utf8', timeout: 15000 };
 export const missingService = result => result.status !== 0 && /could not find (?:specified )?service|service not found/i.test(result.stderr || '');
-function ownedService(result, file) {
+export function ownedService(result, file) {
   assert(result.status === 0, `서비스 조회 실패: ${result.stderr || result.error?.message || result.status}`);
   const program = result.stdout?.match(/(?:^|\n)\s*program = (.+)/)?.[1]?.trim();
   const args = result.stdout?.match(/(?:^|\n)\s*arguments = \{\s*\n([\s\S]*?)\n\s*\}/)?.[1]?.split('\n').map(s => s.trim()).filter(Boolean);

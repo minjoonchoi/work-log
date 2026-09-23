@@ -7,20 +7,25 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ROOT, atomic, assert, digest } from '../src/shared.mjs';
 import { createInstallReporter } from './install-output.mjs';
+import { intact, replaceInstall, recoverReplacement } from './replace-install.mjs';
 import { OWNER, quote, locations, stat, safePath, locked, readManifest, saveManifest, recordDirectories,
-  inventory, matches } from './install-state.mjs';
+  inventory } from './install-state.mjs';
 
 const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const plist = object => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>${Object.entries(object).map(([k, v]) => `<key>${xml(k)}</key>${typeof v === 'boolean' ? `<${v}/>` : Array.isArray(v) ? `<array>${v.map(s => `<string>${xml(s)}</string>`).join('')}</array>` : typeof v === 'object' ? `<dict>${Object.entries(v).map(([a, b]) => `<key>${xml(a)}</key>${typeof b === 'boolean' ? `<${b}/>` : `<string>${xml(b)}</string>`}`).join('')}</dict>` : `<string>${xml(v)}</string>`}`).join('')}</dict></plist>`;
 
 export function prepareInstall({ output, homeDir = os.homedir(), sourceApp }) {
-  const loc = locations(homeDir), installationId = crypto.randomUUID();
+  const loc = locations(homeDir), current = readManifest(loc);
+  const previous = current?.state === 'installed' ? current : null;
+  const installationId = previous?.id || crypto.randomUUID();
   const buildApp = path.join(ROOT, 'dist/WorkLog.app'), packagedApp = path.resolve(ROOT, '../../..');
   sourceApp ||= fs.existsSync(buildApp) ? buildApp
     : fs.existsSync(path.join(packagedApp, 'Contents/MacOS/WorkLogKeychain')) ? packagedApp
     : fs.existsSync(loc.app) ? loc.app : buildApp;
   const skills = ['work'];
-  const version = `0.3.1-${digest(fs.readFileSync(path.join(ROOT, 'harness/jobs.json'))).slice(0, 12)}`;
+  // Keep existing hook commands and symlinks stable; exact payloads are tracked
+  // by receipt inventories, not by this installation slot's name.
+  const version = previous?.version || `0.3.1-${digest(fs.readFileSync(path.join(ROOT, 'harness/jobs.json'))).slice(0, 12)}`;
   const runtimeRoot = path.join(loc.data, 'versions', version), node = path.join(runtimeRoot, 'node'), harness = path.join(runtimeRoot, 'harness');
   const files = [];
   for (const role of ['runtime', 'manager']) {
@@ -44,32 +49,36 @@ export function prepareInstall({ output, homeDir = os.homedir(), sourceApp }) {
   return plan;
 }
 
-function intact(loc, receipt) {
-  for (const tree of receipt.trees) for (const e of tree.entries) {
-    const target = path.join(tree.path, e.relative); safePath(loc.home, target, { symlink: e.kind === 'symlink' });
-    assert(matches(target, e), `기존 설치가 변경되었습니다. 보존 후 확인이 필요합니다: ${target}`);
-  }
-  for (const f of receipt.files) { safePath(loc.home, f.path); assert(matches(f.path, { ...f, kind: 'file' }), `기존 서비스 설정이 변경되었습니다: ${f.path}`); }
-
+export function checkInstallation({ homeDir = os.homedir(), activate = true, launchctl = spawnSync,
+  stopTimeoutMs = 10000, onProgress = () => {} } = {}) {
+  return locked(homeDir, loc => {
+    assert(!activate || loc.home === path.resolve(os.homedir()) || launchctl !== spawnSync, '다른 홈에는 서비스를 활성화할 수 없습니다. --no-activate를 사용하세요.');
+    const receipt = recoverReplacement(loc, readManifest(loc), { activate, launchctl, stopTimeoutMs, onProgress });
+    if (receipt?.state === 'installed') intact(loc, receipt);
+    else assert(!receipt || receipt.state === 'uninstalled', '이전 설치 또는 제거가 미완료입니다. uninstall 결과를 먼저 확인하세요.');
+    return receipt;
+  });
 }
 
-export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, launchctl = spawnSync, onProgress = () => {} } = {}) {
+export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, launchctl = spawnSync, onProgress = () => {},
+  reinstall = false, stopTimeoutMs = 10000 } = {}) {
   return locked(homeDir, loc => {
     onProgress('설치 경로와 기존 소유 기록을 확인합니다.');
     assert(plan.homeDir === loc.home && plan.dataDir === loc.data && plan.targetApp === loc.app
       && plan.runtimeRoot === path.join(loc.data, 'versions', plan.version), '설치 계획과 대상 홈이 다릅니다.');
     const previous = readManifest(loc);
+    assert(!previous?.replacement, '중단된 재설치가 있습니다. make install로 복구한 뒤 다시 실행하세요.');
     if (previous?.state === 'installed') {
       intact(loc, previous);
-      return { status: 'already_installed', installed: loc.app, installation_id: previous.id, manifest: loc.manifest, note: '기존 설치를 유지했습니다. 자동 업데이트는 수행하지 않습니다.' };
+      if (!reinstall) return { status: 'already_installed', installed: loc.app, installation_id: previous.id, manifest: loc.manifest, note: '기존 설치를 유지했습니다. make install로 최신 소스를 재설치할 수 있습니다.' };
     }
-    assert(!previous || previous.state === 'uninstalled', '이전 설치 또는 제거가 미완료입니다. uninstall 결과를 먼저 확인하세요.');
+    assert(!previous || ['uninstalled', 'installed'].includes(previous.state), '이전 설치 또는 제거가 미완료입니다. uninstall 결과를 먼저 확인하세요.');
     assert(!activate || loc.home === path.resolve(os.homedir()) || launchctl !== spawnSync, '다른 홈에는 서비스를 활성화할 수 없습니다. --no-activate를 사용하세요.');
-    for (const target of [loc.app, plan.runtimeRoot, ...plan.files.map(f => f.target)]) {
+    if (previous?.state !== 'installed') for (const target of [loc.app, plan.runtimeRoot, ...plan.files.map(f => f.target)]) {
       safePath(loc.home, target, { symlink: true });
       assert(!stat(target), `이미 설치되었거나 사용자가 소유한 경로가 있습니다. 덮어쓰지 않습니다: ${target}`);
     }
-    if (activate) for (const file of plan.files) {
+    if (activate && previous?.state !== 'installed') for (const file of plan.files) {
       const existing = launchctl('launchctl', ['print', `gui/${process.getuid()}/${file.label}`], { encoding: 'utf8', timeout: 15000 });
       assert(existing.status !== 0, `이미 등록된 서비스가 있습니다. 소유를 인계하지 않습니다: ${file.label}`);
       assert(/could not find (?:specified )?service|service not found/i.test(existing.stderr || ''), `기존 서비스 확인 실패: ${existing.stderr || existing.error?.message || existing.status}`);
@@ -92,6 +101,8 @@ export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, la
         atomic(helper, `#!/bin/sh\nexport HARNESS_DATA_DIR=${quote(loc.data)}\nexec ${quote(path.join(plan.runtimeRoot, 'node'))} ${quote(path.join(plan.runtimeRoot, 'harness/bin/harness.mjs'))} "$@"\n`);
         fs.chmodSync(helper, 0o755);
       }
+      if (previous?.state === 'installed') return replaceInstall(loc, previous, plan, [stagedApp, stagedRuntime],
+        { activate, launchctl, stopTimeoutMs, onProgress });
       const backupDir = path.join(loc.data, 'install-backups', plan.installationId);
       receipt = { format: 2, owner: OWNER, id: plan.installationId, home: loc.home, version: plan.version, skills: plan.skills, state: 'installing', created_at: new Date().toISOString(),
         trees: [{ path: loc.app, entries: inventory(stagedApp) }, { path: plan.runtimeRoot, entries: inventory(stagedRuntime) }],
@@ -135,8 +146,9 @@ if (invokedAsProgram) {
   try {
     const { values } = parseArgs({ options: { json: { type: 'boolean' }, apply: { type: 'boolean' }, output: { type: 'string' }, 'home-dir': { type: 'string' }, 'source-app': { type: 'string' }, 'no-activate': { type: 'boolean' } } });
     reporter.progress('설치 계획을 준비합니다.');
+    if (values.apply) checkInstallation({ homeDir: values['home-dir'], activate: !values['no-activate'], onProgress: reporter.progress });
     const output = values.output || fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-install-plan-'));
     const plan = prepareInstall({ output, homeDir: values['home-dir'], sourceApp: values['source-app'] });
-    reporter.result('install', values.apply ? applyInstall(plan, { activate: !values['no-activate'], onProgress: reporter.progress }) : { ...plan, output });
+    reporter.result('install', values.apply ? applyInstall(plan, { activate: !values['no-activate'], reinstall: true, onProgress: reporter.progress }) : { ...plan, output });
   } catch (e) { reporter.error('install', e); process.exitCode = 1; }
 }
