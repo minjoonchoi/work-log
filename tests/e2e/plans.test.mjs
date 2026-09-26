@@ -25,7 +25,10 @@ test('compound request forks after reviewed input, joins immutable outputs and u
   assert.ok(Date.parse(runs[2].attempts[0].started_at) >= Date.parse(first));
   const joinPrompt = fs.readFileSync(path.join(runs[3].attempts[0].directory, 'prompt.txt'), 'utf8');
   for (const artifact of plan.artifacts.slice(0, 3)) { assert.ok(joinPrompt.includes(artifact.content_digest)); assert.equal(digest(fs.readFileSync(artifact.file)), artifact.content_digest); }
-  assert.ok(joinPrompt.includes('자료 파일 참조') && joinPrompt.includes('읽기 전용'));
+  const inline = JSON.parse(joinPrompt.match(/\n고정된 자료 본문[^:]+: ([^\n]+)\n/)[1]);
+  for (const artifact of plan.artifacts.slice(0, 3))
+    assert.equal(inline.find(source => source.content_digest === artifact.content_digest)?.content, fs.readFileSync(artifact.file, 'utf8'));
+  assert.deepEqual(runs[3].attempts.map(attempt => attempt.stage), ['produce', 'review']);
   assert.ok(joinPrompt.includes('이 작업에 배정된 원래 요청 범위'));
   const item = await eventually(() => h.manager(`/items/${plan.work_item_id}`), value => value.runs?.length === 4);
   assert.equal(item.runs.length, 4);

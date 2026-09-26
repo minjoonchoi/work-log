@@ -5,6 +5,8 @@ const [output, stage] = process.argv.slice(2);
 const fixture = JSON.parse(fs.readFileSync(process.env.HARNESS_FIXTURE_FILE, 'utf8'));
 const { job, round = 0, scenario = 'success' } = fixture;
 let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
+if (fixture.stallStage === stage && (fixture.epoch || 0) === 0)
+  await new Promise(resolve => setTimeout(resolve, fixture.stallMs || 15000));
 if (scenario === 'slow' || scenario === 'child') {
   if (scenario === 'child') {
     const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });

@@ -1,6 +1,11 @@
-export function executionSettingsUI({ api, esc, modal, toast }) {
+export function executionSettingsUI({ api, esc, modal, toast, showConnections }) {
   const $ = selector => document.querySelector(selector);
-  let snapshot, activeDraft;
+  let snapshot, activeDraft, currentGroup = 'worklog';
+  const lastTask = new Map();
+  const worklogTasks = new Set(['session.summarize', 'text.rewrite', 'task.type.draft', 'work.report.create', 'work-item.result.summarize']);
+  const groupOf = task => task.source === 'user' ? 'harness' : task.management_group || (worklogTasks.has(task.id) ? 'worklog' : 'harness');
+  const installed = task => groupOf(task) === 'worklog' || task.installed !== false;
+  const editable = task => task.source === 'user' || installed(task);
   const draftTerminal = new Set(['completed', 'failed', 'blocked', 'cancelled', 'interrupted']);
   function cancelRemoteDraft(work) {
     if (!work.id || work.settled) return Promise.resolve();
@@ -96,13 +101,13 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
       <p class="help">유형 기본값: ${esc(defaults(settings))}</p></section>`;
   }
   const categories = { product: '제품 · PO', project: '프로젝트 · PM', design: '공통 설계', frontend: '프런트엔드', backend: '백엔드', engineering: '개발 공통', knowledge: '조사·문서', system: '시스템 작업' };
-  const option = (task, selected) => `<option value="${esc(task.id)}" ${task.id === selected ? 'selected' : ''}>${esc(task.label)} · ${esc(task.id)}</option>`;
+  const option = (task, selected) => `<option value="${esc(task.id)}" ${task.id === selected ? 'selected' : ''}>${esc(task.label)} · ${esc(task.id)}${installed(task) ? '' : task.source === 'user' ? ' · 기반 패키지 미설치' : ' · 미설치'}</option>`;
   const taskOptions = selected => {
     const groups = Object.entries(categories).map(([category, label]) => {
-      const tasks = snapshot.tasks.filter(task => task.source !== 'user' && task.category === category);
+      const tasks = snapshot.tasks.filter(task => task.source !== 'user' && groupOf(task) === currentGroup && task.category === category);
       return tasks.length ? `<optgroup label="${esc(label)}">${tasks.map(task => option(task, selected)).join('')}</optgroup>` : '';
     }).join('');
-    const custom = snapshot.tasks.filter(task => task.source === 'user');
+    const custom = snapshot.tasks.filter(task => task.source === 'user' && currentGroup === 'harness');
     return groups + (custom.length ? `<optgroup label="사용자 작업">${custom.map(task => option(task, selected)).join('')}</optgroup>` : '');
   };
   const boundaryDetails = boundary => !boundary ? '' : `<section id="task-boundary" aria-label="작업 책임 경계">
@@ -188,29 +193,56 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
       error.textContent = failure.message; error.hidden = false; error.focus();
     } finally { enabled.forEach(control => { control.disabled = false; }); }
   }
-  function render(taskId) {
-    const task = snapshot.tasks.find(value => value.id === taskId) || snapshot.tasks[0];
-    const custom = task.source === 'user';
+  function render(taskId, group = currentGroup) {
+    const requested = snapshot.tasks.find(value => value.id === taskId);
+    currentGroup = requested ? groupOf(requested) : group;
+    const tasks = snapshot.tasks.filter(value => groupOf(value) === currentGroup);
+    const task = requested || tasks.find(value => value.id === lastTask.get(currentGroup)) || tasks.find(installed) || tasks[0];
+    if (task) lastTask.set(currentGroup, task.id);
+    const custom = task?.source === 'user', inactive = task && !editable(task);
     const template = custom && snapshot.tasks.find(value => value.id === task.template_id);
     modal(`<h2>작업 실행 설정</h2><p>새로 시작하는 작업에 적용할 지시문과 backend 설정입니다. 진행 중인 작업의 고정 설정은 바뀌지 않습니다.</p>
       ${errorMarkup}
-      <div class="execution-task-toolbar"><label for="execution-task">작업 유형</label><button id="add-custom-task" class="secondary">사용자 작업 등록</button></div>
-      <select id="execution-task">${taskOptions(task.id)}</select>
+      <div class="execution-management-tabs" role="tablist" aria-label="작업 관리 영역">${[['worklog', 'WorkLog 자동 생성'], ['harness', '하네스 작업']].map(([group, label]) => `<button type="button" id="execution-group-${group}" role="tab" aria-selected="${currentGroup === group}" aria-controls="execution-management-panel" tabindex="${currentGroup === group ? 0 : -1}">${label}</button>`).join('')}</div>
+      <section id="execution-management-panel" role="tabpanel" aria-labelledby="execution-group-${currentGroup}">
+      <p class="execution-group-description">${currentGroup === 'worklog' ? '제목·설명, 세션 요약, 업무 요약 등 앱의 자동 생성 기능입니다. 직무 패키지나 에이전트 위임 연결 없이 사용할 수 있습니다.' : '에이전트에서 요청을 위임할 때 사용하는 작업 유형입니다. 직무 패키지는 연결 설정에서 설치·제거하고, 사용자 등록 유형은 계속 보존합니다.'}</p>
+      <div class="execution-task-toolbar"><label for="execution-task">작업 유형</label>${currentGroup === 'harness' ? `<div><button id="manage-harness-packages" class="secondary">직무 패키지 관리</button><button id="add-custom-task" class="secondary" ${(snapshot.templates || []).length ? '' : 'disabled'}>사용자 작업 등록</button></div>` : ''}</div>
+      ${currentGroup === 'harness' && !(snapshot.templates || []).length ? '<p class="help">새 사용자 작업을 등록하려면 기반으로 사용할 직무 패키지를 먼저 설치하세요. 기존 사용자 작업은 계속 편집할 수 있습니다.</p>' : ''}
+      <select id="execution-task" ${task ? '' : 'disabled'}>${taskOptions(task?.id)}</select>
+      ${task ? `
+      ${inactive ? '<p class="connection-note" id="execution-package-required">미설치 작업 유형입니다. 연결 설정에서 관련 직무 패키지를 설치하면 편집하고 사용할 수 있습니다. 기존 저장 설정은 유지됩니다.</p>' : ''}
+      ${custom && !installed(task) ? '<p class="connection-note" id="custom-package-required">기반 작업의 직무 패키지가 미설치 상태여서 지금은 실행할 수 없습니다. 사용자 작업과 편집한 설정은 보존되며 계속 수정할 수 있습니다. 실행하려면 연결 설정에서 기반 패키지를 설치하세요.</p>' : ''}
       ${custom ? `<p class="execution-task-source"><span>사용자 작업</span><small>${esc(task.id)}</small></p>${metadata(task)}${inherited(template || { id: task.template_id, label: task.template_id })}` : ''}
-      ${boundaryDetails(task.boundary)}${editor(task)}
+      ${boundaryDetails(task.boundary)}<fieldset class="execution-editor-fields" ${inactive ? 'disabled aria-describedby="execution-package-required"' : ''}>${editor(task)}</fieldset>
       ${custom ? '<p class="help">기본값 복원은 지시문과 backend 설정을 복원합니다. 등록한 작업 유형과 이름·목적·키워드는 유지됩니다.</p>' : ''}
-      <div class="dialog-actions execution-settings-actions"><button data-close>닫기</button>${custom ? '<button id="delete-custom-task" class="custom-task-delete">작업 등록 삭제</button>' : ''}<button id="reset-execution" class="secondary" ${task.overridden ? '' : 'disabled'}>기본값 복원</button><button id="save-execution" class="primary">저장</button></div>
-      ${custom ? `<section id="custom-task-delete-confirmation" class="custom-task-delete-confirmation" aria-label="작업 등록 삭제 확인" hidden><p><strong>${esc(task.label)}</strong> 작업 등록을 삭제할까요? 이후 새 작업에서 선택할 수 없으며, 기존 실행 기록은 유지됩니다.</p><div class="dialog-actions"><button id="cancel-custom-task-delete">취소</button><button id="confirm-custom-task-delete" class="custom-task-delete">등록 삭제</button></div></section>` : ''}`);
+      <div class="dialog-actions execution-settings-actions"><button data-close>닫기</button>${custom ? '<button id="delete-custom-task" class="custom-task-delete">작업 등록 삭제</button>' : ''}<button id="reset-execution" class="secondary" ${task.overridden && !inactive ? '' : 'disabled'}>기본값 복원</button><button id="save-execution" class="primary" ${inactive ? 'disabled' : ''}>저장</button></div>
+      ${custom ? `<section id="custom-task-delete-confirmation" class="custom-task-delete-confirmation" aria-label="작업 등록 삭제 확인" hidden><p><strong>${esc(task.label)}</strong> 작업 등록을 삭제할까요? 이후 새 작업에서 선택할 수 없으며, 기존 실행 기록은 유지됩니다.</p><div class="dialog-actions"><button id="cancel-custom-task-delete">취소</button><button id="confirm-custom-task-delete" class="custom-task-delete">등록 삭제</button></div></section>` : ''}`
+      : '<p class="help">사용할 수 있는 작업 유형이 없습니다. 직무 패키지를 설치하세요.</p><div class="dialog-actions"><button data-close>닫기</button></div>'}
+      </section>`);
+    const groupTabs = ['worklog', 'harness'].map(group => $(`#execution-group-${group}`));
+    const switchGroup = (index, focus = false) => {
+      const group = ['worklog', 'harness'][index]; render(undefined, group);
+      if (focus) $(`#execution-group-${group}`).focus();
+    };
+    groupTabs.forEach((tab, index) => {
+      tab.onclick = () => switchGroup(index);
+      tab.onkeydown = event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault(); switchGroup(event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1 - index, true);
+      };
+    });
     $('#execution-task').onchange = event => render(event.target.value);
-    $('#add-custom-task').onclick = () => renderDraftRequest(task.id);
-    bindEditor(task);
-    $('#save-execution').onclick = () => mutate(async () => {
+    if ($('#manage-harness-packages')) $('#manage-harness-packages').onclick = () => showConnections?.();
+    if ($('#add-custom-task')) $('#add-custom-task').onclick = () => { if ((snapshot.templates || []).length) renderDraftRequest(task?.id); };
+    if (!task) return;
+    if (!inactive) bindEditor(task);
+    $('#save-execution').onclick = () => !inactive && mutate(async () => {
       snapshot = await api(`/execution-settings/${encodeURIComponent(task.id)}`, { method: 'PUT', body: {
         ...executionValues(), ...(custom ? metadataValues() : {})
       } });
       toast('작업 실행 설정을 저장했습니다.'); render(task.id);
     });
-    $('#reset-execution').onclick = () => mutate(async () => {
+    $('#reset-execution').onclick = () => !inactive && mutate(async () => {
       snapshot = await api(`/execution-settings/${encodeURIComponent(task.id)}`, { method: 'DELETE', body: { revision: snapshot.revision } });
       toast('유형 기본값으로 복원했습니다.'); render(task.id);
     });
@@ -307,7 +339,7 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
     };
   }
   function renderCreate(previousId, templateId = 'document.create', draft = {}, guide = {}) {
-    const templates = (snapshot.templates || []).map(id => snapshot.tasks.find(task => task.id === id)).filter(Boolean);
+    const templates = (snapshot.templates || []).map(id => snapshot.tasks.find(task => task.id === id)).filter(task => task && installed(task));
     const template = templates.find(task => task.id === templateId) || templates[0];
     const form = template && { ...template, instruction: draft.instruction ?? template.instruction,
       backend: draft.backend ?? (guide.generated ? 'codex' : template.backend),
@@ -333,6 +365,6 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
       toast('사용자 작업을 등록했습니다.'); render(snapshot.created_task_id);
     });
   }
-  async function showSettings() { snapshot = await api('/execution-settings'); render(snapshot.tasks[0]?.id); }
+  async function showSettings() { snapshot = await api('/execution-settings'); render(undefined, 'worklog'); }
   return { showSettings };
 }

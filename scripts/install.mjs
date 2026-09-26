@@ -67,6 +67,10 @@ export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, la
     assert(plan.homeDir === loc.home && plan.dataDir === loc.data && plan.targetApp === loc.app
       && plan.runtimeRoot === path.join(loc.data, 'versions', plan.version), '설치 계획과 대상 홈이 다릅니다.');
     const previous = readManifest(loc);
+    // A real fresh install starts with the WorkLog utilities only. The setting
+    // is user data: keep it across uninstall/reinstall and never overwrite an
+    // existing user's implicit legacy catalog when upgrading.
+    const freshData = !previous && !fs.readdirSync(loc.data).some(name => name !== 'installation.lock');
     assert(!previous?.replacement, '중단된 재설치가 있습니다. make install로 복구한 뒤 다시 실행하세요.');
     if (previous?.state === 'installed') {
       intact(loc, previous);
@@ -103,6 +107,12 @@ export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, la
       }
       if (previous?.state === 'installed') return replaceInstall(loc, previous, plan, [stagedApp, stagedRuntime],
         { activate, launchctl, stopTimeoutMs, onProgress });
+      // Persist opt-in before the ownership journal and target copies. A crash
+      // during first installation must not turn the retry into a legacy user.
+      if (freshData) {
+        const packageFile = path.join(loc.data, 'harness-packages.json'); safePath(loc.home, packageFile);
+        fs.writeFileSync(packageFile, JSON.stringify({ version: 1, revision: 0, installed: [] }, null, 2), { flag: 'wx', mode: 0o600 });
+      }
       const backupDir = path.join(loc.data, 'install-backups', plan.installationId);
       receipt = { format: 2, owner: OWNER, id: plan.installationId, home: loc.home, version: plan.version, skills: plan.skills, state: 'installing', created_at: new Date().toISOString(),
         trees: [{ path: loc.app, entries: inventory(stagedApp) }, { path: plan.runtimeRoot, entries: inventory(stagedRuntime) }],

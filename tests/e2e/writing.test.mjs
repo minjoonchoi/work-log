@@ -18,7 +18,7 @@ async function fixture(h, value) {
   await h.stop('manager'); h.env.HARNESS_TEST_WRITING_FIXTURE = JSON.stringify(value); await h.start('manager');
 }
 
-test('GUI command API snapshots all merged sessions and accepted summaries into one registered headless task', async t => {
+test('GUI command API snapshots merged histories without duplicating an open session summary into the metadata input', async t => {
   const h = await setup(t);
   await h.ingest([...pair('author', '09:00:00', '09:05:00', 'one', { text: '요구사항 정리' }),
     ...pair('reviewer', '2026-09-18T09:00:00Z', '2026-09-18T09:10:00Z', 'two', { engine: 'claude', text: '설계 검토' })]);
@@ -40,10 +40,11 @@ test('GUI command API snapshots all merged sessions and accepted summaries into 
   assert.equal(run.task, 'text.rewrite'); assert.equal(run.internal, true);
   assert.equal(run.request.input.format, 'work-item-metadata');
   assert.equal(run.request.input.sessions.length, 2);
-  assert.equal(run.request.input.sessions[0].summary, accepted);
+  assert.equal(run.request.input.sessions[0].summary, null);
   assert.deepEqual(run.request.input.sessions.map(s => s.engine), ['codex', 'claude']);
   assert.deepEqual(run.request.input.sessions.flatMap(s => s.events).map(e => e.text), originalEvents.map(e => e.text));
   detail = await h.manager(`/items/${item.id}`);
+  assert.equal(detail.sessions[0].summary.text, accepted, 'the accepted session summary remains stored');
   assert.equal(detail.item.version, item.version + 1); assert.match(detail.item.description, /2개 세션/);
   assert.deepEqual([...detail.item.description.matchAll(/^h2\. (.+)$/gm)].map(match => match[1]), ['배경', '목표', '요구사항', '작업 범위', '참고사항']);
   assert.equal(detail.item.manual, 1); assert.equal((await h.manager('/items')).length, 1);
@@ -284,13 +285,17 @@ test('metadata default requests five Jira wiki sections and keeps missing result
 });
 
 test('oversized automatic summary is reported without blocking unrelated manual work or retrying forever', async t => {
-  const h = await setup(t); await h.stop('manager'); h.env.HARNESS_TEST_SESSION_SUMMARIES = '1'; await h.start('manager');
+  const h = await setup(t);
   const events = Array.from({ length: 1001 }, (_, i) => pair('large-writing', '09:00:00', '09:05:00', `t${i}`)).flat();
   for (let i = 0; i < events.length; i += 500) await h.ingest(events.slice(i, i + 500));
   await h.ingest([...pair('large-writing', '09:25:00', '09:30:00', 'next', { source: 'system_hook' }), ...pair('normal-writing', '10:00:00', '10:05:00', 'normal')]);
+  // Seed the full oversized source before enabling periodic admission. Its
+  // final, small idle window is independently eligible for a valid summary.
+  await h.stop('manager'); h.env.HARNESS_TEST_SESSION_SUMMARIES = '1'; await h.start('manager');
   const items = await h.manager('/items'), large = items.find(i => i.session_count === 2), normal = items.find(i => i.session_count === 1);
   const failed = await eventually(() => h.manager(`/items/${large.id}`), d => d.sessions[0].summary?.state === 'failed');
-  assert.match(failed.sessions[0].summary.message, /2000/); assert.equal(failed.runs.length, 0);
+  assert.match(failed.sessions[0].summary.message, /2000/); assert.equal(failed.sessions[0].rewrite, null);
+  assert.equal(failed.sessions[0].summary.run_id, null);
   assert.equal(failed.item.activity, 'recent'); assert.equal((await h.manager('/quick')).counts.notifications, 1);
   await rewriteItem(h, normal, 'unrelated-normal-writing'); assert.equal((await finished(h, 'unrelated-normal-writing')).state, 'completed');
   const again = await h.manager(`/items/${large.id}`);

@@ -21,11 +21,12 @@ async function onlyItem(h, owner) {
   return h.manager(`/items/${owner}`);
 }
 
-test('first session binding wins over later item hints, out-of-order timestamps and idle gaps', async t => {
+test('first input binding wins over lifecycle hints, out-of-order timestamps and idle gaps', async t => {
   const h = await setup(t), owner = 'first-session-owner';
-  await h.ingest([event('native-fixed', 'session.started', '09:00:00', null, { work_item_id: owner })]);
+  await h.ingest([event('native-fixed', 'session.started', '09:00:00', null, { work_item_id: 'ignored-start-owner' })]);
+  assert.deepEqual(await h.manager('/items'), []);
   const events = [
-    ...pair('native-fixed', '09:01:00', '09:05:00', 'one', { work_item_id: 'ignored-input-owner', text: '첫 사용자 원문' }),
+    ...pair('native-fixed', '09:01:00', '09:05:00', 'one', { work_item_id: owner, text: '첫 사용자 원문' }),
     ...pair('native-fixed', '09:25:00', '09:26:00', 'two', { work_item_id: 'ignored-gap-owner', parent: { work_item_id: 'ignored-parent-owner' }, text: '20분 뒤 사용자 원문' })
   ];
   await h.ingest(events);
@@ -38,7 +39,7 @@ test('first session binding wins over later item hints, out-of-order timestamps 
     const stored = detail.events.find(row => row.id === original.id);
     assert.equal(stored.text, original.text); assert.equal(stored.event_at, new Date(original.event_at).toISOString());
     assert.equal(stored.work_item_id, owner); assert.equal(stored.agent_session_id, original.agent_session_id);
-    assert.equal(stored.requested_work_item_id, original.work_item_id);
+    assert.equal(stored.requested_work_item_id, original.work_item_id !== owner ? original.work_item_id : undefined);
     if (original.observed_at) assert.equal(stored.observed_at, original.observed_at);
   }
   assert.deepEqual(await h.ingest(events), { inserted: 0, duplicates: events.length });

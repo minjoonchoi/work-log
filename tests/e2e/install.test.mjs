@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { prepareInstall, applyInstall } from '../../scripts/install.mjs';
 import { prepareUninstall, applyUninstall } from '../../scripts/uninstall.mjs';
 import { controlServices } from '../../scripts/service-control.mjs';
-import { getAgentConnections, connectAgent, disconnectAgent } from '../../scripts/agent-connections.mjs';
+import { getAgentConnections, connectAgent, disconnectAgent, connectAgentComponent, disconnectAgentComponent } from '../../scripts/agent-connections.mjs';
 import { quote, locations, skillLinks } from '../../scripts/install-state.mjs';
 import { ROOT, readEndpoint } from '../../src/shared.mjs';
 import { Harness, eventually } from '../helpers.mjs';
@@ -106,8 +106,10 @@ for (const relative of ['node', 'harness/src/hook.mjs', 'harness/skills/work/SKI
   const config = fs.readFileSync(f.loc.configs.claude), receipt = fs.readFileSync(f.loc.manifest);
   fs.unlinkSync(file);
   const snapshot = getAgentConnections({ homeDir: f.homeDir });
-  assert.equal(snapshot.available, true); assert.equal(snapshot.connections[0].state, 'needs_attention');
-  assert.match(snapshot.connections[0].message, /실행 파일 또는 스킬/);
+  const affected = relative.includes('skills/') ? 'harness' : 'tracking';
+  assert.equal(snapshot.available, true); assert.equal(snapshot.connections[0][affected].state, 'needs_attention');
+  assert.equal(snapshot.connections[0].state, snapshot.connections[0].tracking.state);
+  assert.match(snapshot.connections[0][affected].message, /실행 파일 또는 스킬/);
   assert.throws(() => connectAgent('claude', { homeDir: f.homeDir }), /실행 파일 또는 스킬/);
   assert.deepEqual(fs.readFileSync(f.loc.configs.claude), config); assert.deepEqual(fs.readFileSync(f.loc.manifest), receipt);
   assert.ok(present(f.links[0].target)); assert.equal(present(file), false);
@@ -126,7 +128,7 @@ test('a link created by another actor after connection preflight is never adopte
   finally { fs.symlinkSync = original; }
   const identity = fs.lstatSync(link.target), receipt = JSON.parse(fs.readFileSync(f.loc.manifest));
   assert.equal(receipt.links[0].pending, true); assert.equal(receipt.links[0].identity, undefined);
-  assert.equal(getAgentConnections({ homeDir: f.homeDir }).connections[0].state, 'needs_attention');
+  assert.equal(getAgentConnections({ homeDir: f.homeDir }).connections[0].harness.state, 'needs_attention');
   assert.throws(() => disconnectAgent('claude', { homeDir: f.homeDir }), /소유를 확인/);
   assert.equal(fs.readlinkSync(link.target), link.source); assert.equal(fs.lstatSync(link.target).ino, identity.ino);
   assert.throws(() => connectAgent('claude', { homeDir: f.homeDir }), /소유를 확인/);
@@ -185,7 +187,7 @@ test('connection intent survives partial failure and reconnect safely repairs on
   };
   try { assert.throws(() => connectAgent('claude', { homeDir: f.homeDir }), /fixture link/); }
   finally { fs.symlinkSync = original; }
-  assert.equal(getAgentConnections({ homeDir: f.homeDir }).connections[0].state, 'needs_attention');
+  assert.equal(getAgentConnections({ homeDir: f.homeDir }).connections[0].harness.state, 'needs_attention');
   assert.equal(connectAgent('claude', { homeDir: f.homeDir }).connections[0].state, 'connected');
   assert.equal(f.read('claude').hooks.Stop.length, 2); assert.deepEqual(f.read('codex'), f.config);
   assert.equal(f.uninstall().status, 'uninstalled'); assert.deepEqual(f.read('claude'), f.config);
@@ -452,6 +454,7 @@ test('installed request skill delegates natural language to classification and a
   const h = new Harness(f.loc.data); h.executable = path.join(f.plan.runtimeRoot, 'node'); h.serviceRoot = path.join(f.plan.runtimeRoot, 'harness');
   h.testMode = false; h.env = { HARNESS_CODEX_BIN: path.join(ROOT, 'tests/fixtures/cli-double.mjs') };
   t.after(() => h.close(false)); await h.start('runtime'); await h.start('manager');
+  await h.runtime('/harness-packages/po', { method: 'PUT', body: { revision: 0, installed: true } });
   const requestFile = path.join(f.dir, 'request.json'); fs.writeFileSync(requestFile, JSON.stringify({ prompt: '초대 기능 PRD를 작성해 주세요.' }));
   const helper = path.join(f.links[0].target, 'scripts/harness');
   const child = spawnSync(helper, ['run', '--input', requestFile, '--wait'], { cwd: f.dir,
@@ -476,6 +479,7 @@ test('packaged custom task settings survive in-place reinstall unchanged and the
   f.install(); f.connect();
   const h = new Harness(f.loc.data); h.executable = path.join(f.plan.runtimeRoot, 'node'); h.serviceRoot = path.join(f.plan.runtimeRoot, 'harness');
   t.after(() => h.close(false)); await h.start('runtime'); await h.start('manager');
+  await h.runtime('/harness-packages/po', { method: 'PUT', body: { revision: 0, installed: true } });
   const initial = await h.manager('/execution-settings');
   const backends = { codex: { model: null, effort: null }, claude: { model: null, effort: null } };
   const created = await h.manager('/execution-settings/custom-tasks', { method: 'POST', body: {
@@ -516,4 +520,67 @@ test('packaged custom task settings survive in-place reinstall unchanged and the
   assert.match(await icons.text(), /\.menu-icon/);
   await h.close(false); assert.equal(f.uninstall().status, 'uninstalled');
   assert.deepEqual(fs.readFileSync(settingsFile), original);
+});
+
+test('fresh installation starts with optional harness packages absent and preserves selection across uninstall/reinstall', t => {
+  const f = setup(t); f.install(); const file = path.join(f.loc.data, 'harness-packages.json');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { version: 1, revision: 0, installed: [] });
+  const selection = JSON.stringify({ version: 1, revision: 4, installed: ['pm', 'common'] }, null, 2);
+  fs.writeFileSync(file, selection);
+  assert.equal(f.uninstall().status, 'uninstalled'); assert.equal(fs.readFileSync(file, 'utf8'), selection);
+  assert.equal(f.install().status, 'installed'); assert.equal(fs.readFileSync(file, 'utf8'), selection);
+});
+
+test('installing over preexisting work history retains the implicit legacy catalog', t => {
+  const f = setup(t); fs.mkdirSync(f.loc.data, { recursive: true });
+  const history = path.join(f.loc.data, 'existing-history.json'); fs.writeFileSync(history, '{"preserved":true}');
+  f.install(); assert.equal(fs.existsSync(path.join(f.loc.data, 'harness-packages.json')), false);
+  assert.equal(fs.readFileSync(history, 'utf8'), '{"preserved":true}');
+  f.uninstall(); f.install(); assert.equal(fs.existsSync(path.join(f.loc.data, 'harness-packages.json')), false);
+});
+
+test('failed first target copy preserves fresh opt-in through cleanup and installation retry', t => {
+  const f = setup(t), copy = fs.cpSync;
+  fs.cpSync = (source, target, ...options) => {
+    if (target === f.loc.app) throw new Error('fixture first target copy failure');
+    return copy(source, target, ...options);
+  };
+  try { assert.throws(() => f.install(), /fixture first target copy failure/); }
+  finally { fs.cpSync = copy; }
+  const file = path.join(f.loc.data, 'harness-packages.json');
+  assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).state, 'install_failed');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)).installed, []);
+  assert.equal(f.uninstall().status, 'uninstalled'); assert.equal(f.install().status, 'installed');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)).installed, []);
+});
+
+test('installed native delegation needs its own connection and disconnect blocks only new acceptance', async t => {
+  const f = setup(t); f.install();
+  connectAgentComponent('codex', 'tracking', { homeDir: f.homeDir });
+  const h = new Harness(f.loc.data); t.after(() => h.close(false)); await h.start('runtime');
+  await h.runtime('/harness-packages/common', { method: 'PUT', body: { revision: 0, installed: true } });
+  const request = { task: 'document.create', prompt: undefined, input: { requirements: '사용자 자료로 문서를 작성한다.' },
+    origin: { engine: 'codex', agent_session_id: 'existing-agent', turn_id: 'delegated-turn' },
+    idempotency_key: 'connected-native-request', fixture: { delayMs: 250 } };
+  await assert.rejects(h.run(request), /하네스 위임 연결/);
+  connectAgentComponent('codex', 'harness', { homeDir: f.homeDir });
+  const accepted = await h.run(request);
+  const steps = ['first', 'second'].map((id, index) => ({ id, task: 'document.create', output_key: id,
+    request_excerpt: id, input: { requirements: id }, depends_on: index ? ['first'] : [] }));
+  const plan = await h.runtime('/plans', { method: 'POST', body: { prompt: 'first second', engine: 'fixture',
+    origin: request.origin, steps, fixture: { delayMs: 250 } } });
+  disconnectAgentComponent('codex', 'harness', { homeDir: f.homeDir });
+  assert.equal(getAgentConnections({ homeDir: f.homeDir }).connections.find(row => row.engine === 'codex').tracking.state, 'connected');
+  await assert.rejects(h.run({ ...request, idempotency_key: 'new-native-request' }), /하네스 위임 연결/);
+  assert.equal((await h.run(request)).id, accepted.id);
+  assert.equal((await h.finish(accepted)).status, 'completed');
+  const done = await eventually(() => h.runtime(`/plans/${plan.id}`), value => !['pending', 'running'].includes(value.status));
+  assert.equal(done.status, 'completed', done.message); assert.equal(done.progress.completed, 2);
+  const summary = await h.finish(await h.run({ task: 'session.summarize', internal: true, prompt: undefined,
+    origin: request.origin, input: { title: '작업 기록', events: [{ kind: 'output', event_at: '2026-09-26T00:00:00Z', text: '문서 작성' }] } }));
+  assert.equal(summary.status, 'completed', summary.message);
+  const receipt = fs.readFileSync(f.loc.manifest), invalid = JSON.parse(receipt); invalid.owner = 'unverified';
+  fs.writeFileSync(f.loc.manifest, JSON.stringify(invalid));
+  await assert.rejects(h.run({ ...request, idempotency_key: 'unverified-native-request' }), /하네스 위임 연결/);
+  fs.writeFileSync(f.loc.manifest, receipt);
 });

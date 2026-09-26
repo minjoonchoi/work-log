@@ -14,6 +14,7 @@ test.afterEach(async () => h.close());
 async function open(page) {
   await page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}`);
   await page.getByRole('button', { name: '작업 실행 설정', exact: true }).click();
+  await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('작업 유형', { exact: true }).selectOption('prd.create');
   return dialog;
@@ -73,6 +74,7 @@ test('backend-specific model dropdowns filter efforts, clear incompatible choice
   expect(saved.backends.claude).toMatchObject({ model: 'haiku', effort: null });
   await page.reload();
   await page.getByRole('button', { name: '작업 실행 설정', exact: true }).click();
+  await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   await dialog.getByLabel('작업 유형', { exact: true }).selectOption('prd.create');
   await expect(dialog.locator('#codex-effort')).toHaveValue('high');
   await expect(dialog.locator('#claude-model')).toHaveValue('haiku');

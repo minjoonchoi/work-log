@@ -51,7 +51,7 @@ const integrations = integrationUI({ api, esc, modal, toast, absoluteTime, refre
 const agentConnections = agentConnectionsUI({ api, esc, modal, showAtlassian: integrations.showSettings });
 const writing = writingUI({ api, esc, toast, absoluteTime, refresh: async id => { await openDetail(id, undefined, true); await load(); } });
 const history = historyUI({ api, esc, eventHTML, invalidated: scheduleRefresh });
-const executionSettings = executionSettingsUI({ api, esc, modal, toast });
+const executionSettings = executionSettingsUI({ api, esc, modal, toast, showConnections: agentConnections.showSettings });
 const automationSettings = automationSettingsUI({ api, esc, modal, toast });
 const itemTags = itemTagsUI({ api, esc, modal, toast, refresh: async id => { await openDetail(id, undefined, true, true); await load(true); } });
 const reports = reportsUI({ api, esc, modal, toast, absoluteTime, navigate: () => showView('reports'), active: () => state.view === 'reports', showSettings: integrations.showSettings });

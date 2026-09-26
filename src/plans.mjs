@@ -3,12 +3,13 @@ import { ROOT, assert, id, stableId, now, json, digest, transaction, redactExecu
 import { validateSchema, canonicalJson } from './schema.mjs';
 import { parseCodeBundle, validateCodeInput } from './code-bundle.mjs';
 import { executionInputDigest } from './artifact-handoff.mjs';
+import { isMergedWorkItemRetry } from './agent-origin.mjs';
 
 const schema = JSON.parse(fs.readFileSync(`${ROOT}/contracts/plan-request.schema.json`, 'utf8'));
 const terminalStates = new Set(['completed', 'blocked', 'failed', 'cancelled', 'interrupted']);
 
 // A plan owns scheduling, while each run retains its frozen workflow, gates and attempt history.
-export function planOrchestrator({ db, jobs, workflows, prepare, register, getRun, cancelRun, resumeRun, canResume, emitIO, schedule }) {
+export function planOrchestrator({ db, dir, jobs, workflows, prepare, register, getRun, cancelRun, resumeRun, canResume, emitIO, schedule }) {
   db.exec(`CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY,status TEXT NOT NULL,payload TEXT NOT NULL,
     request_digest TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,message TEXT);
     CREATE TABLE IF NOT EXISTS plan_steps(plan_id TEXT NOT NULL,id TEXT NOT NULL,position INTEGER NOT NULL,
@@ -86,7 +87,7 @@ export function planOrchestrator({ db, jobs, workflows, prepare, register, getRu
     }
     return ancestors;
   }
-  function create(raw) {
+  async function create(raw) {
     const input = redactExecutionRequest(raw);
     // These are filesystem identities, not prose. The runtime validates their
     // paths and source contents; text redaction must not silently rename them.
@@ -98,7 +99,11 @@ export function planOrchestrator({ db, jobs, workflows, prepare, register, getRu
     const requestDigest = digest(canonicalJson(input));
     const planId = input.idempotency_key ? stableId('plan-', input.idempotency_key) : id('plan-');
     const prior = get(planId);
-    if (prior) { assert(prior.request_digest === requestDigest, '같은 계획 요청 키에 다른 입력이 있습니다.', 409); return view(planId); }
+    if (prior) {
+      assert(prior.request_digest === requestDigest || await isMergedWorkItemRetry(dir, input,
+        payload(prior).work_item_id, prior.request_digest), '같은 계획 요청 키에 다른 입력이 있습니다.', 409);
+      return view(planId);
+    }
     checkGraph(input);
     input.record_io = !input.origin;
     input.origin ||= { engine: 'harness', agent_session_id: id('cli-'), turn_id: id('turn-') };

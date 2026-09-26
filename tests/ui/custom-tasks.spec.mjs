@@ -14,6 +14,7 @@ test.afterEach(async () => h.close());
 async function open(page) {
   await page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}`);
   await page.getByRole('button', { name: '작업 실행 설정' }).click();
+  await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   return page.getByRole('dialog');
 }
 async function draft(dialog, { label = '주간 회의 기록', description = '회의 결정과 다음 행동을 정리한다.', terms = '주간 회의 기록, 주간결정정리' } = {}) {
@@ -62,6 +63,7 @@ test('custom task registration, metadata and execution edits survive runtime res
   await h.stop('runtime'); await h.start('runtime');
   await page.reload();
   await page.getByRole('button', { name: '작업 실행 설정' }).click();
+  await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   await dialog.getByLabel('작업 유형', { exact: true }).selectOption(id);
   await expect(dialog.getByLabel('작업 이름', { exact: true })).toHaveValue('주간 결정 문서');
   await expect(dialog.getByLabel('작업 목적', { exact: true })).toHaveValue('매주 결정의 근거, 담당자와 마감일을 공유한다.');
@@ -109,6 +111,7 @@ test('invalid keywords and concurrent registration show errors without discardin
   await dialog.getByRole('button', { name: '취소', exact: true }).click();
   await dialog.getByRole('button', { name: '닫기', exact: true }).click();
   await page.getByRole('button', { name: '작업 실행 설정' }).click();
+  await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   await draft(dialog, { label: '대기 중인 기록', terms: '대기기록정리' });
   const secondId = await register(page, dialog);
   expect(secondId).not.toBe(firstId);

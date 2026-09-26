@@ -70,12 +70,14 @@ test('changed session boundaries invalidate old cursors; another item and malfor
 
 test('unresolved outputs page independently and leave that feed when their original input is collected', async t => {
   const h = await setup(t);
+  await h.ingest(pair('orphan-pages', '07:00:00', '07:01:00', 'known-request'));
   await h.ingest([event('orphan-pages', 'output', '09:05:00', 'late', { text: null }), event('orphan-pages', 'output', '09:06:00', null)]);
   const item = (await h.manager('/items'))[0], old = await h.manager(query(item.id, null, { limit: 1 }));
   assert.equal(old.records[0].resolution, 'unresolved'); assert.ok(old.next_cursor);
   await h.ingest([event('orphan-pages', 'input', '09:00:00', 'late')]);
   await assert.rejects(h.manager(query(item.id, null, { cursor: old.next_cursor })), e => e.status === 409);
   const summary = await h.manager(`/items/${item.id}?view=summary`);
-  assert.equal(summary.unlinked_history.count, 1); assert.equal(summary.sessions[0].history.count, 2);
-  assert.equal((await h.manager(query(item.id, summary.sessions[0].id))).records[0].resolution, 'missing_body');
+  assert.equal(summary.unlinked_history.count, 1); assert.equal(summary.sessions.length, 2);
+  assert.equal(summary.sessions[1].history.count, 2);
+  assert.equal((await h.manager(query(item.id, summary.sessions[1].id))).records[0].resolution, 'missing_body');
 });

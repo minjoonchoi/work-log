@@ -48,3 +48,47 @@ test('legacy deterministic CLI check results retain their session through the or
   await h.ingest([event(origin.agent_session_id, 'run.updated', '09:00:00', undefined, { engine: origin.engine, run: legacy, work_item_id: item.id })]);
   assert.equal((await h.manager(`/items/${item.id}`)).runs[0].session_id, before.runs[0].session_id);
 });
+
+for (const [profile, status] of [['fixture.pass', 'completed'], ['fixture.mixed', 'failed']]) {
+  test(`deferred ${status} local check results attach to the first input and survive manager restarts`, async t => {
+    const h = await setup(t), origin = { engine: 'codex', agent_session_id: `deferred-check-${status}`, turn_id: 'native-turn' };
+    const requestedOwner = `before-input-${status}`, owner = `first-input-${status}`;
+    const run = await h.finish(await h.run({ task: 'checks.run', input: { profile }, origin, work_item_id: requestedOwner }));
+    assert.equal(run.status, status);
+    assert.equal(run.engine, 'local');
+    const batch = await h.runtime('/events?after=0');
+    assert.ok(batch.events.length > 1);
+    assert.ok(batch.events.every(event => event.kind === 'run.updated' && event.role === 'user'));
+    assert.equal(batch.events.at(-1).run.status, status);
+    await eventually(() => h.manager('/health'), health => health.events === batch.events.length);
+    assert.deepEqual(await h.manager('/items'), [], 'execution observations must wait for the first user input');
+    await h.stop('manager'); await h.start('manager');
+    assert.deepEqual(await h.manager('/items'), [], 'unattached execution evidence must remain deferred across restart');
+
+    // The first real input chooses the durable owner. Earlier unbound hints
+    // must not create another item or keep the check result on a phantom item.
+    const input = pair(origin.agent_session_id, '09:00:00', '09:05:00', origin.turn_id, {
+      source: 'system_hook', work_item_id: owner, text: '등록된 로컬 검사를 수행해 주세요.'
+    });
+    await h.ingest(input);
+    assert.deepEqual((await h.manager('/items')).map(item => item.id), [owner]);
+    const detail = await h.manager(`/items/${owner}`);
+    assert.equal(detail.sessions.length, 1);
+    assert.equal(detail.runs.length, 1, 'all deferred run.updated events must rebuild the execution view');
+    const retained = detail.runs[0];
+    assert.equal(retained.id, run.id); assert.equal(retained.status, status);
+    assert.equal(retained.work_item_id, owner); assert.equal(retained.session_id, detail.sessions[0].id);
+    assert.deepEqual(retained.evidence, run.evidence);
+    const stored = detail.events.filter(event => event.kind === 'run.updated');
+    assert.equal(stored.length, batch.events.length);
+    assert.deepEqual(stored.map(event => event.id).sort(), batch.events.map(event => event.id).sort());
+    assert.ok(stored.every(event => event.work_item_id === owner && event.requested_work_item_id === requestedOwner));
+    assert.deepEqual(await h.ingest(input), { inserted: 0, duplicates: input.length });
+    await h.stop('manager'); await h.start('manager');
+    const restarted = await h.manager(`/items/${owner}`);
+    assert.deepEqual(restarted.runs, detail.runs);
+    assert.deepEqual(restarted.sessions, detail.sessions);
+    assert.equal(restarted.events.length, detail.events.length);
+    assert.deepEqual((await h.manager('/items')).map(item => item.id), [owner]);
+  });
+}

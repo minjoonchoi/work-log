@@ -17,6 +17,9 @@ test('notifications use incident time, preserve failure records when dismissed, 
   await h.ingest([runEvent('a', 'failed', '09:00:00'), runEvent('b', 'blocked', '10:00:00'),
     runEvent('c', 'interrupted', '11:00:00'), runEvent('internal', 'failed', '12:00:00', { internal: true }),
     runEvent('cancelled', 'cancelled', '13:00:00'), runEvent('running', 'running', '14:00:00')]);
+  assert.deepEqual(await h.manager('/items'), []); assert.deepEqual(await h.manager('/notifications'), []);
+  await h.ingest(['a', 'b', 'c', 'internal', 'cancelled', 'running'].flatMap(id =>
+    pair(`agent-${id}`, '08:00:00', '08:01:00', 'first', { work_item_id: `item-${id}`, source: 'system_hook' })));
   let rows = await h.manager('/notifications');
   assert.deepEqual(rows.map(row => row.run_id), ['c', 'b', 'a']);
   const original = rows[0], before = await h.manager('/items/item-c');
@@ -42,6 +45,8 @@ test('notifications use incident time, preserve failure records when dismissed, 
 
 test('canonical merges and deleted visibility follow notifications without inferring that a different successful run resolved an older failure', async t => {
   const h = await setup(t);
+  await h.ingest(['older', 'newer'].flatMap(id =>
+    pair(`agent-${id}`, '08:00:00', '08:01:00', 'first', { work_item_id: `item-${id}`, source: 'system_hook' })));
   await h.ingest([runEvent('older', 'failed', '09:00:00'), runEvent('newer', 'completed', '10:00:00')]);
   await h.manager('/merge', post({ ids: ['item-older', 'item-newer'], target: 'item-newer', operation_id: 'merge-notification-work' }));
   const [failure] = await h.manager('/notifications'); assert.equal(failure.work_item_id, 'item-newer');

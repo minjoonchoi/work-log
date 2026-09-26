@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "packages": [
+    { "id": "pm", "label": "PM · 프로젝트 관리", "description": "프로젝트 계획, 일정, 진행·위험 관리와 업무 보고 작업입니다.", "categories": ["project"] },
+    { "id": "po", "label": "PO · 제품 기획", "description": "문제 정의, 제품 요구사항, 우선순위와 제품 검증 작업입니다.", "categories": ["product"] },
+    { "id": "frontend", "label": "프런트엔드", "description": "화면 목업, FE 구현·테스트와 UI·접근성 검토 작업입니다.", "categories": ["frontend"] },
+    { "id": "backend", "label": "백엔드", "description": "엔티티·API 설계, BE 구현·테스트와 데이터 변경 계획 작업입니다.", "categories": ["backend"] },
+    { "id": "common", "label": "공통 업무", "description": "직무 간 공유하는 문서·설계·조사, 코드·장애 검토와 로컬 검사 작업입니다. 다른 직무 묶음과 별도로 설치합니다.", "categories": ["knowledge", "design", "engineering", "system"] }
+  ]
+}

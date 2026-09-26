@@ -5,6 +5,7 @@ import { runProcess } from './process-runner.mjs';
 import { ROOT, atomic, assert, json, redact, redactValue } from './shared.mjs';
 import { assertModelSelection } from './model-capabilities.mjs';
 import { codexDirectArguments, observeWorker, validateWorkerPolicy } from './worker-policy.mjs';
+import { registerWorkerContext } from './worker-context.mjs';
 const versions = new Map();
 
 function errorMessage(value) {
@@ -53,6 +54,7 @@ export function commandFor(engine, context) {
 
 export function execute(context) {
   const { engine, cwd, attemptDir, stage, prompt, limits, onSpawn, parent, fixture, execution } = context;
+  registerWorkerContext(context);
   const outputPath = path.join(attemptDir, 'result.json');
   const workerPolicy = validateWorkerPolicy(context.workerPolicy), observer = observeWorker(engine, workerPolicy);
   const schemaPath = path.join(attemptDir, 'schema.json');

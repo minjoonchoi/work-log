@@ -8,12 +8,12 @@ import { integrationStore } from '../../src/integration-store.mjs';
 import { writingStore } from '../../src/writing-store.mjs';
 import { writingCoordinator } from '../../src/writing-coordinator.mjs';
 import { integrationCoordinator } from '../../src/integration-coordinator.mjs';
-import { serve, body, stableId, assert as check } from '../../src/shared.mjs';
+import { serve, body, stableId, digest, json, assert as check } from '../../src/shared.mjs';
 import { pair, event, eventually } from '../helpers.mjs';
 
-function setup(t) {
+function setup(t, options = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-writing-policy-')), store = managerStore(dir), integrations = integrationStore(store);
-  const writings = writingStore(store, integrations);
+  const writings = writingStore(store, integrations, { clock: () => Date.parse('2026-09-17T09:40:00Z'), ...options });
   t.after(() => { store.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { dir, store, integrations, writings };
 }
@@ -75,6 +75,38 @@ test('manual metadata uses accepted closed summaries once, keeps open raw events
   assert.equal(summary.snapshot.input.sessions[0].events.length, 2); assert.equal(summary.snapshot.input.sessions[0].summary, null);
 });
 
+test('an idle summary completing does not supersede metadata from unchanged raw history, while a used closed summary stays protected', t => {
+  const c = setup(t);
+  c.store.ingestMany([...pair('concurrent-summary', '09:00:00', '09:05:00', 'closed'),
+    ...pair('concurrent-summary', '09:30:00', '09:35:00', 'open')]);
+  const closed = c.integrations.closedSessions()[0];
+  c.integrations.ensureSummary(closed); c.integrations.finishSummary(closed, 'completed', { text: '기존 검토\n- 요구사항을 검토했습니다.' });
+  const request = enqueue(c, c.store.items()[0], 'metadata-during-idle-summary');
+  const open = c.integrations.sessionSnapshots(c.store.sessionList().filter(session => session.id !== closed.id))[0];
+  c.integrations.ensureSummary(open); c.integrations.finishSummary(open, 'completed', { text: '최근 작업\n- 현재까지의 작업을 정리했습니다.' });
+  assert.equal(c.writings.isCurrent(request), true);
+  assert.equal(request.snapshot.input.sessions.find(session => session.id === open.id).summary, null);
+  assert.equal(c.integrations.summary(open.id).text, '최근 작업\n- 현재까지의 작업을 정리했습니다.');
+  c.integrations.finishSummary(closed, 'completed', { text: '수정된 검토\n- 검토 내용을 보완했습니다.' });
+  assert.equal(c.writings.isCurrent(request), false, 'a summary actually used in the metadata remains version-sensitive');
+});
+
+test('a manual metadata snapshot accepted before the source policy change still uses its original summary evidence', t => {
+  const c = setup(t);
+  c.store.ingestMany(pair('legacy-open-summary', '09:30:00', '09:35:00'));
+  const session = c.integrations.sessionSnapshots()[0];
+  c.integrations.ensureSummary(session); c.integrations.finishSummary(session, 'completed', { text: '기존 요약\n- 이전 요청에 포함된 요약입니다.' });
+  const request = enqueue(c, c.store.items()[0], 'legacy-open-metadata-source');
+  const legacy = structuredClone(request.snapshot);
+  delete legacy.metadata_source_policy;
+  legacy.input.sessions[0].summary = c.integrations.summary(session.id).text;
+  legacy.source_digest = digest(json(legacy.input));
+  c.store.db.prepare('UPDATE writing_requests SET snapshot=? WHERE operation_id=?').run(json(legacy), request.operation_id);
+  assert.equal(c.writings.isCurrent(c.writings.get(request.operation_id)), true);
+  c.integrations.finishSummary(session, 'completed', { text: '변경한 요약\n- 이후에 요약이 변경되었습니다.' });
+  assert.equal(c.writings.isCurrent(c.writings.get(request.operation_id)), false);
+});
+
 test('slow Jira synchronization does not block new local writing submissions', async t => {
   const c = setup(t), mock = await runtime(t, c.dir);
   c.store.ingestMany([...pair('jira-author', '09:00:00', '09:05:00'), ...pair('jira-author', '09:30:00', '09:35:00', 'two')]);
@@ -120,7 +152,7 @@ test('obsolete writing cancellation never stops a run owned by the user', async 
   assert.deepEqual(mock.cancellations, []); assert.equal(run.status, 'running');
 });
 
-test('a fresh prompt replaces a stale pending summary atomically and preserves lost-receipt cancellation across restart', async t => {
+test('periodic admission replaces a stale pending summary atomically and preserves lost-receipt cancellation across restart', async t => {
   const c = setup(t), mock = await runtime(t, c.dir);
   c.store.ingestMany([...pair('late-summary', '09:00:00', '09:01:00', 'first'),
     ...pair('late-summary', '09:30:00', '09:31:00', 'second')]);
@@ -142,13 +174,13 @@ test('a fresh prompt replaces a stale pending summary atomically and preserves l
   assert.equal(replacement.target_id, session.id); assert.notEqual(replacement.run_key, original.run_key);
   assert.equal(replacement.snapshot.input.sessions[0].events.length, 4);
   assert.equal(c.integrations.summary(session.id).source_digest, replacement.snapshot.source_digest);
-  assert.equal(c.store.db.prepare('SELECT selected_count FROM summary_prompt_receipts').get().selected_count, 1);
+  assert.equal(replacement.snapshot.summary_trigger.kind, 'periodic');
 
-  const restored = writingStore(c.store, c.integrations);
+  const restored = writingStore(c.store, c.integrations, { clock: () => Date.parse('2026-09-17T09:40:00Z') });
   c.store.ingestMany([trigger]);
   assert.equal(restored.scheduleAutomatic({ summaries: true, metadata: false }), false);
   assert.equal(restored.pending().length, 1);
-  assert.equal(c.store.db.prepare('SELECT COUNT(*) AS n FROM summary_prompt_receipts').get().n, 1);
+  assert.equal(c.store.db.prepare('SELECT COUNT(*) AS n FROM writing_requests').get().n, 2);
   mock.unavailable(true); await writer({ ...c, writings: restored }).tick();
   assert.deepEqual(restored.cancellations().map(row => row.run_id), [originalRun]);
   assert.deepEqual(mock.cancellations, []); assert.equal(mock.submissions.length, 2);
@@ -160,7 +192,7 @@ test('a fresh prompt replaces a stale pending summary atomically and preserves l
   assert.equal(mock.submissions.length, 2);
 });
 
-test('five stale automatic summaries release the full admission capacity before the next prompt is consumed', async t => {
+test('five stale automatic summaries hold admission slots until cancellation is reconciled, then a timer refills the batch', async t => {
   const c = setup(t), mock = await runtime(t, c.dir);
   const agents = Array.from({ length: 5 }, (_, index) => `capacity-author-${index}`);
   c.store.ingestMany(agents.flatMap(agent => [...pair(agent, '09:00:00', '09:01:00', 'first'),
@@ -170,23 +202,43 @@ test('five stale automatic summaries release the full admission capacity before 
   const originals = c.writings.pending();
   assert.equal(originals.length, 5); assert.ok(originals.every(row => row.source === 'automatic' && row.state === 'pending'));
 
-  const nextPrompt = event('capacity-trigger', 'input', '10:01:00', 'second-prompt', { source: 'system_hook' });
-  c.store.ingestMany([...agents.flatMap(agent => pair(agent, '09:05:00', '09:06:00', 'late-history')), nextPrompt]);
+  c.store.ingestMany(agents.flatMap(agent => pair(agent, '09:05:00', '09:06:00', 'late-history')));
   assert.ok(originals.every(row => !c.writings.isCurrent(row)));
   assert.equal(c.writings.scheduleAutomatic({ summaries: true, metadata: false }), true);
   assert.ok(originals.every(row => c.writings.get(row.operation_id).state === 'superseded'));
-  const replacements = c.writings.pending();
+  assert.equal(c.writings.pending().length, 0);
+  assert.equal(c.writings.cancellingSummaryCount(), 5);
+  assert.deepEqual(c.writings.cancellations().map(row => row.run_id).sort(), originals.map(row => stableId('run-', row.run_key)).sort());
+  const restored = writingStore(c.store, c.integrations, { clock: () => Date.parse('2026-09-17T09:40:00Z') });
+  assert.equal(restored.scheduleAutomatic({ summaries: true, metadata: false }), false);
+  await writer({ ...c, writings: restored }).tick();
+  assert.deepEqual(restored.cancellations(), []);
+  assert.equal(restored.scheduleAutomatic({ summaries: true, metadata: false }), true);
+  const replacements = restored.pending();
   assert.equal(replacements.length, 5);
   assert.deepEqual(new Set(replacements.map(row => row.target_id)), new Set(originals.map(row => row.target_id)));
   assert.ok(replacements.every(row => row.snapshot.input.sessions[0].events.length === 4));
-  assert.deepEqual(c.writings.cancellations().map(row => row.run_id).sort(), originals.map(row => stableId('run-', row.run_key)).sort());
-  assert.deepEqual(c.store.db.prepare('SELECT selected_count FROM summary_prompt_receipts ORDER BY event_seq').all().map(row => row.selected_count), [5, 5]);
-
-  const restored = writingStore(c.store, c.integrations);
-  c.store.ingestMany([nextPrompt]);
-  assert.equal(restored.scheduleAutomatic({ summaries: true, metadata: false }), false);
   await writer({ ...c, writings: restored }).tick();
   assert.equal(mock.submissions.length, 5); assert.deepEqual(restored.cancellations(), []);
   assert.ok(restored.pending().every(row => row.state === 'running'));
   assert.equal(c.store.db.prepare('SELECT COUNT(*) AS n FROM writing_requests').get().n, 10);
+});
+
+test('idle eligibility starts at exactly twenty minutes and an unchanged timer reuses source evidence', t => {
+  let time = Date.parse('2026-09-17T09:24:59.999Z');
+  const c = setup(t, { clock: () => time });
+  c.store.ingestMany(pair('idle-boundary', '09:00:00', '09:05:00'));
+  let reads = 0;
+  const read = c.store.sessionMessages;
+  c.store.sessionMessages = (...args) => { reads++; return read(...args); };
+  assert.equal(c.writings.scheduleAutomatic({ summaries: true }), false);
+  time += 1;
+  assert.equal(c.writings.scheduleAutomatic({ summaries: true }), true);
+  const request = c.writings.pending()[0], afterFirst = reads;
+  assert.equal(request.snapshot.summary_trigger.reason, 'idle');
+  assert.equal(c.writings.scheduleAutomatic({ summaries: true }), false);
+  assert.equal(reads, afterFirst, 'unchanged timer polling must not reload conversation bodies');
+  c.store.ingestMany([event('idle-boundary', 'input', '09:06:00', 'late-turn')]);
+  assert.equal(c.writings.isCurrent(request), false);
+  assert.ok(reads > afterFirst, 'late input must invalidate cached source evidence');
 });

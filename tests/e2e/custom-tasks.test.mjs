@@ -20,7 +20,7 @@ async function register(h) {
   return h.manager('/execution-settings/custom-tasks', { method: 'POST', body: definition((await h.runtime('/execution-settings')).revision) });
 }
 
-test('GUI API registration immediately joins the live CLI catalog and executes the inherited artifact and review contract', async t => {
+test('GUI API registration immediately joins the live CLI catalog and executes the inherited single-pass document contract', async t => {
   const h = await setup(t), before = await h.runtime('/catalog'), created = await register(h), id = created.created_task_id;
   assert.match(id, /^user\.[a-f0-9]+$/);
   const catalog = await h.runtime('/catalog'), custom = catalog.jobs.find(job => job.id === id), builtin = before.jobs.find(job => job.id === 'document.create');
@@ -34,11 +34,12 @@ test('GUI API registration immediately joins the live CLI catalog and executes t
   assert.equal(cli.status, 0, cli.stderr);
   assert.equal(JSON.parse(cli.stdout).jobs.find(job => job.id === id).description, custom.description);
   await assert.rejects(h.run({ task: id, input: { requirements: 7 } }));
-  await assert.rejects(h.run({ task: id, review: { required: false, reason: '빠르게 작성' } }), /검토/);
-  const run = await h.finish(await h.run({ task: id, input: { requirements: '승인된 운영 결정과 미정 사항을 문서로 작성한다.' } }));
+  const run = await h.finish(await h.run({ task: id, review: { required: false, reason: '제공된 기록을 문서로 정리하며 별도 검토를 요청하지 않았습니다.' },
+    input: { requirements: '승인된 운영 결정과 미정 사항을 문서로 작성한다.' } }));
   assert.equal(run.status, 'completed', run.message); assert.equal(run.task, id);
   assert.ok(fs.existsSync(run.artifact.file));
-  assert.ok(run.attempts.some(attempt => attempt.task === 'review' || attempt.stage === 'review'));
+  assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']);
+  assert.equal(run.artifact.review_attempt, undefined);
   for (const attempt of run.attempts) assert.ok(fs.readFileSync(path.join(attempt.directory, 'prompt.txt'), 'utf8').includes(preferences.instruction));
   const bytes = fs.readFileSync(settingsFile(h));
   await h.stop('runtime'); await h.start('runtime');

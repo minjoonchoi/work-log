@@ -1,5 +1,9 @@
 # 작업 유형과 책임 경계
 
+이 문서는 앱에 포함된 전체 유형을 설명한다. 실제 요청 카탈로그에는 설치된 직무 패키지의 유형을 제공한다. PM·PO·프런트엔드·백엔드·공통 패키지는 연결 설정에서 설치·제거하며, WorkLog 자동 생성 5종은 별도 관리한다. 미설치 전문 유형을 일반 문서·텍스트 유형으로 바꾸어 대신 수행하지 않는다. [선택형 하네스](harness-packages.md)
+
+전체 유형의 기본 검토, 생성·검토 worker 방식과 호출 예산은 [작업 실행 행렬](task-execution-matrix.md)에서 비교한다. 문서의 독립 검토 필요 여부와 파일·도구 사용 여부를 별도로 정하며, 직접 응답 방식도 필수 검토를 생략하지 않는다.
+
 전체 70개는 사용자 업무 63개와 시스템 업무 7개다. 작업 유형은 역할 이름이 아니라 하나의 결과와 판단 책임을 기준으로 나눈다. 업무마다 `boundary.owns`, `excludes`, `inputs`, `deliverable`, `acceptance`가 있으며 `routing`은 자연어 분류를 위한 용어·동작·우선순위를 제공한다. 전체 정의는 `harness/jobs.json`, 입력 계약은 `contracts/inputs/`, 업무별 검토 근거는 `harness/rules.json`에 있다. `harness catalog --summary`로 경계를 비교하고 `harness catalog --task <id>`로 선택한 업무의 입력 스키마·완료 기준을 확인한다.
 
 입력 필드는 업무별 스키마를 따른다. `requirements`를 사용하는 업무에서는 해당 필드에 목표와 기준 자료를 포함하며, `document.share.create`는 `source_text`, `audience`, `purpose`를 사용한다. 허용되지 않은 필드를 추가하지 않으며, 필수 정보가 요청 본문에 이미 있으면 사용자에게 같은 내용을 다시 묻지 않고 해당 필드로 정리한다. 기준 자료가 실제로 없으면 사실을 만들지 않는다. 역할 명칭만으로 PM·PO·FE·BE 업무를 모두 실행하지 않는다.
@@ -149,7 +153,7 @@
 
 ## 실행 게이트
 
-GUI 텍스트 작업과 `meeting.summarize`·`progress.summarize`는 제공 자료의 본문 직접 생성 1회와 코드 검사로 종료한다. 회의·진행 요약은 명시적 검토 요청이 있을 때만 독립 검토·필요 수정을 추가한다. `text.generate`는 요청 스킬의 명시적인 검토 생략 선택에 한해 같은 경로를 사용한다. PRD·설계·코드·조사·전문 검토의 필수 게이트는 유지한다. 작업 수·도구 호출 한도와 CLI별 실제 집행 범위는 [실행 한도 설계](bounded-orchestration.md)에 정의한다.
+GUI 텍스트 작업과 `document.create`·`document.share.create`·`document.update`·`document.review`·`text.generate`·`meeting.summarize`·`progress.summarize`는 기본적으로 요청한 결과의 직접 생성 1회와 코드 검사로 종료하며 자동 독립 검토·수정은 없다. 사용자 문서·텍스트·사실 요약과 이를 상속한 사용자 유형은 결과물에 대한 별도 품질 검토를 추가로 요청했을 때만 검토·필요 수정을 수행한다. `document.review`는 요청한 원본 검토와 지적 보고서 작성을 한 번 수행하는 업무이며 보고서를 다시 검토하는 단계는 기본 실행에 없다. PRD·설계·코드·조사·전문 검토의 필수 게이트는 유지하고 일반 문서·텍스트 유형으로 우회하지 않는다. 작업 수·도구 호출 한도와 CLI별 실제 집행 범위는 [실행 한도 설계](bounded-orchestration.md)에 정의한다.
 
 ## 오케스트레이션과 진행 출력
 

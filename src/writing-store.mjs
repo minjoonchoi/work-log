@@ -3,7 +3,7 @@ import { loadCatalog } from './catalog.mjs';
 import { validateSchema } from './schema.mjs';
 
 // Durable intentions and immutable inputs. Model execution belongs to the runtime.
-export function writingStore(store, integrations) {
+export function writingStore(store, integrations, { clock = Date.now } = {}) {
   const db = store.db, inputSchema = loadCatalog().definitions.jobs['text.rewrite'].input_schema;
   db.exec(`CREATE TABLE IF NOT EXISTS writing_requests (
     seq INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL UNIQUE,
@@ -22,9 +22,8 @@ export function writingStore(store, integrations) {
   if (!db.prepare('PRAGMA table_info(writing_requests)').all().some(column => column.name === 'source')) {
     db.exec("ALTER TABLE writing_requests ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
   }
-  // Installing/upgrading never replays all historic prompts. New spool inputs
-  // are ingested after this watermark and survive an unavailable runtime.
-  db.prepare("INSERT OR IGNORE INTO cursors(source,value) SELECT 'summary-prompts-v1',CAST(COALESCE(MAX(seq),0) AS TEXT) FROM events").run();
+  // Keep legacy prompt receipts as history. Scheduling now scans unfinished
+  // summaries on the manager's timer; prompt arrival is not an admission token.
   const decode = row => row && ({ ...row, snapshot: JSON.parse(row.snapshot) });
   const get = operation => decode(db.prepare('SELECT * FROM writing_requests WHERE operation_id=?').get(operation));
   const latest = (format, target) => decode(db.prepare('SELECT * FROM writing_requests WHERE format=? AND target_id=? ORDER BY seq DESC LIMIT 1').get(format, target));
@@ -73,7 +72,7 @@ export function writingStore(store, integrations) {
   }
   const eventReferences = session => store.sessionMessages(session).map(event => ({ uid: event.uid,
     digest: digest(json([event.kind, event.event_at, event.text ?? null, event.resolution, event.turn_id])) }));
-  function snapshot(format, target, automatic = false, covered = null) {
+  function snapshot(format, target, automatic = false, covered = null, { legacyOpenSummaries = false } = {}) {
     assert(['work-item-metadata', 'session-summary'].includes(format), '지원하지 않는 재작성 형식입니다.');
     const detail = format === 'work-item-metadata' ? store.detail(target) : null;
     const selected = detail ? detail.sessions : store.sessionList().filter(s => s.id === target);
@@ -89,8 +88,11 @@ export function writingStore(store, integrations) {
         original_work_item_id: s.original_work_item_id, start_at: s.start_at,
         ...(summaryOnly ? { summary: previous.text, source_digest: s.source_digest } : { events: eventReferences(s.id) }) });
       return { id: s.id, engine: s.engine, start_at: s.start_at, end_at: s.end_at,
-        summary: automatic ? (summaryOnly ? previous.text : null)
-          : format === 'work-item-metadata' && previous?.accepted_digest === s.source_digest ? previous.text : null,
+        // An open window already supplies its raw history. Including its
+        // concurrently generated summary duplicates context and invalidates a
+        // metadata rewrite even when the underlying conversation is unchanged.
+        summary: summaryOnly ? previous.text
+          : legacyOpenSummaries && format === 'work-item-metadata' && previous?.accepted_digest === s.source_digest ? previous.text : null,
         events: summaryOnly ? [] : s.source.events };
     }) };
     validateSchema(inputSchema, input, '재작성 입력');
@@ -98,6 +100,7 @@ export function writingStore(store, integrations) {
       work_item_id: detail?.item.id || sessions[0].original_work_item_id,
       visibility_revision: store.visibilityRevision(detail?.item.id || sessions[0].work_item_id),
       base_version: detail?.item.version ?? null,
+      ...(detail && !legacyOpenSummaries ? { metadata_source_policy: 'closed-summaries-v1' } : {}),
       session: detail ? null : { id: sessions[0].id, source: sessions[0].source, source_digest: sessions[0].source_digest },
       ...(automatic ? { automatic: { references, covered } } : {}) };
   }
@@ -124,7 +127,8 @@ export function writingStore(store, integrations) {
         }
         return true;
       }
-      const current = snapshot(row.format, row.target_id);
+      const current = snapshot(row.format, row.target_id, false, null,
+        { legacyOpenSummaries: row.format === 'work-item-metadata' && !row.snapshot.metadata_source_policy });
       return current.source_digest === row.snapshot.source_digest && current.base_version === row.snapshot.base_version
         && current.visibility_revision === (row.snapshot.visibility_revision || 0)
         && (row.format !== 'work-item-metadata' || current.work_item_id === row.snapshot.work_item_id);
@@ -138,7 +142,7 @@ export function writingStore(store, integrations) {
   function finish(row, state, result = null, message = null) {
     return transaction(db, () => finishWithinTransaction(row, state, result, message));
   }
-  // Call only while the caller owns the DB transaction, including prompt batches.
+  // Call only while the caller owns the DB transaction, including timer batches.
   function finishWithinTransaction(row, state, result = null, message = null) {
     const current = get(row.operation_id);
     if (!active(current)) return current;
@@ -182,41 +186,60 @@ export function writingStore(store, integrations) {
       return insert(format, target, source, input.operation_id);
     });
   }
-  function schedulePromptSummaries(closed) {
-    const cursor = Number(db.prepare("SELECT value FROM cursors WHERE source='summary-prompts-v1'").get().value);
-    const prompts = db.prepare(`SELECT e.seq,e.id,e.agent_id,e.payload FROM events e
-      JOIN agent_sessions a ON a.id=e.agent_id
-      WHERE e.seq>? AND e.kind='input' AND a.role='user' AND a.engine IN ('claude','codex')
-        AND json_extract(e.payload,'$.source')='system_hook'
-      ORDER BY e.seq LIMIT 100`).all(cursor);
-    let changed = false;
-    for (const prompt of prompts) transaction(db, () => {
-      const event = JSON.parse(prompt.payload), key = `${prompt.agent_id}:${event.turn_id || prompt.id}`;
-      const fresh = db.prepare('INSERT OR IGNORE INTO summary_prompt_receipts VALUES(?,?,0,?)').run(key, prompt.seq, now()).changes;
-      db.prepare("UPDATE cursors SET value=? WHERE source='summary-prompts-v1'").run(String(prompt.seq));
-      if (!fresh) return;
+  function summaryCandidates(closed) {
+    const closedIds = new Set(closed.map(session => session.id)), observed = clock();
+    const running = db.prepare('SELECT work_item_id,payload FROM run_views').all()
+      .map(row => ({ ...JSON.parse(row.payload), work_item_id: store.canonical(row.work_item_id) }))
+      .filter(run => !run.internal && ['pending', 'running'].includes(run.status));
+    const idle = integrations.sessionSnapshots(store.sessionList().filter(session => userSession(session)
+      && !closedIds.has(session.id) && !session.pending && observed - Date.parse(session.end_at) >= 1200000
+      && !running.some(run => run.origin
+        ? run.origin.engine === session.engine && run.origin.agent_session_id === session.agent_session_id
+        : run.work_item_id === session.work_item_id)))
+      // An interrupted/failed turn is not an observed final response. Likewise,
+      // a missing Stop cannot be inferred from elapsed time or process absence.
+      .filter(session => session.source.events.at(-1)?.kind === 'output'
+        && observed - Date.parse(session.ended) >= 1200000);
+    return [...closed.filter(userSession).map(session => ({ session, reason: 'closed' })),
+      ...idle.map(session => ({ session, reason: 'idle' }))];
+  }
+  const cancellingSummaryCount = () => {
+    const cancelled = new Set(db.prepare('SELECT run_id FROM writing_cancellations').all().map(row => row.run_id));
+    return db.prepare("SELECT run_id,run_key FROM writing_requests WHERE source='automatic' AND format='session-summary' AND state='superseded'")
+      .all().filter(row => cancelled.has(row.run_id || stableId('run-', row.run_key))).length;
+  };
+  function schedulePeriodicSummaries(closed) {
+    return transaction(db, () => {
+      let changed = false;
+      // Retire stale work before counting capacity, including a current window
+      // that became ineligible when a new input arrived while polling runtime.
+      for (const row of db.prepare("SELECT * FROM writing_requests WHERE format='session-summary' AND state IN ('pending','running')").all().map(decode)) {
+        if (!isCurrent(row)) { finishWithinTransaction(row, 'superseded'); changed = true; }
+      }
       // Give never-attempted history priority over a repeatedly failing source.
-      const candidates = closed.filter(userSession).map(session => ({ session,
+      const candidates = summaryCandidates(closed).map(({ session, reason }) => ({ session, reason,
         previous: latest('session-summary', session.id), summary: integrations.summary(session.id) }))
         .sort((a, b) => Number(!!(a.previous || a.summary)) - Number(!!(b.previous || b.summary))
           || (a.previous?.updated_at || a.summary?.updated_at || a.session.start_at).localeCompare(b.previous?.updated_at || b.summary?.updated_at || b.session.start_at)
           || a.session.id.localeCompare(b.session.id));
-      // A late event can arrive while the coordinator awaits runtime polling.
-      // Retire stale work before counting capacity, within this same transaction.
-      for (const candidate of candidates) if (active(candidate.previous) && !isCurrent(candidate.previous))
-        candidate.previous = finishWithinTransaction(candidate.previous, 'superseded');
       const inFlight = db.prepare("SELECT COUNT(*) AS n FROM writing_requests WHERE source='automatic' AND format='session-summary' AND state IN ('pending','running')").get().n;
-      const capacity = Math.max(0, 5 - inFlight);
+      // A lost cancellation acknowledgement can still mean a live subprocess.
+      const capacity = Math.max(0, 5 - inFlight - cancellingSummaryCount());
       let selected = 0;
-      for (const { session, previous, summary } of candidates) {
+      for (const { session, reason, previous, summary } of candidates) {
         if (selected >= capacity) break;
         if (summary?.accepted_digest === session.source_digest && summary.text?.trim()) continue;
         if (active(previous) && isCurrent(previous)) continue;
-        // One failed admission still consumes this prompt's bounded batch slot.
+        // Retry a failed source only through an explicit request or changed
+        // history, never once per timer tick (including after a restart).
+        if (previous?.state === 'failed' && previous.snapshot.source_digest === session.source_digest) continue;
+        if (summary?.state === 'failed' && summary.source_digest === session.source_digest) continue;
+        // Invalid input still consumes one bounded admission slot and records a
+        // durable failure digest, so a large history cannot spin on every tick.
         selected += 1;
         try {
           const source = snapshot('session-summary', session.id);
-          source.summary_trigger = { prompt_key: key, event_id: prompt.id };
+          source.summary_trigger = { kind: 'periodic', reason, observed_at: new Date(clock()).toISOString() };
           const legacy = !previous && summary?.source_digest === session.source_digest && active(summary) ? summary : null;
           insert('session-summary', session.id, source, id('auto-'), legacy, 'automatic');
         } catch (error) {
@@ -224,16 +247,14 @@ export function writingStore(store, integrations) {
           integrations.ensureSummary(session); integrations.finishSummary(session, 'failed', { message: error.message });
         }
       }
-      db.prepare('UPDATE summary_prompt_receipts SET selected_count=? WHERE prompt_key=?').run(selected, key);
-      changed = selected > 0 || changed;
+      return selected > 0 || changed;
     });
-    return changed;
   }
   function scheduleAutomatic({ summaries = true, metadata = false } = {}) {
     if (!summaries && !metadata) return false;
     let changed = false;
     const closed = integrations.closedSessions();
-    if (summaries) changed = schedulePromptSummaries(closed) || changed;
+    if (summaries) changed = schedulePeriodicSummaries(closed) || changed;
     if (metadata) for (const item of store.items()) {
       if (item.metadata_protected || active(latest('work-item-metadata', item.id))) continue;
       const covered = milestones(item.id, closed);
@@ -271,7 +292,7 @@ export function writingStore(store, integrations) {
           summary: s.summary ? { ...s.summary, current: summary.accepted_digest === current.source_digest } : null };
       }) };
   }
-  return { enqueue, scheduleAutomatic, automationSettings, saveAutomationSettings, isCurrent, finish, started, get, publicView, decorate,
+  return { enqueue, scheduleAutomatic, automationSettings, saveAutomationSettings, isCurrent, finish, started, get, publicView, decorate, cancellingSummaryCount,
     cancellations: () => db.prepare('SELECT run_id FROM writing_cancellations').all(),
     cancelled: runId => db.prepare('DELETE FROM writing_cancellations WHERE run_id=?').run(runId),
     pending: () => db.prepare("SELECT * FROM writing_requests WHERE state IN ('pending','running') ORDER BY seq").all().map(decode) };

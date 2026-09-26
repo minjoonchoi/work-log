@@ -22,15 +22,16 @@ const finishPlan = (h, id) => eventually(() => h.runtime(`/plans/${id}`), result
 test('explicit short-text review decisions compile into different real worker graphs and are retained as evidence', async t => {
   const h = await setup(t);
   const catalog = await h.runtime('/catalog');
-  assert.deepEqual(catalog.jobs.filter(job => job.review_policy.omission_allowed).map(job => job.id).sort(), ['meeting.summarize', 'progress.summarize', 'text.generate']);
-  assert.equal(catalog.jobs.find(job => job.id === 'text.generate').review_policy.default_required, true);
+  assert.deepEqual(catalog.jobs.filter(job => job.review_policy.omission_allowed).map(job => job.id).sort(),
+    ['document.create', 'document.review', 'document.share.create', 'document.update', 'meeting.summarize', 'progress.summarize', 'text.generate']);
+  assert.equal(catalog.jobs.find(job => job.id === 'text.generate').review_policy.default_required, false);
   for (const review of [undefined, required, noReview]) {
     const run = await h.finish(await h.run({ ...simple, ...(review ? { review } : {}) }));
     assert.equal(run.status, 'completed', run.message);
-    assert.deepEqual(run.attempts.map(attempt => attempt.stage), review?.required === false ? ['produce'] : ['produce', 'review']);
-    assert.equal(run.review.required, review?.required !== false);
+    assert.deepEqual(run.attempts.map(attempt => attempt.stage), review?.required === true ? ['produce', 'review'] : ['produce']);
+    assert.equal(run.review.required, review?.required === true);
     if (review) { assert.deepEqual(run.review, review); assert.deepEqual(run.request.review, review); }
-    if (review?.required === false) {
+    if (review?.required !== true) {
       assert.equal(run.artifact.validation_scope, 'artifact'); assert.equal(run.artifact.review_attempt, undefined);
       assert.match(run.message, /기본 산출물 검사.*별도 모델 검토는 수행하지 않았/);
     } else assert.ok(run.artifact.review_attempt);
@@ -41,7 +42,7 @@ test('explicit short-text review decisions compile into different real worker gr
 
 test('profile ceilings reject review omission and validate every plan decision before creating any work', async t => {
   const h = await setup(t);
-  for (const task of ['prd.create', 'entity.design', 'backend.implement', 'research.compare', 'document.review', 'code.review', 'architecture.review']) {
+  for (const task of ['prd.create', 'entity.design', 'backend.implement', 'research.compare', 'code.review', 'architecture.review']) {
     await assert.rejects(h.run({ task, input: {}, review: noReview }), /독립 검토를 생략할 수 없습니다/);
   }
   await assert.rejects(h.run({ task: 'session.summarize', input: {}, review: required }), /프로필에 고정된/);

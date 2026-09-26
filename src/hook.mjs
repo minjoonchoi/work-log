@@ -7,13 +7,19 @@ import path from 'node:path';
 if (process.env.HARNESS_WORKER === '1') process.exit(0);
 const { dataRoot, initRoot, id, stableId, now, json, atomic, redact } = await import('./shared.mjs');
 const { spoolHookEvent } = await import('./hook-events.mjs');
+const { isWorkerWorkspace } = await import('./worker-context.mjs');
 
 try {
-  const dir = dataRoot(); initRoot(dir);
+  const dir = dataRoot();
   const rawText = fs.readFileSync(0, 'utf8');
   if (Buffer.byteLength(rawText) > 2 * 1024 * 1024) throw new Error('훅 입력 한도 초과');
   const raw = JSON.parse(rawText);
   const engine = process.argv[2] || process.env.HARNESS_ENGINE || 'unknown';
+  // Keep runtime workers out of user history even when the CLI's hook launcher
+  // drops HARNESS_WORKER. Hook commands run in the session cwd; prefer the
+  // engine-provided cwd and use the process cwd only when that field is absent.
+  if (isWorkerWorkspace(dir, engine, typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : process.cwd())) process.exit(0);
+  initRoot(dir);
   const map = { SessionStart: 'session.started', SessionEnd: 'session.ended', UserPromptSubmit: 'input', Stop: 'output',
     PreToolUse: 'tool.started', PostToolUse: 'tool.finished', PostToolUseFailure: 'tool.finished', StopFailure: 'turn.failed', Interrupt: 'turn.interrupted' };
   const kind = map[raw.hook_event_name];
@@ -28,6 +34,7 @@ try {
       observed_order: process.hrtime.bigint().toString().padStart(24, '0'),
       turn_id: turn, source_turn_id: sourceTurn, turn_source: sourceTurn ? 'native' : kind === 'input' ? 'local' : 'missing', hook_schema: 2,
       call_id: raw.tool_use_id || raw.tool_call_id || null, role: 'user',
+      ...(typeof raw.cwd === 'string' ? { cwd: raw.cwd } : {}),
       text: text == null ? null : redact(text), source: 'system_hook', hook_event_name: raw.hook_event_name };
     // Stable source IDs deduplicate retries; identical prompt contents do not.
     spoolHookEvent(dir, event, !!raw.event_id);

@@ -24,8 +24,13 @@ test('metadata and both summary paths receive contribution evidence guidance wit
     assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']);
     assert.deepEqual(run.steps.map(step => step.task), ['produce', 'verify', 'render']);
     const prompt = fs.readFileSync(path.join(run.attempts[0].directory, 'prompt.txt'), 'utf8');
-    for (const criterion of ['분기·반기·연간', '역할·행동·산출물·결과', '사용자·에이전트·협업자', '목표 수치와 관측 결과',
-      '측정 범위·기간', '근거 없는 영향·KPI·개선율·절감 시간', '팀 성과의 개인 기여', '파일·이슈·검사 결과']) {
+    const criteria = ['역할·행동·산출물·결과', '사용자·에이전트·협업자',
+      '측정 범위·기간', '근거 없는 영향·KPI·개선율·절감 시간', '팀 성과의 개인 기여'];
+    if (request.task === 'session.summarize') criteria.push('분기·반기·연간', '목표 수치와 관측 결과', '파일·이슈·검사 결과');
+    // Concise item descriptions delegate detailed outcomes to result comments;
+    // the rewritten summary instruction preserves evidence without the old wording.
+    else criteria.push('목표·관측 결과', '결과·검증 근거', 'work-item.result.summarize 결과 요약 댓글 작업의 책임');
+    for (const criterion of criteria) {
       assert.ok(prompt.includes(criterion), `${request.task}/${request.input.format || 'plain'} prompt omitted ${criterion}`);
     }
     assert.ok(prompt.includes(events[0].text)); assert.ok(prompt.includes(events[1].text));

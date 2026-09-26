@@ -4,13 +4,25 @@ import { assert } from './shared.mjs';
 // request text nor a local instruction override can increase these limits.
 export function taskPolicy(job, workflow, limits) {
   const checked = workflow.review_required === false;
+  const direct = checked || job.worker_mode === 'direct';
+  const stage = { mode: direct ? 'direct' : 'artifact',
+    max_tool_calls: direct ? 0 : job.kind === 'code_bundle' || job.kind === 'html' ? 64 : 24,
+    max_model_turns: direct ? 1 : job.kind === 'code_bundle' || job.kind === 'html' ? 65 : 25 };
   return {
-    mode: checked ? 'direct' : 'artifact',
+    ...stage,
     max_agent_attempts: checked ? 1 : 2 + 2 * limits.maxRepairs,
     max_repairs: checked ? 0 : limits.maxRepairs,
-    max_tool_calls: checked ? 0 : job.kind === 'code_bundle' || job.kind === 'html' ? 64 : 24,
-    max_model_turns: checked ? 1 : job.kind === 'code_bundle' || job.kind === 'html' ? 65 : 25
+    stages: Object.fromEntries(Object.values(workflow.nodes).filter(node => ['produce', 'plan', 'review', 'repair'].includes(node.task))
+      .map(node => [node.task, { ...stage }]))
   };
+}
+
+// Frozen runs without per-stage settings retain their original worker policy.
+// Direct transport removes tools, not an independent review or repair gate.
+export function workerStagePolicy(policy, stage) {
+  if (policy == null) return null;
+  const selected = policy.stages?.[stage] || policy;
+  return { mode: selected.mode, max_tool_calls: selected.max_tool_calls, max_model_turns: selected.max_model_turns };
 }
 
 export const directResponseSchema = {

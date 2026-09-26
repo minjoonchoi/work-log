@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS events (
  kind TEXT NOT NULL, event_at TEXT NOT NULL, ingested_at TEXT NOT NULL, payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS event_agent_time ON events(agent_id, event_at, seq);
+CREATE INDEX IF NOT EXISTS event_user_hook_time ON events(json_extract(payload,'$.engine'),event_at DESC,seq DESC)
+ WHERE json_extract(payload,'$.source')='system_hook' AND json_extract(payload,'$.role')='user';
+CREATE INDEX IF NOT EXISTS event_internal_parent ON events(
+ json_extract(payload,'$.parent.engine'),json_extract(payload,'$.parent.agent_session_id'),json_extract(payload,'$.parent.turn_id'),agent_id)
+ WHERE json_extract(payload,'$.role')!='user';
 CREATE TABLE IF NOT EXISTS work_item_sessions (
  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, work_item_id TEXT NOT NULL, first_event_id TEXT NOT NULL,
  start_at TEXT NOT NULL, end_at TEXT NOT NULL, pending INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1
@@ -158,11 +163,22 @@ export function managerStore(dir) {
     return { work_item_id: canonical(owner),
       origin: input ? { engine, agent_session_id: session_id, turn_id: input.turn_id } : null };
   }
+  const projectionLinks = agentId => new Map(all(`SELECT e.id,e.kind,l.session_id,l.resolution,json_extract(e.payload,'$.turn_id') AS turn_id
+    FROM events e JOIN event_links l ON l.event_id=e.id WHERE e.agent_id=? AND e.kind IN ('input','output')`, agentId).map(r => [r.id, r]));
+  function changedInputTurns(previous, current) {
+    const changed = new Set();
+    for (const [uid, record] of [...previous, ...current]) {
+      if (record.kind !== 'input') continue;
+      const before = previous.get(uid), after = current.get(uid);
+      if (before?.turn_id === after?.turn_id && before?.session_id === after?.session_id) continue;
+      for (const turn of [before?.turn_id, after?.turn_id]) if (typeof turn === 'string' && turn) changed.add(turn);
+    }
+    return [...changed];
+  }
   function project(agentId) {
     const agent = one('SELECT * FROM agent_sessions WHERE id=?', agentId);
     const rows = orderedAgentEvents(agentId);
-    const previous = new Map(all(`SELECT e.id,l.session_id,l.resolution,json_extract(e.payload,'$.turn_id') AS turn_id FROM events e JOIN event_links l ON l.event_id=e.id
-      WHERE e.agent_id=? AND e.kind IN ('input','output')`, agentId).map(r => [r.id, r]));
+    const previous = projectionLinks(agentId);
     exec('UPDATE work_item_sessions SET active=0 WHERE agent_id=?', agentId);
     for (const r of rows) exec('DELETE FROM event_links WHERE event_id=?', r.id);
     if (agent.role !== 'user') {
@@ -175,7 +191,7 @@ export function managerStore(dir) {
         const link = input && one('SELECT session_id FROM event_links WHERE event_id=?', input.id);
         exec('INSERT INTO event_links VALUES(?,?,?)', row.id, link?.session_id || null, link?.session_id ? 'parent' : 'unresolved');
       }
-      return;
+      return changedInputTurns(previous, projectionLinks(agentId));
     }
     const resolved = resolveHookTurns(rows);
     for (let index = 0; index < rows.length; index++) {
@@ -221,8 +237,8 @@ export function managerStore(dir) {
       exec('INSERT INTO event_links VALUES(?,?,?)', row.id, sid, resolution);
     }
     // Appends keep paging snapshots valid. Only reassigning an existing record invalidates them.
-    if (all(`SELECT e.id,l.session_id,l.resolution,json_extract(e.payload,'$.turn_id') AS turn_id FROM events e JOIN event_links l ON l.event_id=e.id
-      WHERE e.agent_id=? AND e.kind IN ('input','output')`, agentId).some(r => {
+    const currentLinks = projectionLinks(agentId);
+    if ([...currentLinks.values()].some(r => {
       const old = previous.get(r.id); return old && (old.session_id !== r.session_id || old.resolution !== r.resolution || old.turn_id !== r.turn_id);
     })) exec(`INSERT INTO history_revisions VALUES(?,1) ON CONFLICT(agent_id) DO UPDATE SET revision=revision+1`, agentId);
     for (const w of windows.values()) {
@@ -231,6 +247,7 @@ export function managerStore(dir) {
         end_at=excluded.end_at,pending=excluded.pending,active=1`,
       w.id, agentId, w.owner, w.first, w.start, w.end, w.pending.size > 0 ? 1 : 0);
     }
+    return changedInputTurns(previous, currentLinks);
   }
   function ingestMany(raws, cursor) {
     return transaction(db, () => {
@@ -254,6 +271,16 @@ export function managerStore(dir) {
           continue;
         }
         let agent = one('SELECT * FROM agent_sessions WHERE id=?', aid);
+        // Opening/resuming a native conversation is not a work request. Keep
+        // lifecycle and unmatched output evidence until the first real input;
+        // project() will attach these observations when that input arrives.
+        if (!agent && e.role === 'user' && e.kind !== 'input'
+          && !one('SELECT 1 FROM agent_item_bindings WHERE agent_id=?', aid)) {
+          exec('INSERT INTO events(id,agent_id,kind,event_at,ingested_at,payload) VALUES(?,?,?,?,?,?)', uid, aid, e.kind, e.event_at, now(), json(e));
+          exec('INSERT INTO event_links VALUES(?,?,?)', uid, null, 'unresolved');
+          inserted++;
+          continue;
+        }
         let parentOwner;
         if (e.role !== 'user' && typeof e.parent?.engine === 'string' && e.parent.engine
           && typeof e.parent?.agent_session_id === 'string' && e.parent.agent_session_id) {
@@ -267,6 +294,17 @@ export function managerStore(dir) {
           ...(e.parent.work_item_id && e.parent.work_item_id !== parentOwner ? { requested_work_item_id: e.parent.work_item_id } : {}) };
         if (!agent) {
           exec('INSERT INTO agent_sessions VALUES(?,?,?,?,?)', aid, e.engine, e.agent_session_id, owner, e.role);
+          // Bind observations held before the first input, including a local
+          // execution that completed before its native prompt was delivered.
+          for (const row of all('SELECT id,payload FROM events WHERE agent_id=? ORDER BY seq', aid)) {
+            const pending = JSON.parse(row.payload);
+            assert(pending.role === e.role, '에이전트 세션 역할이 충돌합니다.', 409);
+            if (pending.work_item_id && pending.work_item_id !== owner) pending.requested_work_item_id = pending.work_item_id;
+            pending.work_item_id = owner;
+            exec('UPDATE events SET payload=? WHERE id=?', json(pending), row.id);
+            if (pending.kind === 'run.updated' && pending.run) exec('INSERT INTO run_views VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',
+              pending.run.id, owner, json(pending.run));
+          }
           agent = { role: e.role };
         }
         assert(agent.role === e.role, '에이전트 세션 역할이 충돌합니다.', 409);
@@ -276,11 +314,51 @@ export function managerStore(dir) {
         }
         inserted++; changed.add(aid);
       }
-      for (const a of changed) if (one('SELECT role FROM agent_sessions WHERE id=?', a).role === 'user') project(a);
-      if (changed.size) for (const a of all("SELECT id FROM agent_sessions WHERE role!='user'")) project(a.id);
+      projectChanged(changed);
       if (cursor) exec('INSERT INTO cursors VALUES(?,?) ON CONFLICT(source) DO UPDATE SET value=excluded.value', cursor.source, String(cursor.value));
       return { inserted, duplicates: raws.length - inserted };
     });
+  }
+  function projectChanged(changed) {
+    // Parent identity comes from stored events, including workers received before
+    // their native input. The index also covers existing databases without
+    // rewriting their payloads or maintaining a second source of relationships.
+    const known = new Map(), parents = new Map(), projected = new Set();
+    const lookup = agent => {
+      if (!known.has(agent)) known.set(agent, one('SELECT * FROM agent_sessions WHERE id=?', agent));
+      return known.get(agent);
+    };
+    const pending = new Map([...changed].map(agent => [agent, lookup(agent)])
+      .sort(([, a], [, b]) => Number(a.role !== 'user') - Number(b.role !== 'user')));
+    function visit(agentId, visiting = new Set()) {
+      if (projected.has(agentId) || visiting.has(agentId)) return;
+      const agent = lookup(agentId); if (!agent) return;
+      visiting.add(agentId);
+      if (agent.role !== 'user') {
+        if (!parents.has(agentId)) parents.set(agentId, all(`SELECT DISTINCT json_extract(payload,'$.parent.engine') AS engine,
+          json_extract(payload,'$.parent.agent_session_id') AS source_id FROM events WHERE agent_id=?`, agentId)
+          .filter(parent => typeof parent.engine === 'string' && parent.engine && typeof parent.source_id === 'string' && parent.source_id)
+          .map(parent => stableId('agent-', `${parent.engine}:${parent.source_id}`)));
+        // Walk ancestors before a changed descendant. A delayed native input
+        // can enqueue an intermediate worker while this walk is in progress.
+        for (const parent of parents.get(agentId)) visit(parent, visiting);
+      }
+      visiting.delete(agentId);
+      if (!pending.delete(agentId)) return;
+      const turns = project(agentId); projected.add(agentId);
+      // Unchanged parent input links do not affect old workers, even when the
+      // same native conversation accumulates years of unrelated later turns.
+      for (let start = 0; start < turns.length; start += 200) {
+        const batch = turns.slice(start, start + 200);
+        const children = all(`SELECT DISTINCT a.* FROM events e JOIN agent_sessions a ON a.id=e.agent_id
+          WHERE json_extract(e.payload,'$.role')!='user' AND a.role!='user'
+          AND json_extract(e.payload,'$.parent.engine')=? AND json_extract(e.payload,'$.parent.agent_session_id')=?
+          AND json_extract(e.payload,'$.parent.turn_id') IN (${batch.map(() => '?').join(',')})`, agent.engine, agent.source_id, ...batch);
+        for (const child of children) if (!projected.has(child.id)) { known.set(child.id, child); pending.set(child.id, child); }
+      }
+    }
+    // Cyclic legacy references are visited once, never recursively replayed.
+    while (pending.size) visit(pending.keys().next().value);
   }
   function sessionList(itemId, { includeDeleted = false } = {}) {
     return all(`SELECT s.*,a.engine,a.source_id AS agent_session_id FROM work_item_sessions s

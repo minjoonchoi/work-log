@@ -376,6 +376,13 @@ dialog .instruction-editor > .help { margin: 9px 0 0; font-size: 11px; }
 .execution-task-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 20px 0 8px; }
 dialog .execution-task-toolbar label { margin: 0; }
 .execution-task-toolbar button { font-size: 12px; }
+.execution-task-toolbar > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.execution-management-tabs { display: flex; gap: 4px; margin: 20px 0 12px; padding: 4px; border-radius: 7px; background: var(--surface-muted); }
+.execution-management-tabs button { flex: 1; border-color: transparent; color: var(--muted); background: transparent; font-size: 13px; }
+.execution-management-tabs button[aria-selected="true"] { border-color: var(--line); color: var(--accent-strong); background: var(--surface); font-weight: 600; }
+dialog .execution-group-description { margin-top: 0; font-size: 12px; line-height: 1.7; }
+.execution-editor-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.execution-editor-fields:disabled { opacity: .65; }
 .execution-task-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
 .execution-task-source > span { padding: 3px 8px; border-radius: 4px; color: var(--accent-strong); background: var(--accent-soft); font-size: 11px; font-weight: 600; }
 .custom-task-metadata { padding: 0 14px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-muted); }
@@ -410,6 +417,14 @@ dialog:has(.custom-task-registration) { padding: 0; overflow: hidden; }
 .agent-connection-card { display: flex; flex-direction: column; padding: 16px; border: 1px solid var(--line); border-radius: 7px; }
 .agent-connection-heading { align-items: flex-start; margin-bottom: 12px; }
 .agent-connection-heading h3, .agent-atlassian-settings h3 { margin: 0; font-size: 14px; }
+.agent-connection-card > h3 { margin: 0 0 14px; font-size: 15px; }
+.agent-connection-purpose + .agent-connection-purpose { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.agent-connection-heading h4 { margin: 0; font-size: 13px; }
+.agent-connection-purpose > p { margin: 0 0 10px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.agent-connection-detail { color: var(--muted); }
+.agent-connection-help { margin-bottom: 12px; font-size: 11px; line-height: 1.7; }
+.agent-connection-help summary { cursor: pointer; }
+.agent-connection-help p { margin-bottom: 0; }
 .agent-connection-state { flex: none; padding: 3px 7px; border-radius: 4px; color: var(--muted); background: var(--surface-muted); font-size: 11px; }
 .agent-connection-state.connected { color: var(--accent-strong); background: var(--accent-soft); }
 .agent-connection-state.needs_attention { color: #92400e; background: #fffbeb; }
@@ -421,6 +436,17 @@ dialog:has(.custom-task-registration) { padding: 0; overflow: hidden; }
 .agent-connection-actions button { padding: 7px 10px; font-size: 12px; }
 .agent-atlassian-settings { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
 .agent-atlassian-settings p { margin: 6px 0 0; font-size: 12px; }
+.harness-packages { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.harness-packages > h3 { margin: 0; font-size: 14px; }
+.harness-packages > p { font-size: 12px; line-height: 1.7; }
+.harness-package-list { border: 1px solid var(--line); border-radius: 7px; }
+.harness-package { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; }
+.harness-package + .harness-package { border-top: 1px solid var(--line); }
+.harness-package-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.harness-package h4 { margin: 0; font-size: 13px; }
+.harness-package p { margin: 6px 0; font-size: 12px; overflow-wrap: anywhere; }
+.harness-package small { font-size: 11px; color: var(--muted); }
+.harness-package button { flex: none; font-size: 12px; }
 @media(max-width: 600px) { .agent-connection-cards { grid-template-columns: 1fr; } .agent-atlassian-settings { align-items: flex-start; flex-direction: column; } }
 .service-details { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 16px; font-size: 13px; }
 .jira-preview { margin: 20px 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; }

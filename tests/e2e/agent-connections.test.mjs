@@ -20,7 +20,7 @@ async function installedManager(t, { existing = true } = {}) {
   for (const folder of ['src', 'bin', 'harness', 'contracts', 'apps/web', 'skills', 'scripts'])
     fs.cpSync(path.join(ROOT, folder), path.join(bundled, folder), { recursive: true });
   fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(bundled, 'package.json'));
-  for (const pkg of ['ajv', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'require-from-string'])
+  for (const pkg of ['undici', 'ajv', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'require-from-string'])
     fs.cpSync(path.join(ROOT, 'node_modules', pkg), path.join(bundled, 'node_modules', pkg), { recursive: true });
   const original = '{\n  "theme": "user-owned", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "company-hook"}]}]}\n}';
   if (existing) for (const file of Object.values(loc.configs)) {
@@ -53,6 +53,15 @@ test('installed manager explicitly connects each agent, records real hook input/
   assert.equal(fs.readFileSync(loc.configs.codex, 'utf8'), first, 'repeated connect must not duplicate hooks');
   result = await h.manager('/agent-connections/claude', { method: 'POST', body: {} });
   assert.ok(result.connections.every(c => c.state === 'connected'));
+  for (const engine of ['codex', 'claude']) {
+    const config = JSON.parse(fs.readFileSync(loc.configs[engine], 'utf8'));
+    const command = config.hooks.SessionStart.flatMap(group => group.hooks).find(hook => hook.command.includes('WORKLOG_INSTALL_ID')).command;
+    const run = spawnSync('/bin/sh', ['-c', command], { input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: `${engine}-idle-only` }),
+      encoding: 'utf8', env: { ...process.env, HOME: f.homeDir, HARNESS_WORKER: '' } });
+    assert.equal(run.status, 0, run.stderr); assert.equal(run.stdout, '');
+  }
+  await eventually(() => h.manager('/agent-connections'), snapshot => snapshot.connections.every(c => c.collection.state === 'observed' && c.collection.last_event_kind === 'session.started'));
+  assert.deepEqual(await h.manager('/items'), [], 'hook delivery is confirmed before the first work request');
   for (const engine of ['codex', 'claude']) {
     const config = JSON.parse(fs.readFileSync(loc.configs[engine], 'utf8'));
     for (const [event, content] of [['UserPromptSubmit', { prompt: `${engine} 연결 후 입력` }], ['Stop', { last_assistant_message: `${engine} 연결 후 응답` }]]) {
@@ -101,4 +110,39 @@ test('a development or isolated manager never edits the host agent configuration
   const h = new Harness(); t.after(() => h.close()); await h.start('manager');
   assert.equal((await h.manager('/agent-connections')).available, false);
   await assert.rejects(h.manager('/agent-connections/codex', { method: 'POST', body: {} }), /설치된 WorkLog/);
+});
+
+test('installed manager controls tracking and harness independently and collection follows only tracking', async t => {
+  const f = await installedManager(t), { h, loc } = f;
+  const row = (result, engine) => result.connections.find(connection => connection.engine === engine);
+  for (const engine of ['claude', 'codex']) {
+    const url = `/agent-connections/${engine}`;
+    let result = await h.manager(`${url}/harness`, { method: 'POST', body: {} });
+    assert.equal(row(result, engine).harness.state, 'connected');
+    assert.equal(row(result, engine).tracking.state, 'disconnected');
+    assert.equal(row(result, engine).state, 'disconnected');
+    assert.equal(row(result, engine).collection.state, 'inactive');
+    assert.equal(fs.readFileSync(loc.configs[engine], 'utf8'), f.original);
+    result = await h.manager(`${url}/tracking`, { method: 'POST', body: {} });
+    assert.equal(row(result, engine).tracking.state, 'connected');
+    assert.equal(row(result, engine).harness.state, 'connected');
+    assert.equal(row(result, engine).collection.state, 'awaiting_hook');
+    const config = fs.readFileSync(loc.configs[engine], 'utf8');
+    result = await h.manager(`${url}/harness`, { method: 'DELETE', body: {} });
+    assert.equal(row(result, engine).harness.state, 'disconnected');
+    assert.equal(row(result, engine).tracking.state, 'connected');
+    assert.equal(row(result, engine).collection.state, 'awaiting_hook');
+    assert.equal(fs.readFileSync(loc.configs[engine], 'utf8'), config);
+    result = await h.manager(`${url}/harness`, { method: 'POST', body: {} });
+    const links = JSON.parse(fs.readFileSync(loc.manifest)).links;
+    result = await h.manager(`${url}/tracking`, { method: 'DELETE', body: {} });
+    assert.equal(row(result, engine).tracking.state, 'disconnected');
+    assert.equal(row(result, engine).harness.state, 'connected');
+    assert.equal(row(result, engine).collection.state, 'inactive');
+    assert.deepEqual(JSON.parse(fs.readFileSync(loc.manifest)).links, links);
+    assert.deepEqual(JSON.parse(fs.readFileSync(loc.configs[engine], 'utf8')), JSON.parse(f.original));
+  }
+  await h.close(false);
+  assert.equal(applyUninstall({ homeDir: f.homeDir, deactivate: false }).status, 'uninstalled');
+  for (const file of Object.values(loc.configs)) assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), JSON.parse(f.original));
 });

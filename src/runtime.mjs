@@ -8,19 +8,26 @@ import { initialEvidence, saveEvidence, readEvidence, executeChecks, sourceSnaps
 import { validateSchema, canonicalJson } from './schema.mjs';
 import { nextStep } from './workflow.mjs';
 import { resolveTask } from './intake.mjs';
+import { isMergedWorkItemRetry } from './agent-origin.mjs';
 import { executionSettings } from './execution-settings.mjs';
+import { harnessPackages } from './harness-packages.mjs';
 import { taskDrafts } from './task-drafts.mjs';
 import { assertModelSelection } from './model-capabilities.mjs';
 import { planOrchestrator } from './plans.mjs';
 import { validateCodeInput } from './code-bundle.mjs';
 import { compileReview, reviewPolicy } from './review-policy.mjs';
-import { taskPolicy, directResponseSchema, directContent } from './task-policy.mjs';
+import { taskPolicy, workerStagePolicy, directResponseSchema, directContent } from './task-policy.mjs';
+import { workflowCheckpoints } from './workflow-checkpoint.mjs';
 import { normalizeWorkspace, snapshotInputFiles, executionInputDigest, materializeInputs, verifyInputSnapshots, outputPath, publishOutput } from './artifact-handoff.mjs';
 
 const dir = dataRoot(); lockService(dir, 'runtime');
+// Runtime-only development copies do not need the macOS installer modules.
+const readAgentConnections = fs.existsSync(path.join(dir, 'installation.json'))
+  ? (await import('../scripts/agent-connections.mjs')).getAgentConnections : null;
 const { definitions, rules, responseSchema, taskTypes, workflows, profiles, executionProfiles, runSchema, requestSchema } = loadCatalog();
-const settings = executionSettings({ dir, jobs: definitions.jobs, workflows, profiles: executionProfiles });
-const runtimeDigest = digest([...['runtime', 'plans', 'review-policy', 'task-policy', 'worker-policy', 'code-bundle', 'artifact-handoff', 'executor', 'execution-settings', 'task-drafts', 'task-type-draft', 'model-capabilities', 'task-instruction', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite', 'work-report', 'result-summary'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
+const packages = harnessPackages({ dir, jobs: definitions.jobs });
+const settings = executionSettings({ dir, jobs: definitions.jobs, workflows, profiles: executionProfiles, packages });
+const runtimeDigest = digest([...['runtime', 'plans', 'agent-origin', 'review-policy', 'task-policy', 'worker-policy', 'worker-context', 'workflow-checkpoint', 'code-bundle', 'artifact-handoff', 'executor', 'execution-settings', 'harness-packages', 'task-drafts', 'task-type-draft', 'model-capabilities', 'task-instruction', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite', 'work-report', 'result-summary'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
   fs.readFileSync(path.join(ROOT, 'harness/model-capabilities.json'), 'utf8'),
   fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8')].join('\n'));
 const db = database(path.join(dir, 'runtime.sqlite'), `
@@ -34,8 +41,10 @@ const db = database(path.join(dir, 'runtime.sqlite'), `
  CREATE TABLE IF NOT EXISTS workflow_steps(id TEXT PRIMARY KEY,run_id TEXT NOT NULL,epoch INTEGER NOT NULL,sequence INTEGER NOT NULL,
  node TEXT NOT NULL,task TEXT NOT NULL,status TEXT NOT NULL,started_at TEXT NOT NULL,ended_at TEXT,outcome TEXT,next_node TEXT,reason TEXT,
  UNIQUE(run_id,epoch,sequence));
- PRAGMA user_version=3;
+ CREATE TABLE IF NOT EXISTS workflow_checkpoints(run_id TEXT PRIMARY KEY,definition_digest TEXT NOT NULL,cursor TEXT NOT NULL,updated_at TEXT NOT NULL);
+ PRAGMA user_version=4;
 `);
+const checkpoints = workflowCheckpoints(db, dir);
 const get = id => db.prepare('SELECT * FROM runs WHERE id=?').get(id);
 const running = new Map(), executions = new Map();
 let shuttingDown = false, draining = false, drainTimer, activeCheckRun = null;
@@ -48,9 +57,11 @@ function view(row) {
     evidence: db.prepare('SELECT file,content_digest,epoch FROM check_evidence WHERE run_id=? AND epoch=?').get(row.id, row.epoch) || null };
 }
 function emit(event) { db.prepare('INSERT INTO outbox(payload) VALUES(?)').run(json(event)); }
-// App setup has no user work item. Keep its run/attempt evidence in the runtime
-// without creating a synthetic task/session in the user's work history.
-function emitWorkEvent(request, event) { if (!(request.internal && request.task === 'task.type.draft')) emit(event); }
+// Internal jobs without an explicit owner keep their run/attempt evidence in
+// the runtime; they never create a synthetic work item in the user's history.
+function emitWorkEvent(request, event) {
+  if (request.track_work_item !== false && !(request.internal && request.task === 'task.type.draft')) emit(event);
+}
 function eventBase(request) { return { engine: request.origin.engine, agent_session_id: request.origin.agent_session_id, turn_id: request.origin.turn_id, role: request.internal ? 'metadata' : 'user', work_item_id: request.work_item_id, source: 'runtime' }; }
 function update(runId, fields) {
   return transaction(db, () => {
@@ -80,6 +91,7 @@ function prepare(input, context = {}) {
   const task = resolveTask(input, definitions.jobs);
   assert(typeof task === 'string' && Object.hasOwn(definitions.jobs, task), '지원하지 않는 업무입니다.');
   const catalogJob = definitions.jobs[task];
+  packages.assertInstalled(task, catalogJob);
   const job = structuredClone(catalogJob);
   const review = compileReview(task, job, workflows, input.review);
   job.workflow = review.workflow_id;
@@ -104,7 +116,16 @@ function prepare(input, context = {}) {
   const prior = get(runId), previous = prior ? JSON.parse(prior.request) : null;
   const origin = input.origin || previous?.origin || { engine: 'harness', agent_session_id: id('cli-'), turn_id: id('turn-') };
   for (const key of ['engine', 'agent_session_id', 'turn_id']) assert(typeof origin[key] === 'string' && origin[key].length, `origin.${key}가 필요합니다.`);
+  if (readAgentConnections && !job.allow_internal && ['codex', 'claude'].includes(origin.engine)) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'installation.json'), 'utf8'));
+    if (typeof manifest.home === 'string' && path.join(path.resolve(manifest.home), 'Library/Application Support/WorkLog') === path.resolve(dir)) {
+      const connected = readAgentConnections({ homeDir: manifest.home });
+      assert(connected.available && connected.connections.find(value => value.engine === origin.engine)?.harness.state === 'connected',
+        `${origin.engine} 하네스 위임 연결이 해제되어 있습니다. WorkLog 연결 설정에서 하네스 위임을 연결하세요.`, 409);
+    }
+  }
   const request = { task, prompt: input.prompt || canonicalJson(compiled), input: normalizedInput, engine, origin, internal: !!input.internal, record_io: !input.origin && !input.internal,
+    track_work_item: !input.internal || !!input.work_item_id,
     work_item_id: input.work_item_id || stableId('item-', stableId('agent-', `${origin.engine}:${origin.agent_session_id}`)),
     ...(workspace ? { workspace } : {}),
     ...(inputFiles.length ? { input_files: inputFiles.map(({ path, content_digest }) => ({ path, content_digest })) } : {}),
@@ -140,7 +161,7 @@ function prepare(input, context = {}) {
   request.input = JSON.parse(canonicalJson(request.input));
   validateSchema(job.input_schema, request.input, `${task} input`);
   definition.request_digest = executionInputDigest(request, definition);
-  if (engine === 'fixture' && input.fixture?.timeoutMs) definition.limits.timeoutMs = Math.max(50, Math.min(180000, input.fixture.timeoutMs));
+  if (engine === 'fixture' && input.fixture?.timeoutMs) definition.limits.timeoutMs = Math.max(50, Math.min(definition.limits.timeoutMs, input.fixture.timeoutMs));
   return { runId, request, definition };
 }
 function register({ runId, request, definition }) {
@@ -161,7 +182,7 @@ function register({ runId, request, definition }) {
   if (request.task === 'checks.run') saveEvidence(db, dir, initialEvidence(get(runId), definition.check_profile, request.input.profile));
   queueMicrotask(schedule); return view(get(runId));
 }
-function create(input) {
+async function create(input) {
   assert(!draining && !shuttingDown, '앱 종료 후 기존 업무를 마무리하는 중입니다. WorkLog를 다시 열고 요청하세요.', 503);
   validateSchema(runSchema, input, '실행 요청');
   // Idempotency identifies the accepted declaration, not mutable files or later defaults.
@@ -171,8 +192,9 @@ function create(input) {
   if (prior) {
     const previousDigest = JSON.parse(prior.definition).submission_digest;
     if (previousDigest) {
-      assert(previousDigest === submissionDigest, '같은 실행 요청 키에 다른 입력 선언이 있습니다.', 409);
-      return view(prior);
+      assert(previousDigest === submissionDigest || await isMergedWorkItemRetry(dir, input,
+        JSON.parse(prior.request).work_item_id, previousDigest), '같은 실행 요청 키에 다른 입력 선언이 있습니다.', 409);
+      return view(get(prior.id));
     }
     // Older runs did not retain the declaration; preserve their existing comparison.
     return register(prepare(input));
@@ -236,11 +258,13 @@ function publishArtifact(row, request, candidate, proof) {
 }
 async function agentStep(row, request, definition, task, candidate, issues, round) {
   const runId = row.id, job = definition.job, attempt = id('attempt-');
+  const stagePolicy = workerStagePolicy(definition.worker_policy, task);
+  const directWriter = stagePolicy?.mode === 'direct' && definition.task_types[task].writes_artifact;
   const attempts = db.prepare('SELECT COUNT(*) AS count FROM attempts WHERE run_id=? AND epoch=?').get(runId, row.epoch).count;
   assert(!definition.worker_policy || attempts < definition.worker_policy.max_agent_attempts, '작업 유형의 모델 실행 횟수 한도에 도달했습니다.');
   const attemptDir = path.join(dir, 'runs', runId, attempt), cwd = path.join(attemptDir, 'workspace');
   fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
-  if (candidate) atomic(path.join(cwd, job.file), candidate.bytes);
+  if (candidate && stagePolicy?.mode !== 'direct') atomic(path.join(cwd, job.file), candidate.bytes);
   const parent = { ...request.origin, work_item_id: request.work_item_id, run_id: runId, task_id: attempt };
   const workerBase = { engine: request.engine, agent_session_id: attempt, role: 'worker', stage: task, work_item_id: request.work_item_id, parent };
   const inputs = materializeInputs(attemptDir, definition);
@@ -249,8 +273,8 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
   emitWorkEvent(request, { ...workerBase, id: `input-${attempt}`, kind: 'input', event_at: now(), turn_id: attempt, text: prompt });
   const processRun = execute({ engine: request.engine, cwd, attemptDir, stage: task, prompt, limits: definition.limits, parent, dataDir: dir,
     execution: request.engine === 'fixture' ? null : definition.execution_profile.stages[task][request.engine],
-    schema: definition.worker_policy?.mode === 'direct' ? directResponseSchema : definition.response_schema,
-    workerPolicy: definition.worker_policy, allowedFile: job.file, fixture: { ...request.fixture, job, round, input: request.input, direct: definition.worker_policy?.mode === 'direct' },
+    schema: directWriter ? directResponseSchema : definition.response_schema,
+    workerPolicy: stagePolicy, allowedFile: job.file, fixture: { ...request.fixture, job, round, epoch: row.epoch, input: request.input, direct: directWriter },
     onSpawn: pid => db.prepare('UPDATE attempts SET pid=? WHERE id=?').run(pid, attempt) });
   running.set(runId, processRun);
   let returned = await processRun.promise;
@@ -259,14 +283,16 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
     returned = { ok: false, observation: { ...returned.observation, reason: 'input_integrity', error: `읽기 전용 입력 자료가 변경되었습니다: ${e.message}` } };
     atomic(path.join(attemptDir, 'process.json'), json(returned.observation));
   }
-  if (returned.ok && definition.worker_policy?.mode === 'direct') {
+  if (returned.ok && stagePolicy?.mode === 'direct') {
     try {
-      validateSchema(directResponseSchema, returned.result, '직접 응답');
-      const content = directContent(returned.result);
       assert(fs.readdirSync(cwd).length === 0, '직접 응답 작업자가 작업 파일을 변경했습니다.');
-      if (content !== null) {
-        atomic(path.join(cwd, job.file), content);
-        returned = { ...returned, result: { status: 'done', result: { file: job.file } } };
+      if (directWriter) {
+        validateSchema(directResponseSchema, returned.result, '직접 응답');
+        const content = directContent(returned.result);
+        if (content !== null) {
+          atomic(path.join(cwd, job.file), content);
+          returned = { ...returned, result: { status: 'done', result: { file: job.file } } };
+        }
       }
     } catch (e) {
       returned = { ok: false, observation: { ...returned.observation, reason: 'protocol_failure', error: e.message } };
@@ -277,7 +303,8 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
   emitWorkEvent(request, { ...workerBase, id: `output-${attempt}`, kind: returned.ok ? 'output' : 'turn.failed', event_at: now(), turn_id: attempt,
     source_session_id: returned.observation.native_session_id, text: returned.ok ? json(returned.result) : json(returned.observation) });
   let outcome;
-  if (!returned.ok) outcome = { status: 'failed', result: { message: `실행 실패: ${[returned.observation.reason, returned.observation.error].filter(Boolean).join(': ') || returned.observation.code}` } };
+  if (!returned.ok) outcome = { status: 'failed', result: { message: `실행 실패: ${[returned.observation.reason, returned.observation.error].filter(Boolean).join(': ') || returned.observation.code}`
+    + (returned.observation.termination_confirmed === false ? ' 이전 worker의 프로세스 트리 종료가 미확인이므로 재개할 수 없습니다.' : '') } };
   else {
     try { validateSchema(definition.response_schema, returned.result, 'worker 응답'); outcome = validateResult(returned.result, task, job); }
     catch (e) { outcome = { status: 'failed', result: { message: `protocol_failure: ${e.message}` } }; }
@@ -294,7 +321,10 @@ async function perform(row) {
     validateSchema(definition.request_schema, { task: request.task, input: request.input }, '고정된 작업 요청');
     validateSchema(job.input_schema, request.input, '고정된 업무 입력');
     assert(executionInputDigest(request, definition) === definition.request_digest, '입력 버전이 변경되었습니다.');
+    const saved = checkpoints.load(row, definition);
+    if (saved) ({ candidate, issues, nodeId, sequence, budgets } = saved);
     while (stillCurrent(runId, epoch)) {
+      if (workflow.mode === 'artifact') checkpoints.save(row, { candidate, issues, nodeId, sequence, budgets });
       if (++sequence > workflow.max_steps) { terminal(runId, 'blocked', 'workflow 실행 단계 한도에 도달했습니다.', epoch); return; }
       const node = workflow.nodes[nodeId], task = node.task, stepId = id('step-');
       update(runId, { stage: nodeId, round: budgets.repairs });
@@ -308,7 +338,8 @@ async function perform(row) {
           const execution = await agentStep(row, request, definition, task, candidate, issues, budgets.repairs);
           outcome = execution.outcome;
           if (task === 'review' && ['done', 'revise'].includes(outcome.status)) {
-            assert(artifact(execution.cwd, job.file).content_digest === candidate.content_digest, '검토자가 산출물을 변경했습니다.');
+            const reviewedCwd = workerStagePolicy(definition.worker_policy, task)?.mode === 'direct' ? candidate.cwd : execution.cwd;
+            assert(artifact(reviewedCwd, job.file).content_digest === candidate.content_digest, '검토자가 산출물을 변경했습니다.');
             if (outcome.status === 'done') candidate.review = { digest: candidate.content_digest, attempt: execution.attempt };
           } else if (outcome.status === 'done') {
             candidate = { ...artifact(execution.cwd, job.file), cwd: execution.cwd, directory: execution.directory, generation_attempt: execution.attempt };
@@ -337,8 +368,15 @@ async function perform(row) {
         return;
       }
       const transition = nextStep(workflow, nodeId, outcome.status, budgets, limits);
-      db.prepare('UPDATE workflow_steps SET status=?,ended_at=?,outcome=?,next_node=?,reason=? WHERE id=?')
-        .run('completed', now(), json(outcome), transition.next, transition.reason || null, stepId);
+      transaction(db, () => {
+        db.prepare('UPDATE workflow_steps SET status=?,ended_at=?,outcome=?,next_node=?,reason=? WHERE id=?')
+          .run('completed', now(), json(outcome), transition.next, transition.reason || null, stepId);
+        if (workflow.mode === 'artifact' && !transition.next.startsWith('$'))
+          checkpoints.save(row, { candidate, issues: outcome.status === 'revise' ? outcome.result.issues : issues,
+            nodeId: transition.next, sequence, budgets: transition.budgets });
+        else if (workflow.mode === 'artifact' && transition.reason === 'repair_limit')
+          checkpoints.save(row, { candidate, issues, nodeId, sequence, budgets }, transition.reason);
+      });
       budgets = transition.budgets;
       if (outcome.status === 'revise') issues = outcome.result.issues;
       if (transition.next.startsWith('$')) {
@@ -406,13 +444,34 @@ function cancel(runId) {
   queueMicrotask(schedule);
   return view(get(runId));
 }
+function assertPreviousWorkersStopped(runId) {
+  assert(!running.has(runId), '이전 worker 종료를 기다리고 있습니다.', 409);
+  const attempts = db.prepare('SELECT id,pid,status,result,directory FROM attempts WHERE run_id=?').all(runId);
+  assert(!attempts.some(a => a.status === 'running' && alive(a.pid)), '이전 worker가 살아 있어 새 쓰기 시도를 시작할 수 없습니다.', 409);
+  const localCheck = JSON.parse(get(runId).request).task === 'checks.run';
+  const unconfirmed = attempts.some(attempt => {
+    if (attempt.result && JSON.parse(attempt.result).observation?.termination_confirmed === false) return true;
+    // The runner persists process.json before the runtime commits attempts.result.
+    // Recover that observation after a crash, but only from this exact process.
+    const directory = path.join(dir, 'runs', runId, attempt.id);
+    if (attempt.directory !== directory || !Number.isSafeInteger(attempt.pid)) return false;
+    try {
+      const observed = JSON.parse(fs.readFileSync(path.join(directory, 'process.json'), 'utf8'));
+      return observed.termination_confirmed === false && observed.pid === attempt.pid
+        && observed.cwd === (localCheck ? ROOT : path.join(directory, 'workspace'));
+    } catch { return false; } // Older attempts may have no process-level observation.
+  });
+  assert(!unconfirmed, '이전 worker의 프로세스 트리 종료를 확인하지 못했습니다. 실행을 재개할 수 없습니다.', 409);
+}
 function resume(runId) {
   assert(!draining && !shuttingDown, '앱 종료 후 기존 업무를 마무리하는 중입니다. WorkLog를 다시 열고 재개하세요.', 503);
   const row = get(runId); assert(row, '실행이 없습니다.', 404);
   assert(['failed', 'blocked', 'interrupted', 'cancelled'].includes(row.status), '재개 가능한 실행 상태가 아닙니다.', 409);
-  assert(!running.has(runId), '이전 worker 종료를 기다리고 있습니다.', 409);
-  const attempts = db.prepare("SELECT pid FROM attempts WHERE run_id=? AND status='running'").all(runId);
-  assert(!attempts.some(a => alive(a.pid)), '이전 worker가 살아 있어 새 쓰기 시도를 시작할 수 없습니다.', 409);
+  assertPreviousWorkersStopped(runId);
+  // Publication reconciliation must not bypass the same immutable evidence
+  // checks required by stage resume. Older publications have no checkpoint.
+  if (db.prepare('SELECT run_id FROM workflow_checkpoints WHERE run_id=?').get(runId))
+    checkpoints.load(row, JSON.parse(row.definition));
   if (row.status === 'interrupted') {
     let publicationVerified = false;
     try {
@@ -454,20 +513,22 @@ function resume(runId) {
     }
   }
   assert(JSON.parse(row.definition).runtime_digest === runtimeDigest, '실행을 시작한 하네스 버전에서 재개해야 합니다.', 409);
-  // First release restarts the frozen request in a new workspace, never reuses unverified partial writes.
-  update(runId, { status: 'pending', epoch: row.epoch + 1, round: 0, stage: null, message: null, artifact: null });
   const definition = JSON.parse(row.definition), request = JSON.parse(row.request);
+  const saved = checkpoints.load(row, definition);
+  // Retry the failed stage in a fresh workspace, preserving accepted candidates
+  // and the repair budget. A changed candidate is rejected, never regenerated.
+  update(runId, { status: 'pending', epoch: row.epoch + 1, round: saved?.budgets.repairs || 0, stage: saved?.nodeId || null, message: null, artifact: null });
   if (request.task === 'checks.run') saveEvidence(db, dir, initialEvidence(get(runId), definition.check_profile, request.input.profile));
   queueMicrotask(schedule); return view(get(runId));
 }
-const plans = planOrchestrator({ db, jobs: definitions.jobs, workflows, prepare, register,
+const plans = planOrchestrator({ db, dir, jobs: definitions.jobs, workflows, prepare, register,
   getRun: runId => { const row = get(runId); return row ? view(row) : null; },
   cancelRun: cancel, resumeRun: resume, schedule,
   canResume: runId => {
     const row = get(runId);
-    assert(!running.has(runId), '이전 worker 종료를 기다리고 있습니다.', 409);
-    assert(!db.prepare("SELECT pid FROM attempts WHERE run_id=? AND status='running'").all(runId).some(a => alive(a.pid)), '이전 worker가 살아 있어 재개할 수 없습니다.', 409);
+    assertPreviousWorkersStopped(runId);
     assert(JSON.parse(row.definition).runtime_digest === runtimeDigest, '실행을 시작한 하네스 버전에서 재개해야 합니다.', 409);
+    checkpoints.load(row, JSON.parse(row.definition));
   },
   emitIO: (input, eventId, kind, text) => emit({ id: eventId, ...input.origin, work_item_id: input.work_item_id,
     source: 'runtime', role: 'user', kind, event_at: now(), text }) });
@@ -491,8 +552,9 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
     draining = false; clearTimeout(drainTimer); drainTimer = null; schedule(); return { status: 'running' };
   }
   if (req.method === 'GET' && url.pathname === '/catalog') return {
-    version: definitions.version, jobs: Object.entries(definitions.jobs).map(([id, job]) => ({ id, label: job.label, workflow: job.workflow,
+    version: definitions.version, jobs: Object.entries(definitions.jobs).filter(([id, job]) => packages.access(id, job).installed).map(([id, job]) => ({ id, label: job.label, workflow: job.workflow,
       category: job.category, boundary: job.boundary, routing: job.routing, internal: !!job.allow_internal,
+      ...packages.access(id, job),
       source: job.source || 'builtin', template_id: job.template_id || null, description: job.description || '',
       review_policy: reviewPolicy(id, job, workflows[job.workflow]),
       worker_policy: workflows[job.workflow].mode === 'artifact' ? taskPolicy(job, workflows[job.workflow], definitions.limits) : null,
@@ -500,6 +562,9 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
     task_types: taskTypes, workflows, execution_profiles: executionProfiles,
     check_profiles: Object.entries(profiles).map(([id, p]) => ({ id, label: p.label, validation_scope: p.validation_scope })) };
   if (req.method === 'GET' && url.pathname === '/execution-settings') return settings.snapshot();
+  if (req.method === 'GET' && url.pathname === '/harness-packages') return packages.snapshot();
+  const packageMatch = url.pathname.match(/^\/harness-packages\/([^/]+)$/);
+  if (packageMatch && req.method === 'PUT') return packages.set(decodeURIComponent(packageMatch[1]), await body(req));
   if (req.method === 'POST' && url.pathname === '/execution-settings/custom-task-drafts') return drafts.create(await body(req));
   const draftMatch = url.pathname.match(/^\/execution-settings\/custom-task-drafts\/([^/]+)(?:\/(cancel))?$/);
   if (draftMatch && req.method === 'GET' && !draftMatch[2]) return drafts.detail(draftMatch[1]);

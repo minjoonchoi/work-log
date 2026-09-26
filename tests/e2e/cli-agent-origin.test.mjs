@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { ROOT, initRoot } from '../../src/shared.mjs';
+import { ROOT, initRoot, readEndpoint } from '../../src/shared.mjs';
 import { Harness, event, eventually } from '../helpers.mjs';
 
 const origin = { engine: 'codex', agent_session_id: 'native-session /?&한글', turn_id: 'native-turn' };
@@ -52,9 +52,9 @@ async function endpoint(t, { reply = { status: 200, body: context }, manager = t
           if (reply.transport === 'timeout') return;
           response = reply;
         } else {
-          assert.ok(url.pathname.startsWith('/api/items/'));
-          const itemId = decodeURIComponent(url.pathname.slice('/api/items/'.length));
-          response = itemReplies[itemId] || { status: 200, body: { item: { id: itemId } } };
+          assert.ok(url.pathname.startsWith('/api/items/') && url.pathname.endsWith('/identity'));
+          const itemId = decodeURIComponent(url.pathname.slice('/api/items/'.length, -'/identity'.length));
+          response = itemReplies[itemId] || { status: 200, body: { id: itemId } };
         }
         res.writeHead(response.status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(response.body));
@@ -149,13 +149,13 @@ test('CLI accepts merged item aliases only after confirming their canonical owne
   for (const command of commands) await t.test(command, async t => {
     const alias = 'item-alias /?&한글';
     const { dir, calls } = await endpoint(t, { itemReplies: {
-      [alias]: { status: 200, body: { item: { id: context.work_item_id } } }
+      [alias]: { status: 200, body: { id: context.work_item_id } }
     } });
     const payload = { ...payloadFor(command), work_item_id: alias };
     const result = await cli(dir, command, payload, { env: { CODEX_THREAD_ID: origin.agent_session_id } });
     assert.equal(result.exit, 0, result.stderr); assert.equal(calls.length, 3);
     assert.equal(calls[0].method, 'GET');
-    assert.deepEqual(calls[1], { method: 'GET', url: `/api/items/${encodeURIComponent(alias)}`, body: undefined });
+    assert.deepEqual(calls[1], { method: 'GET', url: `/api/items/${encodeURIComponent(alias)}/identity`, body: undefined });
     assert.equal(calls[2].method, 'POST');
     assert.deepEqual(calls[2].body, { ...payload, ...context, workspace: fs.realpathSync(dir) });
   });
@@ -315,10 +315,12 @@ test('CLI resolves a merged source item flag to the canonical target for a fresh
   await h.start('manager');
   const sourceItem = 'item-merged-source', targetItem = 'item-merged-target';
   const sessionId = 'native-merged-source', turnId = 'native-merged-turn';
-  const at = new Date().toISOString();
+  const at = new Date(Date.now() - 60000).toISOString();
   await h.ingest([
-    event(sessionId, 'session.started', at, null, { source: 'system_hook', work_item_id: sourceItem }),
-    event('native-merged-target', 'session.started', at, null, { source: 'system_hook', work_item_id: targetItem })
+    event(sessionId, 'input', at, 'source-before-merge', { source: 'system_hook', work_item_id: sourceItem }),
+    event(sessionId, 'output', at, 'source-before-merge', { source: 'system_hook', work_item_id: sourceItem }),
+    event('native-merged-target', 'input', at, 'target-before-merge', { source: 'system_hook', work_item_id: targetItem }),
+    event('native-merged-target', 'output', at, 'target-before-merge', { source: 'system_hook', work_item_id: targetItem })
   ]);
   await h.manager('/merge', { method: 'POST', body: {
     ids: [sourceItem, targetItem], target: targetItem, operation_id: 'merge-cli-origin-alias'
@@ -337,10 +339,86 @@ test('CLI resolves a merged source item flag to the canonical target for a fresh
   const detail = await eventually(() => h.manager(`/items/${targetItem}`), value =>
     value.runs.length === 1 && value.runs[0].status === 'completed');
   assert.equal((await h.manager('/items')).length, 1);
-  assert.equal(detail.sessions.length, 1);
-  assert.equal(detail.sessions[0].agent_session_id, sessionId);
+  assert.equal(detail.sessions.length, 2);
+  const sourceSession = detail.sessions.find(session => session.agent_session_id === sessionId);
+  assert.ok(sourceSession);
   assert.equal(detail.runs[0].work_item_id, targetItem);
-  assert.equal(detail.runs[0].session_id, detail.sessions[0].id);
+  assert.equal(detail.runs[0].session_id, sourceSession.id);
   const inputs = detail.events.filter(value => value.role === 'user' && value.kind === 'input');
-  assert.equal(inputs.length, 1); assert.equal(inputs[0].source, 'system_hook');
+  assert.equal(inputs.length, 3); assert.ok(inputs.every(input => input.source === 'system_hook'));
+});
+
+test('CLI retries after item merges reuse accepted runs and plans without reading changed sources or settings', async t => {
+  for (const command of commands) await t.test(command, async t => {
+    const h = await new Harness().start('runtime'); t.after(() => h.close()); await h.start('manager');
+    const source = `retry-source-${command}`, target = `retry-target-${command}`, final = `retry-final-${command}`, unrelated = `retry-unrelated-${command}`;
+    const sessionId = `retry-session-${command}`, turnId = 'accepted-native-turn', at = new Date().toISOString();
+    await h.ingest([event(sessionId, 'input', at, turnId, { source: 'system_hook', work_item_id: source }),
+      ...[target, final, unrelated].flatMap(item => ['input', 'output'].map(kind =>
+        event(`agent-${item}`, kind, at, `turn-${item}`, { source: 'system_hook', work_item_id: item })))]);
+    const payload = { ...payloadFor(command), idempotency_key: `merged-cli-${command}` };
+    if (command === 'run') payload.input_files = [{ path: 'source.md' }]; else payload.steps[0].input_files = [{ path: 'source.md' }];
+    fs.writeFileSync(path.join(h.dir, 'source.md'), 'Accepted source contents.\n');
+    const accepted = await cli(h.dir, command, payload, { env: { CODEX_THREAD_ID: sessionId }, args: ['--wait'] });
+    assert.equal(accepted.exit, 0, accepted.stderr);
+    const first = JSON.parse(accepted.stdout), before = await h.runtime('/runs');
+    await h.manager('/merge', { method: 'POST', body: { ids: [source, target], target, operation_id: `retry-merge-one-${command}` } });
+    await h.manager('/merge', { method: 'POST', body: { ids: [target, final], target: final, operation_id: `retry-merge-two-${command}` } });
+    assert.deepEqual(await h.manager(`/items/${source}/identity`), { id: final });
+    assert.deepEqual(await h.manager(`/items/${target}/identity`), { id: final });
+
+    fs.writeFileSync(path.join(h.dir, 'source.md'), 'Source changed after acceptance.\n');
+    const settings = await h.runtime('/execution-settings');
+    await h.runtime('/execution-settings/prd.create', { method: 'PUT', body: { revision: settings.revision,
+      instruction: '# Changed after acceptance\nDo not use for the accepted retry.', backend: 'claude',
+      backends: { codex: { model: null, effort: null }, claude: { model: null, effort: null } } } });
+    const retried = await cli(h.dir, command, payload, { env: { CODEX_THREAD_ID: sessionId } });
+    assert.equal(retried.exit, 0, retried.stderr); assert.equal(JSON.parse(retried.stdout).id, first.id);
+    assert.deepEqual(await h.runtime('/runs'), before, 'retry must not prepare, replace or execute the accepted work again');
+
+    const endpoint = command === 'run' ? '/runs' : '/plans';
+    const linked = { ...payload, workspace: fs.realpathSync(h.dir), work_item_id: final,
+      origin: { engine: 'codex', agent_session_id: sessionId, turn_id: turnId } };
+    const simultaneous = await Promise.all(Array.from({ length: 4 }, () => h.runtime(endpoint, { method: 'POST', body: linked })));
+    assert.ok(simultaneous.every(value => value.id === first.id));
+    const changedInput = command === 'run'
+      ? { ...linked, input: { requirements: 'A different requested output.' } }
+      : { ...linked, steps: [{ ...linked.steps[0], input: { requirements: 'A different requested output.' } }] };
+    const changedTask = command === 'run' ? { ...linked, task: 'document.create' }
+      : { ...linked, steps: [{ ...linked.steps[0], task: 'document.create' }] };
+    const changedReview = command === 'run' ? { ...linked, review: { required: false, reason: 'Changed review policy.' } }
+      : { ...linked, steps: [{ ...linked.steps[0], review: { required: false, reason: 'Changed review policy.' } }] };
+    for (const request of [changedInput, changedTask, changedReview, { ...linked, work_item_id: unrelated },
+      { ...linked, origin: { ...linked.origin, turn_id: 'another-turn' } },
+      { ...linked, origin: { ...linked.origin, agent_session_id: 'another-session' } },
+      { ...linked, origin: { ...linked.origin, engine: 'claude' } }])
+      await assert.rejects(h.runtime(endpoint, { method: 'POST', body: request }), error => error.status === 409 && /같은.*요청 키/.test(error.message));
+    assert.deepEqual(await h.runtime('/runs'), before);
+
+    await h.stop('manager');
+    await assert.rejects(h.runtime(endpoint, { method: 'POST', body: linked }), /관리 서비스/);
+    assert.deepEqual(await h.runtime('/runs'), before);
+    await h.start('manager');
+    const resumed = await h.runtime(endpoint, { method: 'POST', body: linked }); assert.equal(resumed.id, first.id);
+    await h.manager('/items/delete', { method: 'POST', body: { ids: [final], operation_id: `delete-retry-owner-${command}` } });
+    await assert.rejects(h.manager(`/items/${source}/identity`), error => error.status === 404);
+    await assert.rejects(h.runtime(endpoint, { method: 'POST', body: linked }), error => error.status === 409);
+    assert.deepEqual(await h.runtime('/runs'), before);
+  });
+});
+
+test('item identity lookup requires authentication and returns only an existing visible canonical ID', async t => {
+  const h = new Harness(); t.after(() => h.close()); await h.start('manager');
+  const alias = 'item alias /?&한글', target = 'canonical-item';
+  await h.ingest([event('identity-alias', 'input', '2026-09-26T00:00:00Z', 'alias', { work_item_id: alias }),
+    event('identity-target', 'input', '2026-09-26T00:00:01Z', 'target', { work_item_id: target })]);
+  await h.manager('/merge', { method: 'POST', body: { ids: [alias, target], target, operation_id: 'identity-alias-merge' } });
+  const route = `/items/${encodeURIComponent(alias)}/identity`;
+  assert.deepEqual(await h.manager(route), { id: target });
+  const endpoint = readEndpoint(h.dir, 'manager');
+  assert.equal((await fetch(`http://127.0.0.1:${endpoint.port}/api${route}`)).status, 401);
+  await assert.rejects(h.manager('/items/missing-item/identity'), error => error.status === 404);
+  await h.manager('/items/delete', { method: 'POST', body: { ids: [target], operation_id: 'identity-target-delete' } });
+  await assert.rejects(h.manager(route), error => error.status === 404);
+  await assert.rejects(h.manager(`/items/${target}/identity`), error => error.status === 404);
 });

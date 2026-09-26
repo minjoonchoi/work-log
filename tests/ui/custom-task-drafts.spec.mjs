@@ -16,6 +16,7 @@ const request = '팀 리더를 위한 주간 회의 기록을 작성합니다. �
 async function open(page) {
   await page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}`);
   await page.getByRole('button', { name: '작업 실행 설정', exact: true }).click();
+  await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: '사용자 작업 등록', exact: true }).click();
   return dialog;
@@ -180,6 +181,7 @@ test('cancelled, replaced and closed draft requests cannot overwrite a manual or
   const fourth = await start('닫을 설명');
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '작업 실행 설정', exact: true }).click();
+  await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   await release(fourth);
   await expect.poll(() => cancelled.includes(fourth)).toBe(true);
   await expect(dialog.getByRole('heading', { name: '작업 실행 설정', exact: true })).toBeVisible();

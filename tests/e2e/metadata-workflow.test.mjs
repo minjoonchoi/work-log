@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { Harness, eventually } from '../helpers.mjs';
+import { Harness, eventually, pair } from '../helpers.mjs';
 import { ROOT } from '../../src/shared.mjs';
 
 const events = [{ kind: 'input', event_at: '2026-09-19T01:00:00Z', text: '검토한 변경 사항을 정리해 주세요.' }];
@@ -13,6 +13,28 @@ const rewrite = format => ({ task: 'text.rewrite', internal: true, input: { form
   { id: 'session-1', engine: 'codex', start_at: events[0].event_at, end_at: '2026-09-19T01:05:00Z', summary: null, events }
 ] } });
 async function setup(t) { const h = await new Harness().start('runtime'); t.after(() => h.close()); return h; }
+
+test('ownerless internal metadata keeps runtime evidence without creating user work', async t => {
+  const h = await setup(t); await h.start('manager');
+  for (const input of [summary, rewrite('work-item-metadata')]) {
+    const run = await h.finish(await h.run(input));
+    assert.equal(run.internal, true); assert.equal(run.status, 'completed', run.message);
+    assert.equal(run.attempts.length, 1); assert.ok(fs.existsSync(run.artifact.file));
+    assert.deepEqual((await h.runtime('/events')).events, [], 'ownerless internal evidence must remain in the runtime');
+  }
+  assert.deepEqual(await h.manager('/items'), []);
+  await h.ingest(pair('native-owner', '09:00:00', '09:05:00', 'one', { work_item_id: 'real-work' }));
+  const before = await h.manager('/items/real-work');
+  const request = { ...rewrite('work-item-metadata'), work_item_id: 'real-work' };
+  const run = await h.finish(await h.run(request));
+  assert.equal(run.internal, true); assert.equal(run.status, 'completed');
+  const detail = await eventually(() => h.manager('/items/real-work'), item => item.runs.some(row => row.id === run.id && row.status === 'completed'));
+  assert.deepEqual((await h.manager('/items')).map(item => item.id), ['real-work']);
+  assert.deepEqual(detail.sessions, before.sessions);
+  assert.equal(detail.agents.filter(agent => agent.role === 'user').length, 1);
+  assert.equal(detail.events.filter(event => event.role === 'user' && event.kind === 'input').length, 1);
+  assert.ok(detail.events.some(event => event.role === 'worker'));
+});
 function isolated(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-metadata-workflow-'));
   for (const folder of ['src', 'harness', 'contracts', 'tests/fixtures']) fs.cpSync(path.join(ROOT, folder), path.join(root, folder), { recursive: true });
@@ -132,6 +154,6 @@ test('format-only workflow cannot weaken ordinary artifact jobs', t => {
   definitions.jobs['prd.create'].workflow = 'create-checked'; fs.writeFileSync(jobs, JSON.stringify(definitions));
   const child = spawnSync(process.execPath, [path.join(root, 'src/runtime.mjs')], {
     env: { ...process.env, HARNESS_DATA_DIR: h.dir, HARNESS_TEST_MODE: '1' }, encoding: 'utf8', timeout: 5000 });
-  assert.notEqual(child.status, 0); assert.match(child.stderr, /독립 검토 생략은 등록된 사실 요약·GUI 텍스트 생성/);
+  assert.notEqual(child.status, 0); assert.match(child.stderr, /독립 검토 생략은 등록된/);
   assert.doesNotMatch(child.stdout, /"ready":true/);
 });

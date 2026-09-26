@@ -3,7 +3,7 @@
   "limits": {
     "concurrency": 3,
     "maxRepairs": 2,
-    "timeoutMs": 180000,
+    "timeoutMs": 3600000,
     "checkTimeoutMs": 300000,
     "maxOutputBytes": 4194304
   },
@@ -1013,6 +1013,7 @@
       }
     },
     "progress.summarize": {
+      "worker_mode": "direct",
       "label": "진행 요약",
       "file": "progress-summarize.md",
       "kind": "document",
@@ -1107,6 +1108,7 @@
       }
     },
     "meeting.summarize": {
+      "worker_mode": "direct",
       "label": "회의 정리",
       "file": "meeting-summarize.md",
       "kind": "document",
@@ -1155,6 +1157,7 @@
       }
     },
     "decision.record": {
+      "worker_mode": "direct",
       "label": "의사결정 기록",
       "file": "decision-record.md",
       "kind": "document",
@@ -1204,6 +1207,7 @@
       }
     },
     "status.report": {
+      "worker_mode": "direct",
       "label": "상태 보고서",
       "file": "status-report.md",
       "kind": "document",
@@ -1253,6 +1257,7 @@
       }
     },
     "handoff.create": {
+      "worker_mode": "direct",
       "label": "인수인계 문서",
       "file": "handoff-create.md",
       "kind": "document",
@@ -2643,6 +2648,7 @@
       }
     },
     "document.create": {
+      "worker_mode": "direct",
       "label": "일반 문서 작성",
       "file": "document-create.md",
       "kind": "document",
@@ -2658,7 +2664,7 @@
       ],
       "persona": "전용 업무 프로필이 없는 주제의 신규 구조화 문서 담당하는 작성자. 담당 범위: 전용 업무 프로필이 없는 주제의 신규 구조화 문서. 제외 범위: PRD·계획·설계·업무 공유 문서 등 전용 프로필 산출물 대체; 기존 문서 수정; 짧은 형식 문구 작성. 입력 전제: 문서 목적과 대상; 기준 자료 또는 요구 형식. 요청하지 않은 인접 산출물이나 작업을 추가하지 않는다. 필수 근거가 없고 안전한 초안으로도 완료 기준을 충족할 수 없으면 blocked로 보고한다.",
       "execution_profile": "document",
-      "workflow": "create-reviewed",
+      "workflow": "create-checked",
       "input_schema": "contracts/inputs/document.create.schema.json",
       "category": "knowledge",
       "boundary": {
@@ -2690,6 +2696,7 @@
       }
     },
     "document.share.create": {
+      "worker_mode": "direct",
       "label": "업무 공유 문서 작성",
       "file": "sharing-document.md",
       "kind": "document",
@@ -2708,7 +2715,7 @@
       ],
       "persona": "제공된 업무 내용을 팀 내부나 유관 부서의 청자가 이해할 수 있는 공유 문서로 재구성하는 작성자. source_text의 본문과 실행기가 제공한 읽기 전용 input_files·depends_on 선행 산출물의 실제 본문을 사실의 기준으로 삼고 audience와 purpose에 맞게 설명의 순서와 깊이를 조절한다. source_text는 제공 자료 중 어떤 내용을 공유할지 지정할 수 있으며 같은 본문을 중복해서 붙여 넣을 필요는 없다. 파일 경로나 의뢰 문구 자체를 사실의 근거로 취급하지 말고 접근 가능한 고정 자료를 실제로 읽는다. 필요한 자료의 내용에 접근할 수 없으면 추측하지 않고 미확인으로 표시하며 공유 목적을 달성할 수 없는 경우 blocked로 보고한다. 공유는 제공된 내용의 재구성이며 새로운 제품·설계·운영 결정이나 업무를 만드는 일이 아니다.\n\n### 문서 구조\n- sharing-document.md에 내용을 대표하는 H1 제목을 쓰고 H2를 '공유 목적', '배경과 맥락', '핵심 내용', '결과와 영향', '요청과 다음 단계', '참고 자료와 미확인 사항' 순서로 작성한다. constraints의 길이·문체·공유 범위를 지키면서 여섯 구역을 유지한다.\n- 공유 목적에는 누구에게 무엇을 알리거나 확인받으려는지 먼저 쓴다. 배경과 맥락에는 기록에서 확인되는 문제·요청·목적·범위를 설명해 이전 대화를 읽지 않은 청자도 시작 이유를 이해하게 한다.\n- 핵심 내용은 중요한 사실과 수행 내용·확인된 판단을 연결해 설명한다. 약어·전문 용어는 청자에게 필요한 만큼 처음 나올 때 풀어 쓰고, 자료로 의미를 확인할 수 없으면 미확인으로 남긴다. 원문을 단순히 시간순으로 나열하거나 내부 용어만 반복하지 않는다.\n- 결과와 영향에는 관찰된 결과·산출물·검증과 그 적용 범위를 적는다. 계획한 효과와 실제 확인된 영향을 분리하고 제공되지 않은 성과·수치·원인·인과관계를 만들어 내지 않는다.\n- 요청과 다음 단계에는 원문 또는 purpose에 명시된 요청·후속 조치만 정리한다. 단순 정보 공유라면 별도 요청이 없음을 명시한다. 정해지지 않은 담당자·기한·승인 여부는 미정으로 두며 독자나 다른 사람에게 새 일을 배정하지 않는다.\n- 참고 자료와 미확인 사항에는 제공된 문서·파일·이슈 링크와 판단에 영향을 주는 누락·상충을 적는다. 제공된 참조가 없으면 미제공으로 표시하고 URL이나 출처를 만들지 않는다. 내부 세션 ID 목록이나 실행 로그를 문서에 자동 첨부하지 않는다.\n\n### 사실과 범위\n- 확인된 사실, 진행·계획, 제안, 미확인을 문장 수준에서 구분한다. 요청이나 검토 중인 안을 완료 또는 확정 결정으로 바꾸지 않는다. 이름·날짜·담당·성과·문제 원인은 제공된 근거만 사용한다. 자료 부족이 의미를 바꾸는 경우에는 미확인을 표시하고, 공유 목적을 달성할 수 없는 핵심 자료가 없으면 blocked로 보고한다.\n- 원본 문서·코드·API·DB 등 기술 계약은 변경하지 않는다. 기존 PRD·설계의 내용을 청자에게 설명할 수 있지만 새로운 PRD·설계 결정, 목표 대비 진척 판단을 위한 상태 보고서, 인수자가 작업을 재개하는 인수인계 문서, 캘린더 세션 이력의 업무 요약을 대신 생성하지 않는다. 짧은 문구만 요청된 경우의 text.generate와도 구분한다.\n- 게시·메일·메시지 발송·공유 권한 변경·Jira 또는 Confluence 변경·외부 조회는 수행하지 않는다. 산출물은 검토할 수 있는 로컬 Markdown 문서 하나로 끝낸다.",
       "execution_profile": "document",
-      "workflow": "create-reviewed",
+      "workflow": "create-checked",
       "input_schema": "contracts/inputs/document.share.create.schema.json",
       "category": "knowledge",
       "boundary": {
@@ -2753,6 +2760,7 @@
       }
     },
     "document.update": {
+      "worker_mode": "direct",
       "label": "문서 수정",
       "file": "document-update.md",
       "kind": "document",
@@ -2768,7 +2776,7 @@
       ],
       "persona": "기존 문서의 명시된 부분을 변경 요청에 맞게 개정 담당하는 작성자. 담당 범위: 기존 문서의 명시된 부분을 변경 요청에 맞게 개정. 제외 범위: 전용 설계 결정의 재수립; 전체 PRD·일정의 새 생성; 무관한 본문 재작성. 입력 전제: 기존 문서 원문; 변경 요청과 보존 범위. 요청하지 않은 인접 산출물이나 작업을 추가하지 않는다. 필수 근거가 없고 안전한 초안으로도 완료 기준을 충족할 수 없으면 blocked로 보고한다.",
       "execution_profile": "document",
-      "workflow": "create-reviewed",
+      "workflow": "create-checked",
       "input_schema": "contracts/inputs/document.update.schema.json",
       "category": "knowledge",
       "boundary": {
@@ -2800,6 +2808,7 @@
       }
     },
     "document.review": {
+      "worker_mode": "direct",
       "label": "문서 검토",
       "file": "document-review.md",
       "kind": "document",
@@ -2817,7 +2826,7 @@
       ],
       "persona": "기존 PRD·기획·설계·일반 문서를 원본 요구 및 지정 기준과 대조하는 독립 검토자. 읽기 전용의 검토 보고서만 작성한다. 검토 대상 원문을 수정하거나 새 PRD·설계·계획을 작성하지 않는다. 실제 확인한 자료의 위치와 근거를 지적마다 연결하고 미확인 항목을 합격으로 표시하지 않는다.",
       "execution_profile": "document",
-      "workflow": "create-reviewed",
+      "workflow": "create-checked",
       "input_schema": "contracts/inputs/document.review.schema.json",
       "category": "knowledge",
       "boundary": {
@@ -2850,6 +2859,7 @@
       }
     },
     "text.generate": {
+      "worker_mode": "direct",
       "label": "텍스트 작성",
       "file": "result.md",
       "kind": "document",
@@ -2861,7 +2871,7 @@
       ],
       "persona": "제공된 사실과 요청 형식을 따르는 작성자. 담당 범위: 전용 산출물 없이 요청한 짧은 답변·문구·형식 텍스트. 제외 범위: PRD·설계·계획·전문 검토·업무 공유 문서의 범용 대체; 내부 세션 메타데이터 재작성; 코드 실행. 입력 전제: 요청 형식; 필요한 사실 자료. 요청하지 않은 인접 산출물이나 작업을 추가하지 않는다. 필수 근거가 없고 안전한 초안으로도 완료 기준을 충족할 수 없으면 blocked로 보고한다.",
       "execution_profile": "document",
-      "workflow": "create-reviewed",
+      "workflow": "create-checked",
       "input_schema": "contracts/inputs/document.schema.json",
       "category": "knowledge",
       "boundary": {

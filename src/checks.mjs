@@ -91,6 +91,10 @@ export async function executeChecks({ profile, evidence, limits, createAttempt, 
       result.status = !current() ? 'interrupted' : observed.ok ? 'passed' : 'failed';
       result.logs = observationLogs(directory);
       endAttempt(id, observed); save(evidence);
+      if (observed.observation.termination_confirmed === false) {
+        evidence.message = `${check.id} 검사의 프로세스 트리 종료를 확인하지 못해 후행 검사를 시작하지 않았습니다. 남은 프로세스를 확인하기 전에는 같은 실행을 재개할 수 없습니다.`;
+        save(evidence); break;
+      }
       // Keep collecting independent required checks after a test failure. Never repair code here.
     }
     evidence.after = sourceSnapshot(profile.watch);
@@ -99,8 +103,8 @@ export async function executeChecks({ profile, evidence, limits, createAttempt, 
       : evidence.checks.every(c => c.status === 'passed') ? 'passed' : 'incomplete';
     save(evidence);
     return { status: evidence.overall === 'passed' ? 'completed' : evidence.overall === 'source_changed' ? 'blocked' : 'failed',
-      message: evidence.overall === 'passed' ? '등록된 검사를 모두 통과했습니다. 실모델 검증 여부는 프로필 범위를 확인하세요.'
-        : evidence.overall === 'source_changed' ? '검사 중 대상 소스가 변경되어 결과를 재사용할 수 없습니다.' : '실패 또는 미실행 검사가 있습니다. 실행 근거를 확인하세요.' };
+      message: evidence.message || (evidence.overall === 'passed' ? '등록된 검사를 모두 통과했습니다. 실모델 검증 여부는 프로필 범위를 확인하세요.'
+        : evidence.overall === 'source_changed' ? '검사 중 대상 소스가 변경되어 결과를 재사용할 수 없습니다.' : '실패 또는 미실행 검사가 있습니다. 실행 근거를 확인하세요.') };
   } catch (e) {
     evidence.overall = 'incomplete'; evidence.message = e.message; save(evidence);
     return { status: 'blocked', message: e.message };

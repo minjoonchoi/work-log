@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { getAgentConnections, connectAgent, disconnectAgent } from '../scripts/agent-connections.mjs';
+import { getAgentConnections, connectAgent, disconnectAgent, connectAgentComponent, disconnectAgentComponent } from '../scripts/agent-connections.mjs';
 import { withAgentCollection } from './agent-collection.mjs';
 import { ROOT, dataRoot, lockService, serve, body, request, json, assert, digest, atomic, now, id } from './shared.mjs';
 import { managerStore } from './manager-store.mjs';
@@ -22,8 +22,10 @@ const dir = dataRoot(); lockService(dir, 'manager');
 const connectionHome = process.env.HARNESS_TEST_MODE === '1' ? process.env.HARNESS_TEST_HOME : os.homedir();
 const connectionOptions = connectionHome && path.resolve(dir) === path.join(path.resolve(connectionHome), 'Library/Application Support/WorkLog')
   ? { homeDir: path.resolve(connectionHome) } : null;
-const unavailableConnections = () => ({ available: false, connections: ['claude', 'codex'].map(engine => ({ engine,
-  state: 'disconnected', message: '설치된 WorkLog 앱에서 에이전트를 연결할 수 있습니다.', paths: [] })) });
+const unavailableConnections = () => ({ available: false, connections: ['claude', 'codex'].map(engine => {
+  const component = { state: 'disconnected', message: '설치된 WorkLog 앱에서 에이전트를 연결할 수 있습니다.', paths: [] };
+  return { engine, ...component, tracking: { ...component }, harness: { ...component } };
+}) });
 let writings;
 const store = managerStore(dir);
 const spoolDir = path.join(dir, 'spool'); fs.mkdirSync(spoolDir, { recursive: true, mode: 0o700 });
@@ -150,13 +152,15 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     }
     if (p === '/api/agent-connections' && req.method === 'GET')
       return withAgentCollection(store, connectionOptions ? getAgentConnections(connectionOptions) : unavailableConnections());
-    const agentConnection = p.match(/^\/api\/agent-connections\/(claude|codex)$/);
+    const agentConnection = p.match(/^\/api\/agent-connections\/(claude|codex)(?:\/(tracking|harness))?$/);
     if (agentConnection && ['POST', 'DELETE'].includes(req.method)) {
       assert(connectionOptions, '설치된 WorkLog 앱에서 에이전트를 연결하거나 해제하세요.');
       const input = await body(req);
       assert(input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).length === 0
         && [...url.searchParams].length === 0, '연결 설정에는 별도의 경로나 실행 명령을 지정할 수 없습니다.');
-      const result = await (req.method === 'POST' ? connectAgent : disconnectAgent)(agentConnection[1], connectionOptions);
+      const result = agentConnection[2]
+        ? await (req.method === 'POST' ? connectAgentComponent : disconnectAgentComponent)(agentConnection[1], agentConnection[2], connectionOptions)
+        : await (req.method === 'POST' ? connectAgent : disconnectAgent)(agentConnection[1], connectionOptions);
       notify(); return withAgentCollection(store, result);
     }
     if (p === '/api/integrations/atlassian' && req.method === 'GET') return atlassian.status();
@@ -176,6 +180,12 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (p === '/api/integrations/atlassian/jira-preview' && req.method === 'GET') return atlassian.lookupIssue(url.searchParams.get('cloud_id'), url.searchParams.get('key'));
     if (p === '/api/integrations/atlassian/jira-search' && req.method === 'GET') return atlassian.searchIssues(url.searchParams.get('cloud_id'), url.searchParams.get('query'), url.searchParams.get('next_page_token'));
     if (p === '/api/integrations/atlassian/confluence-page' && req.method === 'GET') return atlassian.confluencePage(url.searchParams.get('cloud_id'), url.searchParams.get('id'));
+    if (p === '/api/harness-packages' && req.method === 'GET') return request(dir, 'runtime', '/harness-packages');
+    const harnessPackage = p.match(/^\/api\/harness-packages\/([^/]+)$/);
+    if (harnessPackage && req.method === 'PUT') {
+      const result = await request(dir, 'runtime', `/harness-packages/${harnessPackage[1]}`, { method: 'PUT', body: await body(req) });
+      notify(); return result;
+    }
     if (p === '/api/execution-settings' && req.method === 'GET') return request(dir, 'runtime', '/execution-settings');
     if (p === '/api/execution-settings/custom-task-drafts' && req.method === 'POST')
       return request(dir, 'runtime', '/execution-settings/custom-task-drafts', { method: 'POST', body: await body(req) });
@@ -243,7 +253,18 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
       const result = p.endsWith('/delete') ? store.deleteItems(await body(req)) : store.restoreItems(await body(req));
       if (!result.repeated) notify(); return result;
     }
-    let m = p.match(/^\/api\/items\/([^/]+)$/);
+    let m = p.match(/^\/api\/items\/([^/]+)\/identity$/);
+    if (m && req.method === 'GET') {
+      let itemId;
+      try { itemId = decodeURIComponent(m[1]); }
+      catch { assert(false, '업무 식별자를 확인하세요.'); }
+      const owner = store.canonical(itemId);
+      assert(store.db.prepare('SELECT id FROM work_items WHERE id=?').get(owner) && !store.isDeleted(owner), '업무를 찾을 수 없습니다.', 404);
+      // Retry validation needs the durable merge identity, not the full history
+      // or the external Jira refresh performed by the detail endpoint.
+      return { id: owner };
+    }
+    m = p.match(/^\/api\/items\/([^/]+)$/);
     if (m && req.method === 'GET') {
       const detail = jira.decorate(writings.decorate(integrations.decorate(store.detail(m[1], { summary: url.searchParams.get('view') === 'summary' }))));
       detail.notifications = notifications.list().filter(row => row.work_item_id === detail.item.id);

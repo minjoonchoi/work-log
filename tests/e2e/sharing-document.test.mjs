@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Harness, eventually } from '../helpers.mjs';
 import { digest } from '../../src/shared.mjs';
 
-// Protocol-fixture scenarios exercise real admission, workers, review and publication.
+// Protocol-fixture scenarios exercise admission, single-pass writing, optional review and publication.
 // They do not measure a live model's factual accuracy or reader comprehension.
 const task = 'document.share.create';
 const source = 'SUP-17: 중복 초대가 거절되어도 화면에 이유가 표시되지 않아 고객지원 문의가 발생했다. '
@@ -25,7 +25,7 @@ async function setup(t) {
 const submit = (h, extra = {}) => h.runtime('/runs', { method: 'POST', body: { task, input, engine: 'fixture', ...extra } });
 const finishPlan = (h, plan) => eventually(() => h.runtime(`/plans/${plan.id}`), value => !['pending', 'running'].includes(value.status), 20000);
 
-test('sharing requires source, audience and purpose and cannot omit its review before any worker starts', async t => {
+test('sharing requires source, audience and purpose before any worker starts', async t => {
   const { h } = await setup(t);
   for (const key of ['source_text', 'audience', 'purpose']) {
     const missing = { ...input }; delete missing[key];
@@ -33,11 +33,10 @@ test('sharing requires source, audience and purpose and cannot omit its review b
     await assert.rejects(submit(h, { input: { ...input, [key]: '  ' } }), /위반/);
   }
   await assert.rejects(submit(h, { input: { ...input, publish: true } }), /위반/);
-  await assert.rejects(submit(h, { review: { required: false, reason: '짧은 공유 문서' } }), /독립 검토를 생략할 수 없습니다/);
   assert.deepEqual(await h.runtime('/runs'), []);
 });
 
-test('team and cross-department sharing requests route to one owner and publish only the reviewed local document', async t => {
+test('team and cross-department sharing requests route to one owner and publish a format-checked document with one invocation', async t => {
   const { h, workspace } = await setup(t);
   const sourceFile = path.join(workspace, 'source.md'); fs.writeFileSync(sourceFile, source);
   const catalog = await h.runtime('/catalog'), job = catalog.jobs.find(job => job.id === task);
@@ -49,7 +48,8 @@ test('team and cross-department sharing requests route to one owner and publish 
     const result = await h.finish(await submit(h, { task: undefined, prompt, input: requestInput, workspace,
       input_files: [{ path: 'source.md', content_digest: digest(source) }], fixture: { scenario: 'prompted-rules' } }));
     assert.equal(result.status, 'completed', result.message); assert.equal(result.task, task);
-    assert.deepEqual(result.attempts.map(value => value.stage), ['produce', 'review']);
+    assert.deepEqual(result.attempts.map(value => value.stage), ['produce']);
+    assert.equal(result.review.required, false); assert.equal(result.worker_policy.max_repairs, 0);
     assert.ok(result.artifact.output_file.startsWith(`${workspace}/output/worklog/`));
     assert.equal(path.basename(result.artifact.output_file), 'sharing-document.md');
     const published = fs.readFileSync(result.artifact.output_file, 'utf8');
@@ -64,9 +64,8 @@ test('team and cross-department sharing requests route to one owner and publish 
       assert.ok(text.includes('JOB-DOCUMENT-SHARE-CREATE'));
       assert.ok(text.includes(digest(source)), 'each stage must receive the pinned source');
     }
-    const review = result.attempts.find(value => value.stage === 'review');
-    const response = JSON.parse(fs.readFileSync(path.join(review.directory, 'result.json')));
-    assert.ok(response.result.evaluations.some(value => value.rule === 'JOB-DOCUMENT-SHARE-CREATE' && value.passed && value.evidence));
+    assert.equal(result.artifact.review_attempt, undefined);
+    assert.equal(result.artifact.validation_scope, 'artifact');
   }
   assert.equal(fs.readFileSync(sourceFile, 'utf8'), source);
   assert.deepEqual((await h.runtime('/runs')).map(value => value.task), [task, task]);
@@ -81,7 +80,7 @@ test('an explicitly requested decision document feeds sharing through a reviewed
         input: { requirements: '제공된 결정 D-01: 오류 안내 목업부터 확인한다. 배포와 실제 성과는 미확인이다.' } },
       { id: 'sharing', task, output_key: 'sharing', request_excerpt: '그 결과로 업무 공유 문서를 작성', depends_on: ['decision'],
         input: { ...input, source_text: '제공된 선행 결정 기록 파일만 기준으로 사용한다.' },
-        review: { required: true, reason: '기존 맥락을 모르는 부서에 전달할 설명과 원문 사실의 일치를 확인한다.' } }
+        review: { required: true, reason: '사용자가 공유 문서에 대한 별도 독립 검토를 명시적으로 추가 요청했다.' } }
     ]
   } });
   const plan = await finishPlan(h, accepted);
@@ -89,24 +88,29 @@ test('an explicitly requested decision document feeds sharing through a reviewed
   const first = plan.steps[0].artifact, child = await h.runtime(`/runs/${plan.steps[1].run_id}`);
   for (const attempt of child.attempts) {
     const prompt = fs.readFileSync(path.join(attempt.directory, 'prompt.txt'), 'utf8');
-    const refs = JSON.parse(prompt.match(/\n자료 파일 참조[^:]+: ([^\n]+)\n/)[1]);
+    const refs = JSON.parse(prompt.match(/\n고정된 자료 본문[^:]+: ([^\n]+)\n/)[1]);
     const upstream = refs.find(ref => ref.content_digest === first.content_digest);
-    assert.ok(upstream); assert.equal(digest(fs.readFileSync(upstream.path)), first.content_digest);
+    assert.ok(upstream); assert.equal(digest(upstream.content), first.content_digest);
     assert.ok(prompt.includes(first.output_file));
   }
   assert.equal(digest(fs.readFileSync(first.output_file)), first.content_digest);
   assert.deepEqual((await h.runtime('/runs')).map(run => run.task).sort(), ['decision.record', task].sort());
 });
 
-test('missing structure and unresolved review findings never publish a sharing document', async t => {
+test('missing structure fails once; only explicitly requested review enables repairs for sharing documents', async t => {
   const { h, workspace } = await setup(t);
   for (const scenario of ['missing-section', 'always-revise']) {
-    const result = await h.finish(await submit(h, { workspace, fixture: { scenario } }));
-    assert.equal(result.status, 'blocked', result.message); assert.equal(result.artifact, null);
-    assert.match(result.message, /수정 한도|같은 지적/);
-    assert.ok(result.attempts.some(attempt => attempt.stage === 'repair'));
-    if (scenario === 'missing-section') assert.equal(result.attempts.some(attempt => attempt.stage === 'review'), false);
-    else assert.ok(result.steps.some(step => step.task === 'review' && step.outcome.status === 'revise'));
+    const result = await h.finish(await submit(h, { workspace, fixture: { scenario }, ...(scenario === 'always-revise'
+      ? { review: { required: true, reason: '사용자가 문서 작성 후 별도 검토를 명시적으로 요청했다.' } } : {}) }));
+    assert.equal(result.artifact, null);
+    if (scenario === 'missing-section') {
+      assert.equal(result.status, 'failed', result.message); assert.match(result.message, /검사에 실패/);
+      assert.deepEqual(result.attempts.map(attempt => attempt.stage), ['produce']);
+    } else {
+      assert.equal(result.status, 'blocked', result.message); assert.match(result.message, /수정 한도|같은 지적/);
+      assert.ok(result.attempts.some(attempt => attempt.stage === 'repair'));
+      assert.ok(result.steps.some(step => step.task === 'review' && step.outcome.status === 'revise'));
+    }
   }
   assert.equal(fs.existsSync(path.join(workspace, 'output')), false);
 });

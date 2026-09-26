@@ -39,8 +39,9 @@ test('the fifth real user Stop creates one format-checked automatic metadata run
   const h = await setup(t);
   assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 5, summary_interval: 5 });
   h.hook('codex', { hook_event_name: 'SessionStart', session_id: 'automatic-hook', event_id: 'initial-session-start' });
-  const temporary = (await eventually(() => h.manager('/items'), rows => rows.length === 1))[0];
-  assert.equal(temporary.title, '새 작업'); assert.equal((await detail(h, temporary)).metadata_rewrite, null);
+  await eventually(() => h.manager('/health'), value => value.events === 1);
+  assert.deepEqual(await h.manager('/items'), []);
+  assert.equal((await metadataRuns(h)).length, 0);
   const hookTurn = index => {
     h.hook('codex', { hook_event_name: 'UserPromptSubmit', session_id: 'automatic-hook', event_id: `input-${index}`, turn_id: `turn-${index}`, prompt: `권한 정책 ${index}번째 요청` });
     h.hook('codex', { hook_event_name: 'Stop', session_id: 'automatic-hook', event_id: `output-${index}`, turn_id: `turn-${index}`, last_assistant_message: `${index}번째 응답` });
@@ -116,9 +117,11 @@ test('automation settings validate, persist and coalesce an already fulfilled lo
   assert.deepEqual(await h.manager('/automation/settings', patch({ initial_output_count: 1000, summary_interval: 1000 })), { initial_output_count: 1000, summary_interval: 1000 });
   await h.ingest([0, 30, 60, 90, 120, 150, 180].flatMap((minute, index) => turn('settings-cadence', minute, `window-${index}`)));
   const item = (await h.manager('/items'))[0];
-  await closedAccepted(h, item, 5);
+  // Periodic batches drain the backlog without needing the next prompt.
+  await closedAccepted(h, item, 6);
   await h.ingest(turn('settings-cadence', 182, 'next-summary-batch'));
   const before = await closedAccepted(h, item, 6); await stableCount(h, 0);
+  await eventually(() => detail(h, item), value => value.sessions.every(session => !['pending', 'running'].includes(session.rewrite?.state)));
   await summarize(h, before.sessions.at(-1).id, 'open-summary-before-automatic');
   assert.equal((await finished(h, 'open-summary-before-automatic')).state, 'completed');
   await h.stop('manager'); await h.start('manager');

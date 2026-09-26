@@ -14,6 +14,7 @@ test.afterEach(async () => h.close());
 test('GUI edits and resets task instruction, backend and backend-specific model effort', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}`);
   await page.getByRole('button', { name: '작업 실행 설정' }).click();
+  await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: '작업 실행 설정' })).toBeVisible();
   await dialog.getByLabel('작업 유형').selectOption('entity.design');
@@ -41,6 +42,7 @@ test('GUI edits and resets task instruction, backend and backend-specific model 
 test('instruction preview renders bounded Markdown, preserves edits across tabs, and never executes embedded HTML', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}`);
   await page.getByRole('button', { name: '작업 실행 설정' }).click();
+  await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('작업 유형').selectOption('prd.create');
   const preview = dialog.locator('#instruction-preview');

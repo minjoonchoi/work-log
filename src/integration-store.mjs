@@ -81,16 +81,33 @@ export function integrationStore(store) {
     for (const s of sessions) latest.set(s.agent_id, s.id);
     return sessions.filter(s => !store.isDeleted(s.work_item_id) && latest.get(s.agent_id) !== s.id && !s.pending);
   }
+  const sourceSnapshots = new Map();
   function sessionSnapshots(sessions = store.sessionList()) {
+    const revisions = new Map();
     return sessions.map(s => {
-      const messages = store.sessionMessages(s.id);
-      const input = messages.find(e => e.kind === 'input'), outputs = messages.filter(e => e.kind === 'output');
-      const lastOutput = outputs.at(-1);
-      // Work item rename/merge must not regenerate an unchanged conversation summary.
-      const source = { title: '작업 세션', events: messages.map(e => ({ kind: e.kind, event_at: e.event_at, text: e.text ?? null })) };
-      return { ...s, visibility_revision: store.visibilityRevision(s.work_item_id), source, source_digest: digest(json(source)), origin: input && { engine: s.engine, agent_session_id: s.agent_session_id, turn_id: input.turn_id },
-        started: input?.event_at, ended: lastOutput?.event_at,
-        seconds: input && lastOutput ? Math.floor((Date.parse(lastOutput.event_at) - Date.parse(input.event_at)) / 1000) : 0 };
+      assert(!store.isDeleted(s.work_item_id), '업무를 찾을 수 없습니다.', 404);
+      if (!revisions.has(s.agent_id)) {
+        const sequence = one("SELECT COALESCE(MAX(seq),0) AS value FROM events WHERE agent_id=? AND kind IN ('input','output','turn.failed','turn.interrupted')", s.agent_id).value;
+        const projection = one('SELECT revision FROM history_revisions WHERE agent_id=?', s.agent_id)?.revision || 0;
+        revisions.set(s.agent_id, `${sequence}:${projection}`);
+      }
+      const revision = revisions.get(s.agent_id);
+      let cached = sourceSnapshots.get(s.id);
+      if (!cached || cached.revision !== revision) {
+        const messages = store.sessionMessages(s.id);
+        const input = messages.find(e => e.kind === 'input'), lastOutput = messages.filter(e => e.kind === 'output').at(-1);
+        // Rename/merge does not change conversation content. The event sequence
+        // and projection revision invalidate late inputs and resegmented windows.
+        const source = { title: '작업 세션', events: messages.map(e => ({ kind: e.kind, event_at: e.event_at, text: e.text ?? null })) };
+        cached = { revision, fields: { source, source_digest: digest(json(source)),
+          origin: input && { engine: s.engine, agent_session_id: s.agent_session_id, turn_id: input.turn_id },
+          started: input?.event_at, ended: lastOutput?.event_at,
+          seconds: input && lastOutput ? Math.floor((Date.parse(lastOutput.event_at) - Date.parse(input.event_at)) / 1000) : 0 } };
+      }
+      // Bound the cache; the SQLite source remains authoritative after eviction.
+      sourceSnapshots.delete(s.id); sourceSnapshots.set(s.id, cached);
+      if (sourceSnapshots.size > 2000) sourceSnapshots.delete(sourceSnapshots.keys().next().value);
+      return { ...s, visibility_revision: store.visibilityRevision(s.work_item_id), ...cached.fields };
     });
   }
   const closedSessions = () => sessionSnapshots(closedWindows());

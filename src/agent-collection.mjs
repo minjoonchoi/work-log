@@ -1,7 +1,7 @@
 // Configuration presence and actual hook delivery are separate observations.
 export function withAgentCollection(store, snapshot) {
   const last = store.db.prepare(`SELECT e.event_at,e.ingested_at,e.kind FROM events e
-    JOIN agent_sessions a ON a.id=e.agent_id WHERE a.engine=? AND a.role='user'
+    WHERE json_extract(e.payload,'$.engine')=? AND json_extract(e.payload,'$.role')='user'
     AND json_extract(e.payload,'$.source')='system_hook'
     ORDER BY e.event_at DESC,e.seq DESC LIMIT 1`);
   return { ...snapshot, connections: snapshot.connections.map(connection => {

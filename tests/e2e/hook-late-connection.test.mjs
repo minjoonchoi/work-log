@@ -48,19 +48,52 @@ test('connecting mid-session captures input and Stop without SessionStart for na
   }
 });
 
-test('first delivered Stop stays unlinked; replay and late SessionStart use the same item and first observation', async t => {
-  const h = await setup(t), raw = { session_id: 'already-running', event_id: 'first-stop', hook_event_name: 'Stop', last_assistant_message: '입력을 관측하지 못한 응답' };
+test('first delivered Stop and SessionStart wait for input; replay preserves the first observation', async t => {
+  const h = await setup(t, false), raw = { session_id: 'already-running', event_id: 'first-stop', hook_event_name: 'Stop', last_assistant_message: '입력을 관측하지 못한 응답' };
   h.hook('codex', raw);
+  const first = spool(h)[0].event;
+  await h.start('manager');
   await eventually(() => h.manager('/health'), value => value.events === 1);
-  const [item] = await h.manager('/items'), first = await h.manager(`/items/${item.id}`);
-  assert.equal(first.sessions.length, 0); assert.equal(first.events[0].resolution, 'unresolved');
+  assert.deepEqual(await h.manager('/items'), []);
   h.hook('codex', raw);
   h.hook('codex', { session_id: raw.session_id, event_id: 'late-start', hook_event_name: 'SessionStart' });
   await eventually(() => h.manager('/health'), value => value.events === 2);
-  const items = await h.manager('/items'); assert.equal(items.length, 1); assert.equal(items[0].id, item.id);
+  assert.deepEqual(await h.manager('/items'), []);
+  h.hook('codex', { session_id: raw.session_id, event_id: 'first-input', hook_event_name: 'UserPromptSubmit', prompt: '수집 시작 후 첫 요청' });
+  await eventually(() => h.manager('/health'), value => value.events === 3);
+  const items = await h.manager('/items'); assert.equal(items.length, 1); const [item] = items;
   const detail = await h.manager(`/items/${item.id}`), output = detail.events.find(event => event.kind === 'output');
-  assert.equal(output.event_at, first.events[0].event_at); assert.equal(output.observed_at, first.events[0].observed_at);
+  assert.equal(output.event_at, first.event_at); assert.equal(output.observed_at, first.observed_at);
   assert.equal(output.resolution, 'unresolved'); assert.equal(output.turn_id, null);
+});
+
+for (const engine of ['codex', 'claude']) test(`${engine}: opening and resuming waits for first prompt across service restart`, async t => {
+  const h = await setup(t), session_id = `${engine}-opened-only`;
+  const start = { session_id, event_id: 'start', hook_event_name: 'SessionStart' };
+  h.hook(engine, start);
+  h.hook(engine, { session_id, event_id: 'tool', hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: {} });
+  h.hook(engine, { session_id, event_id: 'end', hook_event_name: 'SessionEnd' });
+  await eventually(() => h.manager('/health'), value => value.events === 3);
+  assert.deepEqual(await h.manager('/items'), []);
+  await h.stop('manager'); await h.start('manager');
+  h.hook(engine, start);
+  h.hook(engine, { session_id, event_id: 'resume', hook_event_name: 'SessionStart', source: 'resume' });
+  await eventually(() => h.manager('/health'), value => value.events === 4);
+  assert.deepEqual(await h.manager('/items'), []);
+  h.hook(engine, { session_id, event_id: 'input', hook_event_name: 'UserPromptSubmit', turn_id: 'one', prompt: '첫 사용자 요청' });
+  h.hook(engine, { session_id, event_id: 'output', hook_event_name: 'Stop', turn_id: 'one', last_assistant_message: '첫 응답' });
+  await eventually(() => h.manager('/health'), value => value.events === 6);
+  const [item] = await h.manager('/items'), detail = await h.manager(`/items/${item.id}`);
+  assert.equal((await h.manager('/items')).length, 1); assert.equal(item.title, '첫 사용자 요청');
+  assert.equal(detail.agents.length, 1); assert.equal(detail.sessions.length, 1); assert.equal(detail.events.length, 6);
+  assert.equal(detail.sessions[0].start_at, detail.events.find(event => event.kind === 'input').event_at);
+  assert.equal(item.created_at, detail.sessions[0].start_at);
+  assert.equal(detail.events.filter(event => event.kind === 'session.started').length, 2);
+  h.hook(engine, { session_id, event_id: 'compact', hook_event_name: 'SessionStart', source: 'compact' });
+  h.hook(engine, { session_id, event_id: 'next-input', hook_event_name: 'UserPromptSubmit', turn_id: 'two', prompt: '같은 업무 이어서' });
+  await eventually(() => h.manager('/health'), value => value.events === 8);
+  assert.deepEqual((await h.manager('/items')).map(row => row.id), [item.id]);
+  assert.equal((await h.manager(`/items/${item.id}`)).sessions.length, 1);
 });
 
 test('offline receipts survive manager restart and resolved fallback replay without conflicts', async t => {
@@ -106,9 +139,9 @@ test('late input restores fallback association and later overlapping input revok
   const output = originals.find(row => row.event.kind === 'output').event;
   for (const row of originals) fs.unlinkSync(path.join(h.dir, 'spool', row.file));
   await h.start('manager'); await h.ingest([output]);
-  const [item] = await h.manager('/items');
-  assert.equal((await h.manager(`/items/${item.id}`)).events[0].resolution, 'unresolved');
+  assert.deepEqual(await h.manager('/items'), []);
   await h.ingest([input]);
+  const [item] = await h.manager('/items');
   const linked = await h.manager(`/items/${item.id}`), before = await h.manager(`/items/${item.id}/history?session_id=${linked.sessions[0].id}`);
   assert.equal(linked.events.find(event => event.kind === 'output').resolution, 'matched');
   const middle = new Date((Date.parse(input.event_at) + Date.parse(output.event_at)) / 2).toISOString();

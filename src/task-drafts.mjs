@@ -32,7 +32,7 @@ export function taskDrafts({ settings, createRun, getRun, cancelRun }) {
     }
     return result;
   }
-  function create(input) {
+  async function create(input) {
     assert(input && typeof input === 'object' && !Array.isArray(input)
       && Object.keys(input).every(key => ['request', 'idempotency_key'].includes(key)), '등록 내용 작성 요청 형식이 잘못되었습니다.');
     assert(typeof input.request === 'string' && input.request.trim() && input.request.length <= 12000, '만들 작업의 설명을 1~12000자로 입력하세요.');
@@ -47,7 +47,7 @@ export function taskDrafts({ settings, createRun, getRun, cancelRun }) {
       engine: 'fixture', fixture: { scenario: process.env.HARNESS_TEST_TASK_DRAFT_SCENARIO || 'success',
         delayMs: Number(process.env.HARNESS_TEST_TASK_DRAFT_DELAY_MS || 0) }
     } : {};
-    const run = createRun({ task, internal: true, idempotency_key: key,
+    const run = await createRun({ task, internal: true, idempotency_key: key,
       origin: { engine: 'harness', agent_session_id: 'task-type-drafts', turn_id: sourceDigest },
       input: settings.draftInput(input.request), ...fixture });
     return detail(run.id);

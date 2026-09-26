@@ -51,7 +51,8 @@ test('guided draft uses one headless task and only explicit registration changes
     audience: '해당 장애 맥락을 모르는 팀원', purpose: '문제의 배경과 확인된 조치 및 남은 확인 사항을 공유한다.'
   } }));
   assert.equal(executed.status, 'completed', executed.message);
-  assert.ok(executed.attempts.some(attempt => attempt.stage === 'review'), 'the registered task retains its inherited independent review');
+  assert.deepEqual(executed.attempts.map(attempt => attempt.stage), ['produce'], 'the registered shared-document template retains single-pass writing');
+  assert.equal(executed.review.required, false);
   assert.ok(fs.readFileSync(path.join(executed.attempts[0].directory, 'prompt.txt'), 'utf8').includes(result.draft.instruction.trim()));
   assert.ok(fs.existsSync(executed.artifact.file));
   assert.deepEqual(fs.readFileSync(path.join(h.dir, 'execution-settings.json')), bytes);

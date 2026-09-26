@@ -68,16 +68,16 @@ export function writingCoordinator({ dir, writings, notify, automatic = true, au
   async function tick() {
     if (busy) return; busy = true;
     try {
-      // Reconcile completed/obsolete requests before consuming a fresh prompt's
-      // five slots. Model execution is never awaited by the input hook.
+      // Reconcile completed/obsolete requests before filling the timer's five
+      // slots. Model execution is never awaited by the input hook.
       for (const row of writings.pending()) if (!writings.isCurrent(row)) { writings.finish(row, 'superseded'); notify(); }
       await cancelSuperseded();
       await parallel(writings.pending().filter(row => row.state === 'running'));
       if (writings.scheduleAutomatic({ summaries: automatic, metadata: automaticMetadata })) notify();
       await cancelSuperseded();
       const pending = writings.pending();
-      const available = Math.max(0, 5 - pending.filter(row => row.state === 'running' && automaticSummary(row)).length);
-      // Cap legacy queued batches as well as newly admitted prompt batches.
+      const available = Math.max(0, 5 - pending.filter(row => row.state === 'running' && automaticSummary(row)).length - writings.cancellingSummaryCount());
+      // Cap legacy queued batches as well as newly admitted periodic batches.
       await parallel(pending.filter(row => row.state === 'pending' && automaticSummary(row)).slice(0, available));
       for (const row of pending.filter(row => row.state === 'pending' && !automaticSummary(row))) await processRow(row);
     } finally { busy = false; }

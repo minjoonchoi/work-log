@@ -20,7 +20,7 @@ const exact = (value, keys, label) => {
   assert(Object.keys(value).every(key => keys.includes(key)), `${label}에 등록되지 않은 필드가 있습니다.`);
 };
 
-export function executionSettings({ dir, jobs, workflows, profiles }) {
+export function executionSettings({ dir, jobs, workflows, profiles, packages }) {
   const file = path.join(dir, 'execution-settings.json');
   // Keep the shared catalog object intact: runtime intake and plans retain it.
   // Only reviewed built-ins can supply executable contracts to custom tasks.
@@ -30,6 +30,9 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
     return !job.internal && !job.allow_internal && job.category !== 'system'
       && workflows[job.workflow]?.mode === 'artifact' && customKinds.includes(job.kind);
   });
+  const availability = (id, job = jobs[id]) => packages ? packages.access(id, job)
+    : { management_group: job.allow_internal ? 'worklog' : 'harness', installed: true, package_ids: [] };
+  const installedTemplates = () => templates.filter(id => availability(id, builtins[id]).installed);
   let publishedCustomIds = [];
   function metadata(input) {
     for (const [field, limit] of [['label', 120], ['description', 2000]]) {
@@ -140,10 +143,10 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
     return { instruction: override?.instruction || defaultTaskInstruction(job), backend: override?.backend || 'codex', profile };
   }
   function renderSnapshot(data) {
-    return { revision: data.revision, models: modelCapabilities(), templates: [...templates], tasks: Object.entries(jobs).filter(([, job]) => workflows[job.workflow].mode === 'artifact').map(([id, job]) => {
+    return { revision: data.revision, models: modelCapabilities(), templates: installedTemplates(), tasks: Object.entries(jobs).filter(([, job]) => workflows[job.workflow].mode === 'artifact').map(([id, job]) => {
       const override = data.tasks[id], profile = profiles[job.execution_profile];
       const stages = new Set(Object.values(workflows[job.workflow].nodes).map(node => node.task));
-      return { id, label: job.label, category: job.category, kind: job.kind, boundary: structuredClone(job.boundary),
+      return { id, label: job.label, category: job.category, kind: job.kind, boundary: structuredClone(job.boundary), ...availability(id, job),
         source: Object.hasOwn(builtins, id) ? 'builtin' : 'user', internal: !!(job.internal || job.allow_internal),
         template_id: job.template_id || null, description: job.description || job.boundary.owns, routing_terms: [...job.routing.terms],
         profile: job.execution_profile, instruction: override?.instruction || defaultTaskInstruction(job),
@@ -157,8 +160,10 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
   function snapshot() { return renderSnapshot(read()); }
   function draftInput(request) {
     read();
+    const installed = installedTemplates();
+    assert(installed.length, '사용자 작업을 작성하려면 하네스 직무 묶음을 먼저 설치하세요.', 409);
     return { request,
-      templates: templates.map(id => {
+      templates: installed.map(id => {
         const job = builtins[id];
         return { id, label: job.label, kind: job.kind, boundary: structuredClone(job.boundary) };
       }),
@@ -186,6 +191,7 @@ export function executionSettings({ dir, jobs, workflows, profiles }) {
     const data = read(); revisionMatches(data, input.revision);
     assert(Object.keys(data.custom_tasks).length < maxCustomTasks, `사용자 업무는 ${maxCustomTasks}개까지 등록할 수 있습니다.`);
     const record = { template_id: input.template_id, ...metadata(input) }, job = customJob(record);
+    packages?.assertInstalled(input.template_id, job);
     let task;
     do { task = `user.${crypto.randomBytes(12).toString('hex')}`; } while (Object.hasOwn(jobs, task));
     const override = Object.fromEntries(executionFields.map(field => [field, input[field]]));
