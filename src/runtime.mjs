@@ -88,10 +88,18 @@ function prepare(input, context = {}) {
   validateSchema(runSchema, input, '실행 요청');
   const workspace = input.workspace !== undefined ? normalizeWorkspace(input.workspace) : null;
   const inputFiles = snapshotInputFiles(workspace, input.input_files);
-  const task = resolveTask(input, definitions.jobs);
+  // WorkLog's explicit internal jobs do not depend on optional role-package
+  // settings. Its access fast path preserves summaries even if that file fails.
+  const worklogJob = typeof input.task === 'string' && definitions.jobs[input.task]?.allow_internal === true;
+  const available = worklogJob ? packages : packages.selection();
+  // Keep specialized built-ins recognizable so a missing role package cannot
+  // fall back to a generic task. Disabled custom routes must not shadow them.
+  const intakeJobs = worklogJob ? definitions.jobs : Object.fromEntries(Object.entries(definitions.jobs).filter(([id, job]) =>
+    job.source !== 'user' || available.access(id, job).installed));
+  const task = resolveTask(input, intakeJobs);
   assert(typeof task === 'string' && Object.hasOwn(definitions.jobs, task), '지원하지 않는 업무입니다.');
   const catalogJob = definitions.jobs[task];
-  packages.assertInstalled(task, catalogJob);
+  available.assertInstalled(task, catalogJob);
   const job = structuredClone(catalogJob);
   const review = compileReview(task, job, workflows, input.review);
   job.workflow = review.workflow_id;
@@ -544,6 +552,39 @@ for (const row of db.prepare("SELECT * FROM runs WHERE status='running'").all())
   update(row.id, { status: 'interrupted', message: '실행 서비스 중단 후 상태 대조가 필요합니다.' });
 }
 const drafts = taskDrafts({ settings, createRun: create, getRun: get, cancelRun: cancel });
+function catalog(searchParams) {
+  assert([...searchParams.keys()].every(key => key === 'scope') && searchParams.getAll('scope').length <= 1,
+    '카탈로그 조회는 scope 하나만 지정할 수 있습니다.');
+  const scope = searchParams.has('scope') ? searchParams.get('scope') : 'all';
+  assert(['all', 'harness'].includes(scope), '카탈로그 scope는 all 또는 harness여야 합니다.');
+  const available = packages.selection();
+  const jobs = Object.entries(definitions.jobs).flatMap(([id, job]) => {
+    const access = available.access(id, job);
+    if (!access.installed || (scope === 'harness' && access.management_group !== 'harness')) return [];
+    return [{ id, label: job.label, workflow: job.workflow,
+      category: job.category, boundary: job.boundary, routing: job.routing, internal: !!job.allow_internal, ...access,
+      source: job.source || 'builtin', template_id: job.template_id || null, description: job.description || '',
+      review_policy: reviewPolicy(id, job, workflows[job.workflow]),
+      worker_policy: workflows[job.workflow].mode === 'artifact' ? taskPolicy(job, workflows[job.workflow], definitions.limits) : null,
+      kind: job.kind, input_schema: job.input_schema, execution_profile: job.execution_profile || null }];
+  });
+  const result = { version: definitions.version, jobs, task_types: taskTypes, workflows, execution_profiles: executionProfiles,
+    check_profiles: Object.entries(profiles).map(([id, p]) => ({ id, label: p.label, validation_scope: p.validation_scope })) };
+  if (scope === 'all') return result;
+  const workflowIds = new Set(jobs.map(job => job.workflow));
+  for (const job of jobs) {
+    if (workflows[job.workflow].mode !== 'artifact') continue;
+    if (!job.review_policy.default_required) workflowIds.add('create-reviewed');
+    if (job.review_policy.omission_allowed) workflowIds.add('create-checked');
+  }
+  const selectedWorkflows = Object.fromEntries(Object.entries(workflows).filter(([id]) => workflowIds.has(id)));
+  const taskIds = new Set(Object.values(selectedWorkflows).flatMap(workflow => Object.values(workflow.nodes).map(node => node.task)));
+  const profileIds = new Set(jobs.map(job => job.execution_profile).filter(Boolean));
+  return { ...result, scope: 'harness', package_revision: available.revision, installed_packages: available.installed_packages,
+    workflows: selectedWorkflows, task_types: Object.fromEntries(Object.entries(taskTypes).filter(([id]) => taskIds.has(id))),
+    execution_profiles: Object.fromEntries(Object.entries(executionProfiles).filter(([id]) => profileIds.has(id))),
+    check_profiles: jobs.some(job => job.id === 'checks.run') ? result.check_profiles : [] };
+}
 const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(process.env.HARNESS_RUNTIME_PORT || 0), handler: async (req, url) => {
   if (req.method === 'GET' && url.pathname === '/health') return { role: 'execution', version: definitions.version, active: running.size, lifecycle: draining ? 'draining' : 'running' };
   if (req.method === 'POST' && url.pathname === '/lifecycle/quit') return quit();
@@ -551,16 +592,7 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
     assert(!shuttingDown, '실행 서비스가 종료 중입니다.', 503);
     draining = false; clearTimeout(drainTimer); drainTimer = null; schedule(); return { status: 'running' };
   }
-  if (req.method === 'GET' && url.pathname === '/catalog') return {
-    version: definitions.version, jobs: Object.entries(definitions.jobs).filter(([id, job]) => packages.access(id, job).installed).map(([id, job]) => ({ id, label: job.label, workflow: job.workflow,
-      category: job.category, boundary: job.boundary, routing: job.routing, internal: !!job.allow_internal,
-      ...packages.access(id, job),
-      source: job.source || 'builtin', template_id: job.template_id || null, description: job.description || '',
-      review_policy: reviewPolicy(id, job, workflows[job.workflow]),
-      worker_policy: workflows[job.workflow].mode === 'artifact' ? taskPolicy(job, workflows[job.workflow], definitions.limits) : null,
-      kind: job.kind, input_schema: job.input_schema, execution_profile: job.execution_profile || null })),
-    task_types: taskTypes, workflows, execution_profiles: executionProfiles,
-    check_profiles: Object.entries(profiles).map(([id, p]) => ({ id, label: p.label, validation_scope: p.validation_scope })) };
+  if (req.method === 'GET' && url.pathname === '/catalog') return catalog(url.searchParams);
   if (req.method === 'GET' && url.pathname === '/execution-settings') return settings.snapshot();
   if (req.method === 'GET' && url.pathname === '/harness-packages') return packages.snapshot();
   const packageMatch = url.pathname.match(/^\/harness-packages\/([^/]+)$/);

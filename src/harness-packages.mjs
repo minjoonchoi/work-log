@@ -42,10 +42,19 @@ export function harnessPackages({ dir, jobs }) {
     assert(packageIds?.length, '작업 유형의 직무 묶음을 확인할 수 없습니다.');
     return { management_group: 'harness', installed: packageIds.some(id => data.installed.includes(id)), package_ids: [...packageIds] };
   }
-  function assertInstalled(task, job) {
-    const value = access(task, job);
+  function assertInstalled(task, job, data) {
+    const value = access(task, job, data);
     const names = packages.filter(item => value.package_ids.includes(item.id)).map(item => `${item.label} (${item.id})`).join(', ');
     assert(value.installed, `설치되지 않은 하네스 작업 유형입니다. WorkLog 설정에서 ${names} 묶음을 먼저 설치하세요.`, 409);
+  }
+  // One request must describe and filter the same package revision even if a
+  // settings file is replaced while its catalog is being assembled.
+  function selection() {
+    const data = read();
+    return { revision: data.revision,
+      installed_packages: packages.filter(value => data.installed.includes(value.id)).map(({ id, label }) => ({ id, label })),
+      access: (task, job) => access(task, job, data),
+      assertInstalled: (task, job) => assertInstalled(task, job, data) };
   }
   function snapshot(data = read()) {
     return { revision: data.revision, legacy_default: data.legacy_default,
@@ -65,5 +74,5 @@ export function harnessPackages({ dir, jobs }) {
     atomic(file, JSON.stringify({ version: 1, revision: data.revision + 1, installed }, null, 2));
     return snapshot();
   }
-  return { access, assertInstalled, snapshot, set, file };
+  return { access, assertInstalled, selection, snapshot, set, file };
 }

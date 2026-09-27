@@ -86,13 +86,20 @@ try {
   } else if (command === 'catalog') {
     const summary = flag('--summary'), task = option('--task');
     if (args.length || (summary && task)) throw new Error('catalog는 --summary 또는 --task <업무 ID> 중 하나만 지정하세요.');
-    result = await request(dir, 'runtime', '/catalog');
+    result = await request(dir, 'runtime', '/catalog?scope=harness');
+    // A previously loaded skill must still discover the current user selection.
+    // Older services ignore the scope query; never treat their full catalog as
+    // an installed-task allowlist or expose WorkLog's app-only writing jobs.
+    if (result.scope !== 'harness' || !Array.isArray(result.jobs)
+      || result.jobs.some(job => job.internal || job.management_group !== 'harness' || job.installed !== true))
+      throw new Error('현재 설치된 하네스 작업 목록을 확인할 수 없습니다. WorkLog 앱과 실행 서비스를 같은 최신 버전으로 업데이트하세요.');
     if (task) {
       result = result.jobs.find(job => job.id === task);
-      if (!result) throw new Error(`지원하지 않는 업무입니다: ${task}`);
+      if (!result) throw new Error(`지원하지 않는 업무입니다: ${task}. 현재 설치된 직무 작업 목록에서 선택하세요.`);
     } else if (summary) {
-      result = { version: result.version, jobs: result.jobs.map(({ id, label, category, kind, internal, boundary, routing, review_policy, source, template_id, description, management_group, package_ids }) => ({
-        id, label, category, kind, internal, review_policy, source, template_id, description, management_group, package_ids,
+      result = { version: result.version, scope: result.scope, package_revision: result.package_revision, installed_packages: result.installed_packages,
+        jobs: result.jobs.map(({ id, label, category, kind, internal, installed, boundary, routing, review_policy, source, template_id, description, management_group, package_ids }) => ({
+        id, label, category, kind, internal, installed, review_policy, source, template_id, description, management_group, package_ids,
         ...(boundary ? { boundary: { owns: boundary.owns, excludes: boundary.excludes, deliverable: boundary.deliverable } } : {}),
         routing
       })) };
