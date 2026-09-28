@@ -2,6 +2,7 @@ import path from 'node:path';
 import { database, transaction, validateEvent, stableId, id, now, json, assert, digest } from './shared.mjs';
 import { currentHookEvent, receivedTurn, resolveHookTurns } from './hook-events.mjs';
 import { isWorkerWorkspace } from './worker-context.mjs';
+import { isNativeBackgroundEvent, nativeBackgroundIdentity } from './native-session.mjs';
 
 const schema = `
 CREATE TABLE IF NOT EXISTS work_items (
@@ -48,6 +49,10 @@ CREATE TABLE IF NOT EXISTS work_item_tags (
 );
 CREATE INDEX IF NOT EXISTS work_item_tag_name ON work_item_tags(tag,work_item_id);
 CREATE TABLE IF NOT EXISTS cursors (source TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS native_background_sessions (
+ engine TEXT NOT NULL, source_id TEXT NOT NULL, kind TEXT NOT NULL,
+ PRIMARY KEY(engine,source_id)
+);
 PRAGMA user_version=1;`;
 
 export function managerStore(dir) {
@@ -255,10 +260,15 @@ export function managerStore(dir) {
       let inserted = 0, ignoredInternal = 0; const changed = new Set();
       for (const raw of raws) {
         const e = validateEvent(raw);
+        const nativeBackground = nativeBackgroundIdentity(e);
+        if (nativeBackground) exec('INSERT OR IGNORE INTO native_background_sessions VALUES(?,?,?)', e.engine, e.agent_session_id, nativeBackground);
         // Old hook commands and queued deliveries can bypass the hook-side
         // filter. Apply executor-owned identity before reserving any user item.
         // Runtime worker events are retained under their explicit parent owner.
-        if (e.source === 'system_hook' && e.role === 'user' && isWorkerWorkspace(dir, e.engine, e.cwd)) {
+        if (isNativeBackgroundEvent(e)
+          || (e.source === 'system_hook' && e.role === 'user'
+            && one('SELECT 1 FROM native_background_sessions WHERE engine=? AND source_id=?', e.engine, e.agent_session_id))
+          || (e.source === 'system_hook' && e.role === 'user' && isWorkerWorkspace(dir, e.engine, e.cwd))) {
           ignoredInternal++; continue;
         }
         const aid = stableId('agent-', `${e.engine}:${e.agent_session_id}`);

@@ -8,6 +8,7 @@ if (process.env.HARNESS_WORKER === '1') process.exit(0);
 const { dataRoot, initRoot, id, stableId, now, json, atomic, redact } = await import('./shared.mjs');
 const { spoolHookEvent } = await import('./hook-events.mjs');
 const { isWorkerWorkspace } = await import('./worker-context.mjs');
+const { readNativeSession, readClaudeSession } = await import('./native-session.mjs');
 
 try {
   const dir = dataRoot();
@@ -36,6 +37,8 @@ try {
       turn_id: turn, source_turn_id: sourceTurn, turn_source: sourceTurn ? 'native' : kind === 'input' ? 'local' : 'missing', hook_schema: 2,
       call_id: raw.tool_use_id || raw.tool_call_id || null, role: 'user',
       cwd,
+      native_session: engine === 'claude' ? readClaudeSession(raw, process.env.CLAUDE_CODE_ENTRYPOINT)
+        : readNativeSession(engine, raw.session_id, raw.transcript_path),
       text: text == null ? null : redact(text), source: 'system_hook', hook_event_name: raw.hook_event_name };
     // Stable source IDs deduplicate retries; identical prompt contents do not.
     spoolHookEvent(dir, event, !!raw.event_id);
