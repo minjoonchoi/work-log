@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { ROOT, dataRoot, initRoot, request, json, sleep } from '../src/shared.mjs';
-import { attachAgentOrigin } from '../src/agent-origin.mjs';
+import { attachAgentOrigin, inspectAgentContext } from '../src/agent-origin.mjs';
 
 const args = process.argv.slice(2), command = args.shift(), dir = dataRoot();
 function option(name) {
@@ -83,6 +83,11 @@ try {
     result = await request(dir, 'runtime', command === 'orchestrate' ? '/plans' : '/runs', { method: 'POST', body: linkedPayload });
     if (wait) result = await waitFor(result);
     else notify(result, '시작');
+  } else if (command === 'context') {
+    const engine = option('--engine') || 'codex', session = option('--session');
+    if (args.length) throw new Error('context는 --engine codex|claude와 실제 --session ID만 받습니다.');
+    if (process.env.HARNESS_WORKER === '1') throw new Error('worker에서 사용자 업무 연결을 조회하지 않습니다.');
+    result = { status: 'ready', ...await inspectAgentContext(dir, { engine, session_id: session || (engine === 'codex' ? process.env.CODEX_THREAD_ID : undefined) }) };
   } else if (command === 'catalog') {
     const summary = flag('--summary'), task = option('--task');
     if (args.length || (summary && task)) throw new Error('catalog는 --summary 또는 --task <업무 ID> 중 하나만 지정하세요.');
@@ -108,6 +113,7 @@ try {
     const wait = flag('--wait'), runId = args[0], isPlan = String(runId || '').startsWith('plan-');
     if (!runId && command !== 'status') throw new Error(`${command}에는 run ID 또는 plan ID가 필요합니다.`);
     if (wait && !runId) throw new Error('--wait에는 run ID 또는 plan ID가 필요합니다.');
+    if (command === 'resume' && args.length > 1) throw new Error('resume은 추가 입력을 받지 않고 원래 입력으로 재개합니다. 사용자 답변은 수정한 작업 입력에 포함해 새 요청으로 제출하세요.');
     if (args.length > 1 || (wait && !['status', 'resume'].includes(command))) throw new Error('지원하지 않는 명령 인자입니다.');
     if (isPlan && command === 'evidence') throw new Error('계획의 steps에 있는 run_id로 evidence를 조회하세요.');
     if (process.env.HARNESS_WORKER === '1' && ['resume', 'cancel'].includes(command)) throw new Error('worker에서 다른 작업의 실행을 제어할 수 없습니다.');
@@ -132,8 +138,8 @@ try {
     result = { usage: ['harness start', 'harness run --input request.json --wait [--engine codex|claude]',
       'harness orchestrate --input plan.json --wait [--engine codex|claude]', 'harness status [run-id|plan-id] [--wait]',
       'harness cancel|result run-id|plan-id', 'harness resume run-id|plan-id [--wait]', 'harness evidence run-id',
-      'harness catalog [--summary|--task task-id]', 'harness doctor', 'harness install-plan [--output directory]'],
+      'harness catalog [--summary|--task task-id]', 'harness context [--engine codex|claude] [--session native-session-id]', 'harness doctor', 'harness install-plan [--output directory]'],
       note: 'work 스킬이 사용자 요청을 등록 업무의 구조화된 계획으로 분할합니다. 서비스가 실행 순서와 검토·수정을 관리하며 stdout에는 최종 JSON, stderr에는 간단한 진행 상태를 출력합니다.' };
   }
   if (result) console.log(json(result));
-} catch (e) { console.error(json({ error: e.message })); process.exitCode = 1; }
+} catch (e) { console.error(json({ error: e.message, ...(typeof e.code === 'string' && e.code.startsWith('agent_') ? { code: e.code, retryable: e.retryable } : {}) })); process.exitCode = 1; }

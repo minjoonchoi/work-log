@@ -21,7 +21,9 @@ if (scenario === 'truncated') { fs.writeFileSync(output, '{"status":'); process.
 if (scenario === 'invalid') { fs.writeFileSync(output, JSON.stringify({ status: 'done', result: {} })); process.exit(0); }
 if (scenario === 'illegal-transition') { fs.writeFileSync(output, JSON.stringify({ status: 'done', result: { file: job.file, next: 'render' } })); process.exit(0); }
 let result;
-if (scenario === 'blocked') result = { status: 'blocked', result: { message: '필수 대상 고객 정보가 필요합니다.' } };
+if (scenario === 'clarification' && !fixture.input?.requirements?.includes('분석 범위: 구조·진입점·의존성·테스트'))
+  result = { status: 'blocked', result: { message: '어떤 관점의 상세 분석이 가장 유용할까요?' } };
+else if (scenario === 'blocked') result = { status: 'blocked', result: { message: '필수 대상 고객 정보가 필요합니다.' } };
 else if (stage === 'review') {
   if (scenario === 'tamper-input-snapshot') {
     const references = JSON.parse(prompt.match(/\n자료 파일 참조[^:]+: ([^\n]+)\n/)[1]);

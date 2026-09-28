@@ -20,8 +20,8 @@ const payloadFor = command => command === 'run'
 
 async function cli(dir, command, payload, { env = {}, args = [] } = {}) {
   const file = path.join(dir, `${command}-request.json`);
-  fs.writeFileSync(file, JSON.stringify(payload));
-  const child = spawn(process.execPath, [path.join(ROOT, 'bin/harness.mjs'), command, '--input', file, ...args], {
+  if (payload !== undefined) fs.writeFileSync(file, JSON.stringify(payload));
+  const child = spawn(process.execPath, [path.join(ROOT, 'bin/harness.mjs'), command, ...(payload !== undefined ? ['--input', file] : []), ...args], {
     cwd: dir, env: { ...process.env, HARNESS_DATA_DIR: dir, HARNESS_WORKER: '', CODEX_THREAD_ID: '', ...env },
     stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000
   });
@@ -167,9 +167,94 @@ test('an unregistered native session stops before any runtime submission', async
     const result = await cli(dir, command, payloadFor(command), { env: { CODEX_THREAD_ID: origin.agent_session_id } });
     assert.equal(result.exit, 1); assert.equal(result.stdout, '');
     assert.match(result.stderr, /현재 원본 입력을 확인할 수 없습니다/);
+    assert.match(result.stderr, /"code":"agent_input_unobserved"/);
+    assert.match(result.stderr, /"retryable":false/);
     assert.equal(calls.filter(call => call.method === 'GET').length, 1);
     assert.equal(calls.filter(call => call.method === 'POST').length, 0);
   });
+});
+
+test('context distinguishes missing prompt collection and binds the first spooled input without launching work', async t => {
+  const h = await new Harness().start('runtime'); t.after(() => h.close()); await h.start('manager');
+  const env = { CODEX_THREAD_ID: origin.agent_session_id };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await cli(h.dir, 'context', undefined, { env });
+    assert.equal(result.exit, 1);
+    assert.match(result.stderr, /"code":"agent_input_unobserved"/);
+    assert.deepEqual(await h.manager('/items'), []);
+    assert.deepEqual(await h.runtime('/runs'), []);
+  }
+  h.hook('codex', { hook_event_name: 'UserPromptSubmit', event_id: 'first-codebase-input',
+    session_id: origin.agent_session_id, turn_id: origin.turn_id, prompt: '코드 베이스 분석해', cwd: ROOT }, { HARNESS_WORKER: '' });
+  const first = await cli(h.dir, 'context', undefined, { env });
+  assert.equal(first.exit, 0, first.stderr);
+  const linked = JSON.parse(first.stdout);
+  assert.equal(linked.status, 'ready'); assert.deepEqual(linked.origin, origin);
+  assert.deepEqual((await h.manager('/items')).map(row => row.id), [linked.work_item_id]);
+  const repeated = await cli(h.dir, 'context', undefined, { env });
+  assert.equal(repeated.exit, 0); assert.deepEqual(JSON.parse(repeated.stdout), linked);
+  assert.deepEqual(await h.runtime('/runs'), []);
+  const detail = await h.manager(`/items/${linked.work_item_id}`);
+  assert.equal(detail.events.filter(row => row.kind === 'input').length, 1);
+  assert.equal(detail.sessions.length, 1);
+});
+
+test('context reports unavailable service and missing identity without falling back to a standalone task', async t => {
+  const h = new Harness(); t.after(() => h.close());
+  const unavailable = await cli(h.dir, 'context', undefined, { env: { CODEX_THREAD_ID: origin.agent_session_id } });
+  assert.equal(unavailable.exit, 1); assert.match(unavailable.stderr, /"code":"agent_context_unavailable"/);
+  const missing = await cli(h.dir, 'context');
+  assert.equal(missing.exit, 1); assert.match(missing.stderr, /"code":"agent_identity_unavailable"/);
+  const claude = await cli(h.dir, 'context', undefined, { env: { CODEX_THREAD_ID: origin.agent_session_id }, args: ['--engine', 'claude'] });
+  assert.equal(claude.exit, 1); assert.match(claude.stderr, /"code":"agent_identity_unavailable"/);
+});
+
+test('resume never silently ignores a clarification file on the CLI', async t => {
+  const { dir, calls } = await endpoint(t);
+  const result = await cli(dir, 'resume', undefined, { args: ['run-previous', '--input', 'clarification.json'] });
+  assert.equal(result.exit, 1);
+  assert.match(result.stderr, /추가 입력|추가 인자/);
+  assert.equal(calls.length, 0, 'an unsupported clarification must not retry the unchanged worker');
+});
+
+test('a clarification reaches the amended worker and returns its result under the same native work item', async t => {
+  const h = await new Harness().start('runtime'); t.after(() => h.close()); await h.start('manager');
+  const env = { CODEX_THREAD_ID: origin.agent_session_id };
+  const prompt = '코드 베이스 분석해';
+  h.hook('codex', { hook_event_name: 'UserPromptSubmit', event_id: 'analysis-input', session_id: origin.agent_session_id,
+    turn_id: 'analysis-turn', prompt }, { HARNESS_WORKER: '' });
+  const plan = { prompt, engine: 'fixture', fixture: { scenario: 'clarification' }, idempotency_key: 'before-answer', steps: [
+    { id: 'analysis', task: 'architecture.review', output_key: 'architecture', request_excerpt: prompt,
+      input: { requirements: prompt }, depends_on: [] }
+  ] };
+  const first = await cli(h.dir, 'orchestrate', plan, { env, args: ['--wait'] });
+  assert.equal(first.exit, 2, first.stderr);
+  const blocked = JSON.parse(first.stdout), blockedRun = blocked.steps[0].run_id;
+  assert.equal(blocked.status, 'blocked'); assert.match(blocked.steps[0].message, /어떤 관점/);
+  const reply = '분석 범위: 구조·진입점·의존성·테스트';
+  for (const route of [`/plans/${blocked.id}/resume`, `/runs/${blockedRun}/resume`]) {
+    await assert.rejects(() => h.runtime(route, { method: 'POST', body: { answers: reply } }), error => error.status === 400 && /추가 답변/.test(error.message));
+  }
+  const original = await h.runtime(`/runs/${blockedRun}`);
+  assert.equal(original.status, 'blocked'); assert.equal(original.attempts.length, 1);
+  h.hook('codex', { hook_event_name: 'Stop', event_id: 'analysis-question', session_id: origin.agent_session_id,
+    turn_id: 'analysis-turn', last_assistant_message: blocked.steps[0].message }, { HARNESS_WORKER: '' });
+  h.hook('codex', { hook_event_name: 'UserPromptSubmit', event_id: 'analysis-answer', session_id: origin.agent_session_id,
+    turn_id: 'answer-turn', prompt: reply }, { HARNESS_WORKER: '' });
+  const amended = { ...plan, idempotency_key: 'with-answer', steps: [{ ...plan.steps[0], input: { requirements: `${prompt}\n${reply}` } }] };
+  const next = await cli(h.dir, 'orchestrate', amended, { env, args: ['--wait'] });
+  assert.equal(next.exit, 0, next.stderr);
+  const completed = JSON.parse(next.stdout);
+  assert.equal(completed.status, 'completed'); assert.equal(completed.work_item_id, blocked.work_item_id);
+  assert.equal(completed.origin.turn_id, 'answer-turn'); assert.equal(completed.artifacts.length, 1);
+  assert.ok(fs.existsSync(completed.artifacts[0].output_file));
+  const child = await h.runtime(`/runs/${completed.steps[0].run_id}`);
+  assert.match(fs.readFileSync(path.join(child.attempts[0].directory, 'prompt.txt'), 'utf8'), /분석 범위: 구조·진입점·의존성·테스트/);
+  const duplicate = await cli(h.dir, 'orchestrate', amended, { env, args: ['--wait'] });
+  assert.equal(duplicate.exit, 0); assert.equal(JSON.parse(duplicate.stdout).id, completed.id);
+  assert.equal((await h.runtime(`/runs/${blockedRun}`)).attempts.length, 1);
+  assert.equal((await h.runtime('/runs')).length, 2);
+  assert.equal((await h.manager('/items')).length, 1);
 });
 
 test('native-session CLI requests stop before runtime submission when the manager cannot be reached', async t => {

@@ -474,6 +474,10 @@ function assertPreviousWorkersStopped(runId) {
   });
   assert(!unconfirmed, '이전 worker의 프로세스 트리 종료를 확인하지 못했습니다. 실행을 재개할 수 없습니다.', 409);
 }
+function assertResumeBody(input) {
+  assert(input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).length === 0,
+    '재개는 원래 입력을 유지하며 추가 답변을 반영하지 않습니다. 새 답변은 수정한 작업 입력에 포함해 새 요청으로 제출하세요.');
+}
 function resume(runId) {
   assert(!draining && !shuttingDown, '앱 종료 후 기존 업무를 마무리하는 중입니다. WorkLog를 다시 열고 재개하세요.', 503);
   const row = get(runId); assert(row, '실행이 없습니다.', 404);
@@ -630,6 +634,7 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
   if (planMatch) {
     if (req.method === 'POST' && planMatch[2] === 'cancel') return plans.cancel(planMatch[1]);
     if (req.method === 'POST' && planMatch[2] === 'resume') {
+      assertResumeBody(await body(req));
       assert(!draining && !shuttingDown, '앱 종료 후 기존 업무를 마무리하는 중입니다. WorkLog를 다시 열고 재개하세요.', 503);
       return plans.resume(planMatch[1]);
     }
@@ -639,6 +644,7 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
   if (match) {
     if (req.method === 'POST' && match[2] === 'cancel') return cancel(match[1]);
     if (req.method === 'POST' && match[2] === 'resume') {
+      assertResumeBody(await body(req));
       assert(!draining && !shuttingDown, '앱 종료 후 기존 업무를 마무리하는 중입니다. WorkLog를 다시 열고 재개하세요.', 503);
       const row = get(match[1]); assert(row, '실행이 없습니다.', 404);
       const request = JSON.parse(row.request);
