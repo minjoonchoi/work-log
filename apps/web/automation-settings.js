@@ -5,6 +5,9 @@ export function automationSettingsUI({ api, esc, modal, toast }) {
     modal(`<h2>자동 작성 설정</h2><p>새 업무의 제목·설명은 첫 프롬프트에서 바로 채우며 모델을 호출하지 않습니다. 아래 기준을 충족하면 수집된 대화와 세션 요약으로 구조화해 갱신합니다. 이 컴퓨터의 모든 업무에 적용합니다.</p>
       <form id="automation-settings-form">
         <div id="automation-settings-error" class="error" role="alert" hidden></div>
+        <section class="automation-setting"><h3>세션 자동 요약</h3>
+          <label><input id="session-summary-enabled" type="checkbox" ${settings.session_summary_enabled ? 'checked' : ''}> 세션 자동 요약 사용</label>
+          <p class="help">20분 이상 활동이 없는 종료 세션을 주기적으로 확인해 최대 5개씩 요약합니다. 끄면 새 자동 요약과 대기 중인 자동 요약을 멈춥니다. 실행 서비스에 이미 접수된 요약은 완료하며 수동 요약은 계속 사용할 수 있습니다.</p></section>
         <section class="automation-setting" aria-labelledby="initial-output-heading">
           <h3 id="initial-output-heading">첫 구조화 갱신</h3>
           <label for="initial-output-count">에이전트 응답 수</label>
@@ -22,7 +25,7 @@ export function automationSettingsUI({ api, esc, modal, toast }) {
         <div class="dialog-actions"><button type="button" data-close>닫기</button><button type="button" id="reset-automation-settings" class="secondary">기본값 입력</button><button type="submit" id="save-automation-settings" class="primary">저장</button></div>
       </form>`);
     const form = $('#automation-settings-form');
-    $('#reset-automation-settings').onclick = () => { $('#initial-output-count').value = 5; $('#summary-interval').value = 5; };
+    $('#reset-automation-settings').onclick = () => { $('#session-summary-enabled').checked = true; $('#initial-output-count').value = 5; $('#summary-interval').value = 5; };
     form.onsubmit = async event => {
       event.preventDefault();
       if (!form.reportValidity()) return;
@@ -34,7 +37,7 @@ export function automationSettingsUI({ api, esc, modal, toast }) {
       const controls = [...form.querySelectorAll('input, #save-automation-settings, #reset-automation-settings')];
       controls.forEach(control => control.disabled = true); form.setAttribute('aria-busy', 'true'); error.hidden = true;
       try {
-        const saved = await api('/automation/settings', { method: 'PATCH', body: { initial_output_count, summary_interval } });
+        const saved = await api('/automation/settings', { method: 'PATCH', body: { initial_output_count, summary_interval, session_summary_enabled: $('#session-summary-enabled').checked } });
         if (!form.isConnected) return;
         $('#initial-output-count').value = saved.initial_output_count; $('#summary-interval').value = saved.summary_interval;
         toast('자동 작성 기준을 저장했습니다.');

@@ -136,7 +136,7 @@ application.run()
   assert.equal(page.title, 'WorkLog'); assert.equal(page.items, '1'); assert.equal(page.error, '');
   assert.match(page.body, /네이티브 연결 확인 업무/);
   assert.equal(quick.count, '1'); assert.match(quick.body, /네이티브 연결 확인 업무/);
-  assert.deepEqual(page.icons, Array(7).fill(true), 'bundled SVG menu icons render in the native WKWebView');
+  assert.deepEqual(page.icons, Array(8).fill(true), 'bundled SVG menu icons render in the native WKWebView');
   assert.deepEqual(quick.icons, Array(4).fill(true), 'quick panel SVG icons render in the native WKWebView');
   assert.equal(result.statusIconVisible, true, 'native vector fallback supplies an image in a test executable without bundle resources');
 });

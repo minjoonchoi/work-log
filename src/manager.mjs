@@ -1,3 +1,4 @@
+import { taskQueue } from './task-queue.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -223,6 +224,7 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (customSetting && req.method === 'DELETE') return request(dir, 'runtime', `/execution-settings/custom-tasks/${customSetting[1]}`, { method: 'DELETE', body: await body(req) });
     let executionSetting = p.match(/^\/api\/execution-settings\/([^/]+)$/);
     if (executionSetting && ['PUT', 'DELETE'].includes(req.method)) return request(dir, 'runtime', `/execution-settings/${executionSetting[1]}`, { method: req.method, body: await body(req) });
+    if (req.method === 'GET' && p === '/api/task-queue') return taskQueue(dir, writings);
     if (req.method === 'GET' && p === '/api/automation/settings') return writings.automationSettings();
     if (req.method === 'PATCH' && p === '/api/automation/settings') { const result = writings.saveAutomationSettings(await body(req)); notify(); return result; }
     if (req.method === 'GET' && p === '/api/health') return health();

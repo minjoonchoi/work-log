@@ -37,7 +37,7 @@ async function closedAccepted(h, item, count) {
 
 test('the fifth real user Stop creates one format-checked automatic metadata run; hook replay, workers and restart do not repeat it', async t => {
   const h = await setup(t);
-  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 5, summary_interval: 5 });
+  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 5, summary_interval: 5, session_summary_enabled: true });
   h.hook('codex', { hook_event_name: 'SessionStart', session_id: 'automatic-hook', event_id: 'initial-session-start' });
   await eventually(() => h.manager('/health'), value => value.events === 1);
   assert.deepEqual(await h.manager('/items'), []);
@@ -114,7 +114,7 @@ test('automation settings validate, persist and coalesce an already fulfilled lo
   for (const body of [{}, { initial_output_count: 0 }, { summary_interval: 1001 }, { initial_output_count: 1.5 }, { summary_interval: '3' }, { unknown: 5 }]) {
     await assert.rejects(h.manager('/automation/settings', patch(body)));
   }
-  assert.deepEqual(await h.manager('/automation/settings', patch({ initial_output_count: 1000, summary_interval: 1000 })), { initial_output_count: 1000, summary_interval: 1000 });
+  assert.deepEqual(await h.manager('/automation/settings', patch({ initial_output_count: 1000, summary_interval: 1000, session_summary_enabled: true })), { initial_output_count: 1000, summary_interval: 1000, session_summary_enabled: true });
   await h.ingest([0, 30, 60, 90, 120, 150, 180].flatMap((minute, index) => turn('settings-cadence', minute, `window-${index}`)));
   const item = (await h.manager('/items'))[0];
   // Periodic batches drain the backlog without needing the next prompt.
@@ -125,8 +125,8 @@ test('automation settings validate, persist and coalesce an already fulfilled lo
   await summarize(h, before.sessions.at(-1).id, 'open-summary-before-automatic');
   assert.equal((await finished(h, 'open-summary-before-automatic')).state, 'completed');
   await h.stop('manager'); await h.start('manager');
-  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 1000, summary_interval: 1000 });
-  await h.manager('/automation/settings', patch({ initial_output_count: 3, summary_interval: 5 }));
+  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 1000, summary_interval: 1000, session_summary_enabled: true });
+  await h.manager('/automation/settings', patch({ initial_output_count: 3, summary_interval: 5, session_summary_enabled: true }));
   const value = await applied(h, item, 1); assert.equal(value.metadata_rewrite.source, 'automatic');
   const initial = await h.runtime(`/runs/${value.metadata_rewrite.run_id}`);
   assert.equal(initial.request.input.sessions.filter(session => session.summary && session.events.length === 0).length, 6);
@@ -136,12 +136,12 @@ test('automation settings validate, persist and coalesce an already fulfilled lo
   await h.ingest(turn('settings-cadence', 210, 'new-counted-window'));
   await closedAccepted(h, item, 7); await applied(h, item, 2);
   await h.stop('manager'); await h.start('manager'); await stableCount(h, 2);
-  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 3, summary_interval: 1 });
+  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 3, summary_interval: 1, session_summary_enabled: true });
 });
 
 test('closed summaries cannot bypass the initial output threshold; explicit metadata generation starts the later summary cadence', async t => {
   const h = await setup(t);
-  await h.manager('/automation/settings', patch({ initial_output_count: 100, summary_interval: 1 }));
+  await h.manager('/automation/settings', patch({ initial_output_count: 100, summary_interval: 1, session_summary_enabled: true }));
   await h.ingest([0, 30, 60].flatMap((minute, index) => turn('initial-stage-gate', minute, `window-${index}`)));
   const item = (await h.manager('/items'))[0]; await closedAccepted(h, item, 2); await stableCount(h, 0);
   await rewrite(h, (await detail(h, item)).item, 'manual-initial-stage');
@@ -171,7 +171,7 @@ test('appended user dialogue and a manager restart preserve one frozen automatic
 
 test('human metadata edits defeat in-flight automation and remain protected after further thresholds and deliberate regeneration', async t => {
   const h = await setup(t, { delayMs: 1000 });
-  await h.manager('/automation/settings', patch({ initial_output_count: 1, summary_interval: 1 }));
+  await h.manager('/automation/settings', patch({ initial_output_count: 1, summary_interval: 1, session_summary_enabled: true }));
   await h.ingest(turn('manual-protection', 0, 'first'));
   const item = (await h.manager('/items'))[0];
   const started = await eventually(() => detail(h, item), value => value.metadata_rewrite?.state === 'running');

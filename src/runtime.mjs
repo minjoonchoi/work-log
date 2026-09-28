@@ -624,6 +624,10 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
     return { events: rows.map(r => JSON.parse(r.payload)), cursor: rows.at(-1)?.seq || after };
   }
   if (req.method === 'POST' && url.pathname === '/runs') return create(await body(req));
+  if (req.method === 'GET' && url.pathname === '/task-queue') return {
+    runs: db.prepare("SELECT * FROM runs WHERE status IN ('pending','running') ORDER BY created_at").all().map(view),
+    plans: db.prepare("SELECT id FROM plans WHERE status IN ('pending','running') ORDER BY created_at").all().map(row => plans.view(row.id))
+  };
   if (req.method === 'GET' && url.pathname === '/runs') return db.prepare('SELECT * FROM runs ORDER BY created_at DESC').all().map(view);
   if (req.method === 'POST' && url.pathname === '/plans') {
     const input = await body(req);

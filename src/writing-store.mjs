@@ -16,11 +16,14 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
     CREATE INDEX IF NOT EXISTS writing_target ON writing_requests(format,target_id,seq);
     CREATE TABLE IF NOT EXISTS metadata_automation_settings (
       singleton INTEGER PRIMARY KEY CHECK(singleton=1), initial_output_count INTEGER NOT NULL, summary_interval INTEGER NOT NULL);
-    INSERT OR IGNORE INTO metadata_automation_settings VALUES(1,5,5);
+    INSERT OR IGNORE INTO metadata_automation_settings(singleton,initial_output_count,summary_interval) VALUES(1,5,5);
     CREATE TABLE IF NOT EXISTS metadata_automation_state (
       work_item_id TEXT PRIMARY KEY, initial_consumed INTEGER NOT NULL DEFAULT 0, summary_highwater INTEGER NOT NULL DEFAULT 0);`);
   if (!db.prepare('PRAGMA table_info(writing_requests)').all().some(column => column.name === 'source')) {
     db.exec("ALTER TABLE writing_requests ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
+  }
+  if (!db.prepare('PRAGMA table_info(metadata_automation_settings)').all().some(column => column.name === 'session_summary_enabled')) {
+    db.exec('ALTER TABLE metadata_automation_settings ADD COLUMN session_summary_enabled INTEGER NOT NULL DEFAULT 1');
   }
   // Keep legacy prompt receipts as history. Scheduling now scans unfinished
   // summaries on the manager's timer; prompt arrival is not an admission token.
@@ -29,14 +32,14 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
   const latest = (format, target) => decode(db.prepare('SELECT * FROM writing_requests WHERE format=? AND target_id=? ORDER BY seq DESC LIMIT 1').get(format, target));
   const active = row => row && ['pending', 'running'].includes(row.state);
   const userSession = session => db.prepare("SELECT 1 FROM agent_sessions WHERE id=? AND role='user'").get(session.agent_id);
-  const automationSettings = () => ({ ...db.prepare('SELECT initial_output_count,summary_interval FROM metadata_automation_settings WHERE singleton=1').get() });
+  const automationSettings = () => { const row = db.prepare('SELECT initial_output_count,summary_interval,session_summary_enabled FROM metadata_automation_settings WHERE singleton=1').get(); return { ...row, session_summary_enabled: !!row.session_summary_enabled }; };
   function saveAutomationSettings(input) {
     assert(input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).length > 0
-      && Object.keys(input).every(key => ['initial_output_count', 'summary_interval'].includes(key)
+      && Object.keys(input).every(key => key === 'session_summary_enabled' ? typeof input[key] === 'boolean' : ['initial_output_count', 'summary_interval'].includes(key)
         && Number.isInteger(input[key]) && input[key] >= 1 && input[key] <= 1000), '자동 작성 기준은 1~1000 사이의 정수여야 합니다.');
     const settings = { ...automationSettings(), ...input };
-    db.prepare('UPDATE metadata_automation_settings SET initial_output_count=?,summary_interval=? WHERE singleton=1')
-      .run(settings.initial_output_count, settings.summary_interval);
+    db.prepare('UPDATE metadata_automation_settings SET initial_output_count=?,summary_interval=?,session_summary_enabled=? WHERE singleton=1')
+      .run(settings.initial_output_count, settings.summary_interval, Number(settings.session_summary_enabled));
     return settings;
   }
   function milestones(target, closed = integrations.closedSessions()) {
@@ -251,6 +254,7 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
     });
   }
   function scheduleAutomatic({ summaries = true, metadata = false } = {}) {
+    summaries = summaries && automationSettings().session_summary_enabled;
     if (!summaries && !metadata) return false;
     let changed = false;
     const closed = integrations.closedSessions();

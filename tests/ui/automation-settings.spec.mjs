@@ -25,7 +25,7 @@ test('GUI persists automatic writing thresholds and the collected second respons
   await page.getByLabel('요약된 종료 세션 수').fill('3');
   await page.getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.locator('#toast')).toHaveText('자동 작성 기준을 저장했습니다.');
-  expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 2, summary_interval: 3 });
+  expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 2, summary_interval: 3, session_summary_enabled: true });
   await h.stop('manager'); await h.start('manager'); await open(page);
   await expect(page.getByLabel('에이전트 응답 수')).toHaveValue('2');
   await expect(page.getByLabel('요약된 종료 세션 수')).toHaveValue('3');
@@ -50,15 +50,31 @@ test('automatic writing settings reject invalid counts and restore defaults only
   for (const value of ['0', '1.5', '1001', '']) {
     await input.fill(value); await page.getByRole('button', { name: '저장', exact: true }).click();
     expect(await input.evaluate(node => node.validity.valid)).toBe(false);
-    expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 5, summary_interval: 5 });
+    expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 5, summary_interval: 5, session_summary_enabled: true });
   }
   await input.fill('8'); await page.getByLabel('요약된 종료 세션 수').fill('12');
   await page.getByRole('button', { name: '저장', exact: true }).click();
-  await expect.poll(() => h.manager('/automation/settings')).toEqual({ initial_output_count: 8, summary_interval: 12 });
+  await expect.poll(() => h.manager('/automation/settings')).toEqual({ initial_output_count: 8, summary_interval: 12, session_summary_enabled: true });
   await page.getByRole('button', { name: '기본값 입력', exact: true }).click();
   await expect(input).toHaveValue('5'); await expect(page.getByLabel('요약된 종료 세션 수')).toHaveValue('5');
-  expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 8, summary_interval: 12 });
+  expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 8, summary_interval: 12, session_summary_enabled: true });
   await page.getByRole('button', { name: '저장', exact: true }).click();
-  await expect.poll(() => h.manager('/automation/settings')).toEqual({ initial_output_count: 5, summary_interval: 5 });
+  await expect.poll(() => h.manager('/automation/settings')).toEqual({ initial_output_count: 5, summary_interval: 5, session_summary_enabled: true });
   await page.screenshot({ path: 'output/playwright/automation-settings.png', fullPage: true });
+});
+
+
+test('session automation toggle persists and queue menu reports service availability', async ({ page }) => {
+  await open(page);
+  await page.getByLabel('세션 자동 요약 사용').uncheck();
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect.poll(async () => (await h.manager('/automation/settings')).session_summary_enabled).toBe(false);
+  await page.getByRole('button', { name: '닫기', exact: true }).click();
+  await page.getByRole('button', { name: '대기열', exact: true }).click();
+  await expect(page.locator('#queue-list')).toContainText('실행 중 · 0');
+  await expect(page.locator('#queue-list')).toContainText('대기 중 · 0');
+  await h.stop('runtime');
+  await expect(page.locator('#queue-health')).toContainText('실행 서비스 연결 끊김', { timeout: 15000 });
+  await open(page);
+  await expect(page.getByLabel('세션 자동 요약 사용')).not.toBeChecked();
 });
