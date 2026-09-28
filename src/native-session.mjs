@@ -80,11 +80,13 @@ export function readClaudeSession(raw, entrypoint) {
   return null;
 }
 
-// A versioned, narrow heuristic, never proof of an internal session. Only
-// otherwise unclassified first requests are held; users can explicitly admit them.
+// Native "cli" and a transcript path describe transport, not human authorship.
+// Match a constrained opening instruction, never a quoted example in the body.
+// This is an admission heuristic, not proof; explicit recovery remains available.
 export function titleAutomationCandidate(event) {
-  return ['codex', 'claude'].includes(event.engine) && event.source === 'system_hook'
-    && event.role === 'user' && event.kind === 'input'
-    && !event.native_session && !event.transcript_path && typeof event.text === 'string'
-    && /^Generate a concise, single-line task title at most 36 characters(?=[\s.,:;!?]|$)/i.test(event.text.trimStart());
+  if (!['codex', 'claude'].includes(event.engine) || event.source !== 'system_hook'
+    || event.role !== 'user' || event.kind !== 'input' || typeof event.text !== 'string') return false;
+  const opening = event.text.slice(0, 1024).normalize('NFKC').trimStart()
+    .replace(/[‐‑‒–—−]/g, '-').replace(/\s+/g, ' ');
+  return /^(?:generate|create|write)\s+(?:a\s+)?(?=[^.!?]{0,180}\b(?:concise|short|brief)\b)(?=[^.!?]{0,180}\bsingle[ -]line\b)[^.!?]{0,180}\b(?:task|session|conversation|chat)\s+(?:of\s+)?title\b/i.test(opening);
 }

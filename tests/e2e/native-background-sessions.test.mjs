@@ -20,7 +20,7 @@ async function drained(h) {
   await eventually(() => fs.readdirSync(path.join(h.dir, 'spool')).filter(name => name.endsWith('.json')).length, n => n === 0);
 }
 
-test('external title workers in the user project do not create items; identical interactive requests still collect', async t => {
+test('external title workers never create items; ambiguous title requests on interactive transport require explicit recovery', async t => {
   const h = new Harness(); t.after(() => h.close());
   for (const [session, source] of [['external-title', 'exec'], ['codex-title', { subagent: { other: 'title' } }],
     ['native-user', 'cli'], ['desktop-user', 'vscode']]) {
@@ -30,6 +30,9 @@ test('external title workers in the user project do not create items; identical 
     fs.unlinkSync(file);
   }
   await h.start('manager'); await drained(h);
+  assert.equal((await h.manager('/items')).length, 0);
+  const held = (await h.manager('/held-sessions')).records; assert.equal(held.length, 2);
+  for (const row of held) await h.manager('/held-sessions/'+row.id+'/promote', {method:'POST',body:{}});
   const items = await h.manager('/items'); assert.equal(items.length, 2);
   for (const item of items) {
     const detail = await h.manager(`/items/${item.id}`);
@@ -85,7 +88,7 @@ test('unknown or invalid transcript metadata never drops ordinary prompts, even 
   cases.push(['oversize', long]);
   const partial = path.join(h.dir, 'partial.jsonl'); fs.writeFileSync(partial, '{"type":"session_meta"');
   cases.push(['partial', partial]);
-  for (const [session, file] of cases) emit(h, session, file, 'UserPromptSubmit');
+  for (const [session, file] of cases) emit(h, session, file, 'UserPromptSubmit', {prompt:'이 업무의 제목을 작성해 주세요'});
   await drained(h); assert.equal((await h.manager('/items')).length, cases.length);
 });
 
@@ -111,13 +114,15 @@ function emitClaude(h, session, entrypoint, kind, extra = {}) {
     last_assistant_message: '간결한 업무 제목', ...extra }, { HARNESS_WORKER: '', CLAUDE_CODE_ENTRYPOINT: entrypoint });
 }
 
-test('Claude print and SDK title workers outside WorkLog never create items; interactive title requests still collect', async t => {
+test('Claude print workers never create items; interactive title templates remain recoverable', async t => {
   const h = new Harness(); t.after(() => h.close());
   for (const [session, entrypoint] of [['external-print', 'sdk-cli'], ['external-ts', 'sdk-ts'], ['external-py', 'sdk-py'],
     ['claude-user', 'cli'], ['claude-vscode-user', 'claude-vscode'], ['claude-local-user', 'local-agent'], ['unknown-user', 'future-mode']]) {
     for (const kind of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) emitClaude(h, session, entrypoint, kind, session === 'unknown-user' ? { prompt: '제목 작성 업무를 진행해 주세요' } : {});
   }
   await h.start('manager'); await drained(h);
+  const held = (await h.manager('/held-sessions')).records; assert.equal(held.length, 3);
+  for (const row of held) await h.manager('/held-sessions/'+row.id+'/promote', {method:'POST',body:{}});
   const items = await h.manager('/items'); assert.equal(items.length, 4);
   for (const item of items) {
     const detail = await h.manager(`/items/${item.id}`);
@@ -142,13 +147,13 @@ test('confirmed Claude print identity survives spool replay, restart and later m
 
 test('Claude child hook identity excludes only the child; --agent main sessions remain ordinary user sessions', async t => {
   const h = new Harness(); t.after(() => h.close()); await h.start('manager');
-  emitClaude(h, 'claude-root', 'cli', 'UserPromptSubmit', { agent_type: 'reviewer', turn_id: 'user-1' });
+  emitClaude(h, 'claude-root', 'cli', 'UserPromptSubmit', { agent_type: 'reviewer', turn_id: 'user-1', prompt:'사용자 업무 분석' });
   emitClaude(h, 'claude-root', 'cli', 'UserPromptSubmit', { agent_type: 'reviewer', agent_id: 'child', turn_id: 'child-turn' });
   emitClaude(h, 'claude-root', 'cli', 'Stop', { agent_id: 'child', turn_id: 'child-turn' });
-  emitClaude(h, 'claude-root', 'cli', 'Stop', { agent_type: 'reviewer', turn_id: 'user-1' });
+  emitClaude(h, 'claude-root', 'cli', 'Stop', { agent_type: 'reviewer', turn_id: 'user-1', prompt:'사용자 업무 분석' });
   await drained(h); await h.stop('manager'); await h.start('manager');
-  emitClaude(h, 'claude-root', '', 'UserPromptSubmit', { agent_type: 'reviewer', turn_id: 'user-2' });
-  emitClaude(h, 'claude-root', '', 'Stop', { agent_type: 'reviewer', turn_id: 'user-2' });
+  emitClaude(h, 'claude-root', '', 'UserPromptSubmit', { agent_type: 'reviewer', turn_id: 'user-2', prompt:'분석을 계속해' });
+  emitClaude(h, 'claude-root', '', 'Stop', { agent_type: 'reviewer', turn_id: 'user-2', prompt:'분석을 계속해' });
   await drained(h);
   const items = await h.manager('/items'); assert.equal(items.length, 1);
   const detail = await h.manager(`/items/${items[0].id}`);

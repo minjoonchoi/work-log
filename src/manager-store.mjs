@@ -297,9 +297,8 @@ export function managerStore(dir) {
         if (e.source === 'system_hook' && e.role === 'user') {
           let held = one('SELECT * FROM held_sessions WHERE id=?', aid);
           if (!held && titleAutomationCandidate(e)
-            && !one('SELECT 1 FROM agent_sessions WHERE id=?', aid)
-            && !one('SELECT 1 FROM agent_item_bindings WHERE agent_id=?', aid)) {
-            exec('INSERT INTO held_sessions VALUES(?,?,?,?,?,?)', aid, e.engine, e.agent_session_id, 'pending', 'title-automation-v1', now());
+            && !one("SELECT 1 FROM events WHERE agent_id=? AND kind='input' AND json_extract(payload,'$.role')='user'", aid)) {
+            exec('INSERT INTO held_sessions VALUES(?,?,?,?,?,?)', aid, e.engine, e.agent_session_id, 'pending', 'title-automation-v2', now());
             // Preserve observations delivered before the first input, including
             // output-first spool ordering, without deleting their source rows.
             exec('INSERT OR IGNORE INTO held_events SELECT id,agent_id,payload FROM events WHERE agent_id=?', aid);
