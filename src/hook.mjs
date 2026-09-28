@@ -37,6 +37,10 @@ try {
       turn_id: turn, source_turn_id: sourceTurn, turn_source: sourceTurn ? 'native' : kind === 'input' ? 'local' : 'missing', hook_schema: 2,
       call_id: raw.tool_use_id || raw.tool_call_id || null, role: 'user',
       cwd,
+      // The rollout header may not exist until after this hook returns. Preserve
+      // a bounded absolute reference so admission can retry identity resolution.
+      ...(typeof raw.transcript_path === 'string' && path.isAbsolute(raw.transcript_path)
+        && raw.transcript_path.length <= 4096 ? { transcript_path: raw.transcript_path } : {}),
       native_session: engine === 'claude' ? readClaudeSession(raw, process.env.CLAUDE_CODE_ENTRYPOINT)
         : readNativeSession(engine, raw.session_id, raw.transcript_path),
       text: text == null ? null : redact(text), source: 'system_hook', hook_event_name: raw.hook_event_name };

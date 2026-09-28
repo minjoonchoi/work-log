@@ -168,3 +168,43 @@ test('Claude background hook filtering retains executor results under an existin
   assert.equal((await h.manager('/items')).length, 1);
   assert.equal((await h.manager('/items/claude-work')).events.filter(e => e.role === 'worker').length, 2);
 });
+
+test('manager rechecks metadata written after the prompt hook before admitting an item', async t => {
+  const h = new Harness(); t.after(() => h.close());
+  const file = path.join(h.dir, 'late-metadata.jsonl');
+  emit(h, 'late-metadata', file, 'UserPromptSubmit');
+  transcript(h, 'late-metadata', 'exec');
+  await h.start('manager'); await drained(h);
+  assert.deepEqual(await h.manager('/items'), []);
+});
+
+test('background identity applies to every event in a batch regardless of delivery order', async t => {
+  const h = new Harness(); t.after(() => h.close()); await h.start('manager');
+  const [input, output] = pair('reordered-worker', '09:00:00', '09:01:00', 't', { source: 'system_hook', role: 'user' });
+  output.native_session = { adapter: 'codex-session-meta-v1', session_id: 'reordered-worker',
+    hook_session_id: 'reordered-worker', kind: 'exec', cli_version: '0.155.0' };
+  const result = await h.ingest([input, output]);
+  assert.equal(result.ignored_internal, 2);
+  assert.deepEqual(await h.manager('/items'), []);
+});
+
+test('spool collection preflights later identities and isolates malformed records for both engines', async t => {
+  const h = new Harness(); t.after(() => h.close());
+  fs.mkdirSync(path.join(h.dir, 'spool'), { recursive: true });
+  const write = (name, event) => fs.writeFileSync(path.join(h.dir, 'spool', name + '.json'), JSON.stringify(event));
+  for (const engine of ['codex', 'claude']) {
+    const session = 'spooled-' + engine;
+    const [input, output] = pair(session, '09:00:00', '09:01:00', 't', { engine, source: 'system_hook', role: 'user', text: titlePrompt });
+    output.native_session = engine === 'codex'
+      ? { adapter: 'codex-session-meta-v1', session_id: session, hook_session_id: session, kind: 'exec', cli_version: '0.155.0' }
+      : { adapter: 'claude-hook-origin-v1', session_id: session, hook_session_id: session, kind: 'print', entrypoint: 'sdk-cli' };
+    write('001-' + engine, input); write('999-' + engine, output);
+  }
+  write('000-bad', null);
+  const ordinary = pair('ordinary', '09:00:00', '09:01:00', 't', { source: 'system_hook', role: 'user', text: titlePrompt });
+  write('002-user', ordinary[0]); write('998-user', ordinary[1]);
+  await h.start('manager'); await drained(h);
+  const items = await h.manager('/items'); assert.equal(items.length, 1);
+  assert.equal((await h.manager('/items/' + items[0].id)).agents[0].source_id, 'ordinary');
+  assert.ok(fs.existsSync(path.join(h.dir, 'quarantine', '000-bad.json')));
+});

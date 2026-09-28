@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { execute } from '../../src/executor.mjs';
-import { codexDirectArguments } from '../../src/worker-policy.mjs';
+import { codexDirectArguments, codexWorkerArguments } from '../../src/worker-policy.mjs';
 
 const direct = { mode: 'direct', max_tool_calls: 0, max_model_turns: 1 };
 const schema = { type: 'object', properties: { status: { const: 'done' }, result: { type: 'object', properties: { content: { type: 'string' } }, required: ['content'], additionalProperties: false } }, required: ['status', 'result'], additionalProperties: false };
@@ -29,7 +29,12 @@ const writeResult = () => { if (codex) { fs.writeFileSync(args[args.indexOf('-o'
 if (scenario === 'unsupported') { process.stderr.write('error: unknown option --safe-mode'); process.exit(2); }
 if (codex) event({ type: 'turn.started' });
 const tool = id => codex ? { type: 'item.started', item: { type: 'command_execution', id, command: 'unexpected command' } } : { type: 'assistant', message: { id: 'message-' + id, content: [{ type: 'tool_use', id, name: 'Bash', input: {} }] } };
-if (scenario === 'tool' || scenario === 'allow-one' || scenario === 'too-many-tools') {
+if (scenario.startsWith('question:')) {
+  const name = scenario.slice('question:'.length);
+  event(codex ? { type: 'item.started', item: { type: 'mcp_tool_call', id: 'question', server: 'functions', tool: name } }
+    : { type: 'assistant', message: { id: 'question', content: [{ type: 'tool_use', id: 'q', name, input: { question: 'temporary probe' } }] } });
+  setTimeout(() => { fs.writeFileSync(${JSON.stringify(path.join(dir, 'continued'))}, 'unexpected continuation'); writeResult(); }, 1200);
+} else if (scenario === 'tool' || scenario === 'allow-one' || scenario === 'too-many-tools') {
   const value = Buffer.from(JSON.stringify(tool('한글 도구')) + '\\n');
   // Pipes may split both JSON records and UTF-8 code points.
   const split = value.indexOf(Buffer.from('한')) + 1;
@@ -116,7 +121,7 @@ test('unsupported CLI switches fail explicitly without silently dropping worker 
   assert.match(returned.observation.error, /unknown option --safe-mode/);
 });
 
-test('installed Codex accepts the direct policy and sends no tools to an isolated local transport', { skip: process.env.HARNESS_LOCAL_CODEX_PROBE !== '1' }, async t => {
+for (const mode of ['direct', 'artifact']) test(`installed Codex excludes question tools for ${mode} workers using an isolated local transport`, { skip: process.env.HARNESS_LOCAL_CODEX_PROBE !== '1' }, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-local-codex-'));
   let requests = [];
   const server = http.createServer(async (req, res) => {
@@ -129,7 +134,7 @@ test('installed Codex accepts the direct policy and sends no tools to an isolate
   let child;
   t.after(async () => { child?.kill('SIGKILL'); await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${server.address().port}/v1`;
-  const args = ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', ...codexDirectArguments(),
+  const args = ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', ...(mode === 'direct' ? codexDirectArguments() : codexWorkerArguments()),
     '-c', 'features.remote_models=false', '-c', 'model_provider="localprobe"', '-c',
     `model_providers.localprobe={name="Local test",base_url="${base}",wire_api="responses",requires_openai_auth=false,request_max_retries=0,stream_max_retries=0}`,
     '--model', 'gpt-5.6-luna', '--skip-git-repo-check', '-C', dir, '-'];
@@ -141,6 +146,27 @@ test('installed Codex accepts the direct policy and sends no tools to an isolate
   clearTimeout(timeout);
   assert.equal(code, 1, stderr); assert.equal(requests.length, 1, stderr);
   assert.equal(requests[0].url, '/v1/responses');
-  assert.deepEqual(requests[0].body.tools || [], []);
-  assert.doesNotMatch(JSON.stringify(requests[0].body.input), /<skills_instructions>|<available_skills>|worklog-request/);
+  if (mode === 'direct') assert.deepEqual(requests[0].body.tools || [], []);
+  assert.doesNotMatch(JSON.stringify(requests[0].body.tools || []), /request_user_input|AskUserQuestion|spawn_agent|send_input/);
+  if (mode === 'direct') assert.doesNotMatch(JSON.stringify(requests[0].body.input), /<skills_instructions>|<available_skills>|worklog-request/);
 });
+
+for (const engine of ['codex', 'claude']) {
+  for (const name of engine === 'codex' ? ['request_user_input', 'request_user_input_async', 'mcp__test__request_user_input_async'] : ['AskUserQuestion']) {
+    test(`${engine}: artifact worker question tool ${name} stops without waiting for a user or accepting success`, async t => {
+      const { dir, ctx } = context(t, engine, 'question:' + name, { mode: 'artifact', max_tool_calls: 10, max_model_turns: 10 });
+      const returned = await execute(ctx).promise;
+      assert.equal(returned.ok, false);
+      assert.equal(returned.observation.reason, 'worker_user_input_forbidden');
+      assert.equal(returned.observation.termination_confirmed, true);
+      assert.equal(fs.existsSync(path.join(dir, 'continued')), false);
+      const { args } = JSON.parse(fs.readFileSync(path.join(dir, 'invocation.json')));
+      if (engine === 'codex') {
+        for (const flag of ['--ignore-user-config', '--strict-config', 'tools.experimental_request_user_input.enabled=false', 'features.multi_agent=false', 'orchestrator.mcp.enabled=false'])
+          assert.ok(args.includes(flag), flag);
+      } else {
+        for (const flag of ['--strict-mcp-config', 'AskUserQuestion', 'Agent', 'Task', 'mcp__*']) assert.ok(args.includes(flag), flag);
+      }
+    });
+  }
+}

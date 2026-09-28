@@ -13,6 +13,18 @@ export function validateWorkerPolicy(policy) {
 // These are invocation-only overrides, never writes to a user's Codex config.
 // --ignore-user-config retains CODEX_HOME authentication. --strict-config makes
 // unsupported configuration fail instead of silently weakening this profile.
+export function codexWorkerArguments() {
+  return ['--ignore-user-config', '--strict-config', ...[
+    'tools.experimental_request_user_input.enabled=false',
+    'agents.enabled=false', 'features.multi_agent=false', 'features.multi_agent_v2=false',
+    'orchestrator.mcp.enabled=false', 'orchestrator.skills.enabled=false',
+    'features.plugins=false', 'features.remote_plugin=false', 'features.apps=false'
+  ].flatMap(value => ['-c', value])];
+}
+
+const questionTool = name => typeof name === 'string'
+  && /(?:^|[._:/])(?:request_user_input(?:_async)?|askuserquestion)$/i.test(name);
+
 export function codexDirectArguments() {
   const config = [
     'project_doc_max_bytes=0', 'skills.include_instructions=false', 'skills.bundled.enabled=false',
@@ -42,6 +54,10 @@ export function observeWorker(engine, policy) {
     if (engine === 'codex') {
       if (event.type === 'turn.started') userTurns += 1;
       const item = event.item;
+      if (/^item\.(started|completed|updated)$/.test(event.type || '')
+        && codexTools.has(item?.type)
+        && [item.name, item.tool, item.tool_name, item.function?.name].some(questionTool))
+        violation ||= 'worker_user_input_forbidden';
       if (/^item\.(started|completed|updated)$/.test(event.type || '') && codexTools.has(item?.type)) {
         const key = item.id || `${item.type}:${toolCalls}`;
         if (!toolIds.has(key)) { toolIds.add(key); toolCalls += 1; }
@@ -51,6 +67,7 @@ export function observeWorker(engine, policy) {
         const message = event.message || {}, key = message.id || event.uuid || `message-${modelTurns}`;
         if (!messageIds.has(key)) { messageIds.add(key); modelTurns += 1; }
         for (const part of message.content || []) if (part.type === 'tool_use' && part.name !== 'StructuredOutput') {
+          if (questionTool(part.name)) violation ||= 'worker_user_input_forbidden';
           const key = part.id || `tool-${toolCalls}`;
           if (!toolIds.has(key)) { toolIds.add(key); toolCalls += 1; }
         }

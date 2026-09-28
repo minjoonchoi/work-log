@@ -37,6 +37,16 @@ After inspection, choose the installed type whose boundary covers the result, su
 
 Before asking a question, read the original request, follow-up answers, and existing decisions. Treat a clarification answer as a continuation of that request, not a fresh task that restarts scope selection. Keep each material question and its answer in the working context, including resume/compaction summaries; do not rephrase or resend an answered or still-pending question. If an answer is incomplete, proceed with safe defaults for nonessential choices; only identify the specific remaining blocker when it actually prevents the requested result. A worker's repeated `blocked` message is not a new reason to ask the same question or launch another run.
 
+### Keep user questions at the request boundary
+
+Only the top-level agent handling the user's request may ask the user. Parallel workers, reviewers, repairers, metadata jobs and test agents return missing facts through their structured result; they must never call `request_user_input`, `request_user_input_async`, `AskUserQuestion` or equivalent MCP tools directly.
+
+Do not test, probe, demonstrate or check availability of a user-input tool by sending a real question. Use an isolated mock/stub for tests. A request to test code or parallel execution does not authorize live test questions. Read tool declarations to check availability.
+
+Before using either synchronous or asynchronous user-input tools, establish all three: a concrete missing fact/authorization changes the requested outcome, the supplied context and prior answers cannot resolve it, and the question is neither answered nor pending. Optional preferences, worker coordination, progress checks and placeholder questions do not pass this gate. Do not call another question tool to bypass a pending question.
+
+Collect worker `blocked` results at the parent, resolve them from existing context first, deduplicate equivalent missing decisions, and ask one consolidated question only for remaining material blockers. Continue independent work while it is pending; do not forward raw worker questions or automatically retry unchanged blocked tasks. Preserve the pending question and supplied answer across continuation and compaction.
+
 ### Check collection separately from task scope
 
 For a native Codex invocation, after catalog discovery and before clarification or plan construction, call `<this skill directory>/scripts/harness context` once. It uses the existing `CODEX_THREAD_ID`. For Claude, use `context --engine claude --session <verified-native-session-id>` only if that real ID is already available; never guess it or borrow Codex's ID. This command checks observed hooks and drains already-spooled input; it does not invent user input or start a worker. Work item creation belongs to the first collected user prompt, independently of classification, clarification, and plan acceptance.

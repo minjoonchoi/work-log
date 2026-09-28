@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { runProcess } from './process-runner.mjs';
 import { ROOT, atomic, assert, json, redact, redactValue } from './shared.mjs';
 import { assertModelSelection } from './model-capabilities.mjs';
-import { codexDirectArguments, observeWorker, validateWorkerPolicy } from './worker-policy.mjs';
+import { codexDirectArguments, codexWorkerArguments, observeWorker, validateWorkerPolicy } from './worker-policy.mjs';
 import { registerWorkerContext } from './worker-context.mjs';
 const versions = new Map();
 
@@ -37,15 +37,17 @@ export function commandFor(engine, context) {
   if (engine === 'codex') return {
     command: process.env.HARNESS_CODEX_BIN || 'codex', args: ['exec', '--json', '--model', execution.model,
       '-c', `model_reasoning_effort="${execution.effort}"`, '--dangerously-bypass-approvals-and-sandbox',
-      ...(policy?.mode === 'direct' ? codexDirectArguments() : []),
+      ...(policy?.mode === 'direct' ? codexDirectArguments() : codexWorkerArguments()),
       '--output-schema', schemaPath, '-o', outputPath, '-C', cwd, '--skip-git-repo-check', '-']
   };
   if (engine === 'claude') return {
     command: process.env.HARNESS_CLAUDE_BIN || 'claude', args: ['-p', '--model', execution.model, ...(execution.effort == null ? [] : ['--effort', execution.effort]),
-      '--output-format', policy ? 'stream-json' : 'json', ...(policy ? ['--verbose', '--max-turns', String(policy.max_model_turns)] : []),
+      '--output-format', 'stream-json', '--verbose', ...(policy ? ['--max-turns', String(policy.max_model_turns)] : []),
       '--json-schema', fs.readFileSync(schemaPath, 'utf8'),
       '--allow-dangerously-skip-permissions', '--permission-mode', 'bypassPermissions',
-      ...(policy?.mode === 'direct' ? ['--safe-mode', '--disable-slash-commands', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disallowedTools', 'mcp__*'] : []),
+      '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+      '--disallowedTools', 'AskUserQuestion', 'Agent', 'Task', 'mcp__*',
+      ...(policy?.mode === 'direct' ? ['--safe-mode', '--disable-slash-commands'] : []),
       '--tools', policy?.mode === 'direct' ? '' : stage === 'review' ? 'Read' : 'Read,Write,Edit,Bash', '--no-session-persistence']
   };
   assert(engine === 'fixture' && process.env.HARNESS_TEST_MODE === '1', '허용되지 않은 실행 엔진입니다.');
@@ -102,7 +104,7 @@ export function execute(context) {
     const failure = terminalFailure || (!ok && streamError);
     const unsupported = !ok && /(?:unexpected argument|unknown option|unrecognized (?:option|argument)|unknown field)/i.test(stderr || '');
     const observation = { ...observed, ...observer.metrics(),
-      ...(violation ? { reason: observed.reason || violation, error: '작업 유형의 worker 실행 한도를 초과했습니다.' } : {}),
+      ...(violation ? { reason: observed.reason || violation, error: violation === 'worker_user_input_forbidden' ? '작업자의 직접 사용자 질문을 차단했습니다. 필요한 정보는 blocked 결과로 상위 요청 에이전트에 반환해야 합니다.' : '작업 유형의 worker 실행 한도를 초과했습니다.' } : {}),
       ...(unsupported ? { reason: observed.reason || 'worker_capability_unavailable', error: errorMessage(stderr) } : {}),
       ...(failure ? { reason: observed.reason || 'engine_failure', error: failure } : {}),
       engine, model: execution?.model || null, effort: execution?.effort || null,

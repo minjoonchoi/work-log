@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { getAgentConnections, connectAgent, disconnectAgent, connectAgentComponent, disconnectAgentComponent } from '../scripts/agent-connections.mjs';
 import { withAgentCollection } from './agent-collection.mjs';
-import { ROOT, dataRoot, lockService, serve, body, request, json, assert, digest, atomic, now, id } from './shared.mjs';
+import { ROOT, dataRoot, lockService, serve, body, request, json, assert, digest, atomic, now, id, validateEvent } from './shared.mjs';
 import { managerStore } from './manager-store.mjs';
 import { integrationStore } from './integration-store.mjs';
 import { atlassianClient } from './atlassian.mjs';
@@ -16,6 +16,7 @@ import { notificationStore } from './notifications.mjs';
 import { reportStore } from './reports.mjs';
 import { reportsCoordinator } from './reports-coordinator.mjs';
 import { confluenceReports } from './confluence-reports.mjs';
+import { nativeBackgroundIdentity } from './native-session.mjs';
 import { dataQuery } from './data-query.mjs';
 
 const dir = dataRoot(); lockService(dir, 'manager');
@@ -80,21 +81,39 @@ function itemListing(params) {
 function collectSpool(context) {
   let changed = false;
   const files = fs.readdirSync(spoolDir).filter(f => f.endsWith('.json'));
+  const pending = [];
+  const quarantine = (source, file, error) => {
+    lastError = `훅 이벤트 보류: ${error.message}`;
+    const target = path.join(dir, 'quarantine'); fs.mkdirSync(target, { recursive: true, mode: 0o700 });
+    fs.renameSync(source, path.join(target, file));
+    atomic(path.join(target, `${file}.error`), error.message);
+  };
   for (const file of context ? files : files.slice(0, 100)) {
     const source = path.join(spoolDir, file);
     try {
       const event = JSON.parse(fs.readFileSync(source, 'utf8'));
       if (context && (event.engine !== context.engine || event.agent_session_id !== context.session_id)) continue;
-      changed = store.ingestMany([event]).inserted > 0 || changed; fs.unlinkSync(source);
-    } catch (e) {
-      lastError = `훅 이벤트 보류: ${e.message}`;
-      const quarantine = path.join(dir, 'quarantine'); fs.mkdirSync(quarantine, { recursive: true, mode: 0o700 });
-      fs.renameSync(source, path.join(quarantine, file));
-      atomic(path.join(quarantine, `${file}.error`), e.message);
+      validateEvent(event);
+      pending.push({ source, file, event });
+    } catch (error) { quarantine(source, file, error); }
+  }
+  if (!pending.length) return changed;
+  try {
+    // Identity evidence from later records must apply before the first input.
+    changed = store.ingestMany(pending.map(row => row.event)).inserted > 0;
+  } catch {
+    // One invalid record must not prevent valid neighbours from collecting.
+    // Background evidence is admitted first even in this recovery path.
+    pending.sort((a, b) => Number(!!nativeBackgroundIdentity(b.event)) - Number(!!nativeBackgroundIdentity(a.event)));
+    for (const row of pending) {
+      try { changed = store.ingestMany([row.event]).inserted > 0 || changed; }
+      catch (error) { quarantine(row.source, row.file, error); row.quarantined = true; }
     }
   }
+  for (const row of pending) if (!row.quarantined) fs.unlinkSync(row.source);
   return changed;
 }
+
 async function collect() {
   if (collecting || stopping) return; collecting = true;
   const wasConnected = runtimeConnected, previousError = lastError;

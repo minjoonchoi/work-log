@@ -75,3 +75,13 @@ Codex는 `--model <model>`과 `-c model_reasoning_effort="<effort>"`를 사용�
 등록 초안의 검증 대상은 `tests/e2e/task-type-draft-contract.test.mjs`의 입력·JSON·템플릿·Markdown 계약, `tests/e2e/custom-task-drafts.test.mjs`의 생성·상태·취소 API와 자동 등록·업무 이력 생성 방지, `tests/ui/custom-task-drafts.spec.mjs`의 안내·결과 편집·명시적 등록·실패·재작성·늦은 응답 처리다. 이 목록은 검증 범위를 설명하며 테스트 통과 기록을 대신하지 않는다.
 
 `tests/e2e/install.test.mjs`는 패키지의 등록·편집·제거·재설치·재실행에서 원본 설정 보존을, `worker-hooks.test.mjs`는 열린 stdin과 잘못된 입력에서도 worker 훅이 즉시 반환하고 일반 훅은 수집하는지 확인한다. `tests/ui/custom-tasks.spec.mjs`는 등록·편집·재시작·충돌·삭제·HTML 이스케이프를 검증한다. 아이콘은 `menu-icons.spec.mjs`의 글꼴·배율·초기 로딩 검사와 `native-connection.test.mjs`의 실제 WKWebView·메뉴 막대 대체 이미지 검사로 확인한다.
+
+## 사용자 질문 경계
+
+하네스 subprocess는 사용자에게 직접 질문하지 않는다. 이 제한은 생성·검토·수정과 GUI 내부 자동 생성에 공통 적용한다. 필수 정보가 없으면 기존 응답 계약의 `blocked / result.message`로 부족한 정보·작업 영향·확인한 자료를 반환하고 종료한다. 상위 요청 에이전트가 기존 문맥으로 해소하고 병렬 작업의 같은 질문을 모은 뒤, 필수 결정만 사용자에게 한 번 요청한다.
+
+Codex의 모든 worker는 사용자 설정을 상속하지 않는 호출 설정에서 질문 도구·추가 에이전트·앱/플러그인·orchestrator MCP를 비활성화한다. 인증 저장소는 유지하지만 사용자별 실행 설정과 MCP 연결을 worker에 자동 전달하지 않는다. Claude worker는 빈 MCP 설정을 명시하고 AskUserQuestion·Agent·Task·MCP 도구를 허용하지 않는다. 이 설정은 작업 subprocess에만 적용하며 사용자의 설치 설정 파일을 변경하지 않는다. CLI가 필요한 옵션을 지원하지 않으면 제한 없이 재시도하지 않고 실패한다.
+
+실행 이벤트에서 질문 도구 호출을 관찰하면 `worker_user_input_forbidden`으로 프로세스를 종료하고 실패를 기록한다. 이 감시는 호출 관찰 이후의 방어이며 실행 전 권한 차단의 대체가 아니다. 일반 산출물에 질문 도구 이름이 쓰였다는 이유로 실패시키지 않는다. 시험 질문은 실제 도구 대신 로컬 mock/stub로 검증한다.
+
+요청 스킬에는 시험·임시 질문 금지, 질문 전 필수성 확인, 기존 답변 재사용, 진행 중 질문 중복 금지, 병렬 작업 질문 취합 규칙이 포함된다. WorkLog가 실행하지 않은 원본 Codex/Claude 세션의 도구 권한을 서비스가 강제로 바꾸지는 않는다. 그 세션에서는 연결된 요청 스킬의 지침이 적용되며 런타임 차단과 구분한다.

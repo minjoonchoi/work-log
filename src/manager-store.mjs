@@ -258,10 +258,14 @@ export function managerStore(dir) {
   function ingestMany(raws, cursor) {
     return transaction(db, () => {
       let inserted = 0, ignoredInternal = 0; const changed = new Set();
-      for (const raw of raws) {
-        const e = validateEvent(raw);
+      const events = raws.map(validateEvent);
+      // Resolve every identity before admitting any input: spool delivery and
+      // API batches need not put SessionStart before UserPromptSubmit.
+      for (const e of events) {
         const nativeBackground = nativeBackgroundIdentity(e);
         if (nativeBackground) exec('INSERT OR IGNORE INTO native_background_sessions VALUES(?,?,?)', e.engine, e.agent_session_id, nativeBackground);
+      }
+      for (const e of events) {
         // Old hook commands and queued deliveries can bypass the hook-side
         // filter. Apply executor-owned identity before reserving any user item.
         // Runtime worker events are retained under their explicit parent owner.
