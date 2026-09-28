@@ -184,3 +184,19 @@ test('format-only workflow cannot weaken ordinary artifact jobs', t => {
   assert.notEqual(child.status, 0); assert.match(child.stderr, /독립 검토 생략은 등록된/);
   assert.doesNotMatch(child.stdout, /"ready":true/);
 });
+
+
+test('session summary layouts normalize without another model call and use an explicit first-pass prompt', async t => {
+  const h = await setup(t);
+  for (const input of [summary, rewrite('session-summary')]) {
+    const run = await h.finish(await h.run({ ...input, fixture: { scenario: 'summary-layout' } }));
+    assert.equal(run.status, 'completed', run.message);
+    assert.equal(run.attempts.length, 1);
+    const artifact = fs.readFileSync(run.artifact.file, 'utf8');
+    const description = input.task === 'session.summarize' ? artifact.split('\n').slice(1).join('\n') : JSON.parse(artifact).description;
+    assert.equal(description, '- 확인된 작업을 정리했습니다.\n- 결과는 미확인입니다.');
+    const prompt = fs.readFileSync(path.join(run.attempts[0].directory, 'prompt.txt'), 'utf8');
+    assert.match(prompt, /세션 요약 고정 계약/);
+    assert.match(prompt, /중복 없이 중요한 사실 1~3개/);
+  }
+});

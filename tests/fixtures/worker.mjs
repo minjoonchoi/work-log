@@ -73,6 +73,7 @@ else if (stage === 'review') {
   if (job.kind === 'session_summary') {
     text = `${fixture.input.title}\n${fixture.input.events.filter(e => e.text).slice(-5).map(e => `- ${e.text.replace(/\s+/g, ' ').slice(0, 400)}`).join('\n') || '- 응답 본문 미확인'}`;
     if (scenario === 'summary-too-long') text += '\n추가 설명\n추가 설명\n추가 설명\n추가 설명\n추가 설명\n추가 설명';
+    if (scenario === 'summary-layout') text = `  ${fixture.input.title}  \n\n * 확인된 작업을 정리했습니다. \n\n • 결과는 미확인입니다. \n`;
     if (scenario === 'summary-plain') text = `${fixture.input.title}\n검토한 변경 사항을 일반 문장으로 정리했습니다.`;
   }
   if (job.kind === 'work_report') {
@@ -129,6 +130,7 @@ else if (stage === 'review') {
           : `## 작업 배경\n- ${fixture.input.sessions.length}개 세션 이력\n\n## 목적\n- ${messages[0] || '목적 미확인'}\n\n## 범위\n${messages.slice(-5).map(message => `- ${message}`).join('\n') || '- 요청 범위 미확인'}\n\n## 결과\n- ${events.some(event => event.kind === 'output' && event.text) ? '수집된 응답을 확인했습니다. 실제 완료 여부는 원문 기준으로 확인해야 합니다.' : '미완료: 확인된 응답이 없어 결과 미확인입니다.'}`
     };
     if (fixture.rewriteVariant) value.title = `${value.title.slice(0, 180)} · 작업 기록`;
+    if (scenario === 'summary-layout') value.description = ' \n * 확인된 작업을 정리했습니다. \n\n • 결과는 미확인입니다. \n';
     if (scenario === 'rewrite-six-lines') value.description = Array.from({ length: 6 }, () => '형식 오류').join('\n');
     if (scenario === 'rewrite-empty-bullet') value.description = '- ';
     if (scenario === 'rewrite-summary-plain') value.description = '검토한 변경 사항을 일반 문장으로 정리했습니다.';

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, dataRoot, lockService, database, transaction, id, stableId, now, json, digest, atomic, serve, body, assert, alive, redactExecutionRequest } from './shared.mjs';
 import { execute, validateResult } from './executor.mjs';
+import { normalizeSummaryArtifact } from './session-summary.mjs';
 import { verify, artifact } from './verifier.mjs';
 import { loadCatalog, compileRequest, buildPrompt } from './catalog.mjs';
 import { initialEvidence, saveEvidence, readEvidence, executeChecks, sourceSnapshot, checkEvidenceIntegrity, renderEvidenceReport } from './checks.mjs';
@@ -301,7 +302,7 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
         validateSchema(directResponseSchema, returned.result, '직접 응답');
         const content = directContent(returned.result);
         if (content !== null) {
-          atomic(path.join(cwd, job.file), content);
+          atomic(path.join(cwd, job.file), normalizeSummaryArtifact(content, job, request.input));
           returned = { ...returned, result: { status: 'done', result: { file: job.file } } };
         }
       }

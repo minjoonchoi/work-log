@@ -12,3 +12,22 @@ export function parseSessionSummary(text, { requireBullets = false } = {}) {
   assert(lines[0].length <= 200 && value.length <= 5000, '세션 요약이 허용 길이를 초과했습니다.');
   return { title: lines[0], description: lines.slice(1).join('\n'), text: value };
 }
+
+// Presentation-only cleanup. Never truncate, invent content, or repair invalid JSON.
+export function normalizeSummaryArtifact(content, job, input) {
+  if (job.summary_format !== 'session-bullets-v1') return content;
+  const clean = text => text.replace(/\r\n?/g, '\n').split('\n').map(line => line.trim()).filter(Boolean);
+  const body = lines => lines.map(line => line.replace(/^[-*•]\s+/, '- '));
+  if (job.kind === 'session_summary') {
+    const [title, ...lines] = clean(content);
+    return [title, ...body(lines)].join('\n');
+  }
+  if (job.kind === 'text_rewrite' && input.format === 'session-summary') {
+    try {
+      const value = JSON.parse(content);
+      if (typeof value.title !== 'string' || typeof value.description !== 'string') return content;
+      return JSON.stringify({ ...value, title: value.title.trim(), description: body(clean(value.description)).join('\n') });
+    } catch { return content; }
+  }
+  return content;
+}
