@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT } from '../../src/shared.mjs';
 import { registerWorkerContext } from '../../src/worker-context.mjs';
-import { Harness, eventually } from '../helpers.mjs';
+import { spoolHookEvent } from '../../src/hook-events.mjs';
+import { Harness, eventually, pair } from '../helpers.mjs';
 
 const metadata = {
   title: '권한 정책의 요구사항 정리',
@@ -138,6 +139,40 @@ for (const engine of ['codex', 'claude']) {
     assert.equal((await h.manager('/health')).quarantined, 0);
   });
 }
+
+test('manager rejects replayed legacy worker hooks before creating items while preserving real input with identical text', async t => {
+  const { h, trace } = await setup(t, 'codex');
+  await h.ingest(pair('native-owner', '09:00:00', '09:05:00', 'first', { work_item_id: 'real-work' }));
+  const run = await h.finish(await h.run({ task: 'text.rewrite', engine: 'codex', internal: true, work_item_id: 'real-work',
+    input: { format: 'work-item-metadata', sessions: [{ id: 'source-session', engine: 'codex',
+      start_at: '2026-09-19T09:00:00Z', end_at: '2026-09-19T09:05:00Z', summary: null,
+      events: [{ kind: 'input', event_at: '2026-09-19T09:00:00Z', text: '권한 정책을 정리합니다.' }] }] }
+  }));
+  assert.equal(run.status, 'completed', run.message);
+  await eventually(() => h.manager('/items/real-work'), value => value.runs.some(row => row.id === run.id && row.status === 'completed'));
+  await h.stop('manager');
+  const worker = JSON.parse(fs.readFileSync(trace, 'utf8').trim());
+  // A previous installation's hook may already have written these records.
+  // Replay them through the actual spool, bypassing the current hook guard.
+  const rows = ['session.started', 'input', 'output', 'session.ended'].map((kind, index) => ({
+    id: `legacy-worker-${index}`, engine: 'codex', agent_session_id: worker.session,
+    kind, event_at: new Date(Date.now() + index).toISOString(), turn_id: 'worker-turn',
+    role: 'user', source: 'system_hook', cwd: worker.workspace,
+    text: kind === 'input' ? '업무 타이틀을 생성해 주세요.' : kind === 'output' ? '업무 타이틀 생성 완료' : null
+  }));
+  for (const row of rows) spoolHookEvent(h.dir, row, true);
+  await h.start('manager');
+  await eventually(() => fs.readdirSync(path.join(h.dir, 'spool')).filter(file => file.endsWith('.json')).length, count => count === 0);
+  assert.deepEqual((await h.manager('/items')).map(item => item.id), ['real-work']);
+  assert.equal((await h.manager('/items/real-work')).sessions.length, 1);
+  // Direct collection must have the same guard, not just the spool reader.
+  const replay = await h.ingest(rows);
+  assert.equal(replay.inserted, 0);
+  assert.equal(replay.ignored_internal, rows.length);
+  await h.ingest(rows.map(row => ({ ...row, id: `real-${row.id}`, agent_session_id: 'ordinary-title-request', cwd: ROOT })));
+  assert.equal((await h.manager('/items')).length, 2, 'normal title-writing requests must still create an item');
+  assert.equal((await h.manager('/health')).quarantined, 0);
+});
 
 test('unregistered lookalikes, another engine and copied worker markers still collect ordinary user input', async t => {
   const h = new Harness(); t.after(() => h.close()); await h.start('manager');

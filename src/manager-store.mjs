@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { database, transaction, validateEvent, stableId, id, now, json, assert, digest } from './shared.mjs';
 import { currentHookEvent, receivedTurn, resolveHookTurns } from './hook-events.mjs';
+import { isWorkerWorkspace } from './worker-context.mjs';
 
 const schema = `
 CREATE TABLE IF NOT EXISTS work_items (
@@ -251,9 +252,15 @@ export function managerStore(dir) {
   }
   function ingestMany(raws, cursor) {
     return transaction(db, () => {
-      let inserted = 0; const changed = new Set();
+      let inserted = 0, ignoredInternal = 0; const changed = new Set();
       for (const raw of raws) {
         const e = validateEvent(raw);
+        // Old hook commands and queued deliveries can bypass the hook-side
+        // filter. Apply executor-owned identity before reserving any user item.
+        // Runtime worker events are retained under their explicit parent owner.
+        if (e.source === 'system_hook' && e.role === 'user' && isWorkerWorkspace(dir, e.engine, e.cwd)) {
+          ignoredInternal++; continue;
+        }
         const aid = stableId('agent-', `${e.engine}:${e.agent_session_id}`);
         const uid = stableId('event-', `${e.engine}:${e.agent_session_id}:${e.id}`);
         const old = one('SELECT payload FROM events WHERE id=?', uid);
@@ -316,7 +323,8 @@ export function managerStore(dir) {
       }
       projectChanged(changed);
       if (cursor) exec('INSERT INTO cursors VALUES(?,?) ON CONFLICT(source) DO UPDATE SET value=excluded.value', cursor.source, String(cursor.value));
-      return { inserted, duplicates: raws.length - inserted };
+      return { inserted, duplicates: raws.length - inserted - ignoredInternal,
+        ...(ignoredInternal ? { ignored_internal: ignoredInternal } : {}) };
     });
   }
   function projectChanged(changed) {

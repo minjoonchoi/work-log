@@ -120,6 +120,9 @@ function prepare(input, context = {}) {
     assert(!(process.env.HARNESS_CHECK_ACTIVE === '1' && normalizedInput.profile.startsWith('harness.')), '검사 실행 중 하네스 전체 검사를 재귀 실행할 수 없습니다.');
   }
   assert(!input.internal || job.allow_internal === true, '내부 실행은 허용된 GUI 작업만 지원합니다.');
+  // App-owned generation is internal by task definition, even for older callers
+  // that omit the hint. A missing/false flag must never turn metadata into work.
+  const internal = job.allow_internal === true;
   const runId = context.runId || (input.idempotency_key ? stableId('run-', input.idempotency_key) : id('run-'));
   const prior = get(runId), previous = prior ? JSON.parse(prior.request) : null;
   const origin = input.origin || previous?.origin || { engine: 'harness', agent_session_id: id('cli-'), turn_id: id('turn-') };
@@ -132,8 +135,8 @@ function prepare(input, context = {}) {
         `${origin.engine} 하네스 위임 연결이 해제되어 있습니다. WorkLog 연결 설정에서 하네스 위임을 연결하세요.`, 409);
     }
   }
-  const request = { task, prompt: input.prompt || canonicalJson(compiled), input: normalizedInput, engine, origin, internal: !!input.internal, record_io: !input.origin && !input.internal,
-    track_work_item: !input.internal || !!input.work_item_id,
+  const request = { task, prompt: input.prompt || canonicalJson(compiled), input: normalizedInput, engine, origin, internal, record_io: !input.origin && !internal,
+    track_work_item: !internal || !!input.work_item_id,
     work_item_id: input.work_item_id || stableId('item-', stableId('agent-', `${origin.engine}:${origin.agent_session_id}`)),
     ...(workspace ? { workspace } : {}),
     ...(inputFiles.length ? { input_files: inputFiles.map(({ path, content_digest }) => ({ path, content_digest })) } : {}),

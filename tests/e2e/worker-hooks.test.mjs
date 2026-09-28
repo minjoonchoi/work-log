@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { execute } from '../../src/executor.mjs';
+import { registerWorkerContext } from '../../src/worker-context.mjs';
 import { ROOT } from '../../src/shared.mjs';
 import { managerStore } from '../../src/manager-store.mjs';
 import { hookCommand, locations, quote, readManifest } from '../../scripts/install-state.mjs';
@@ -67,6 +68,21 @@ test('ordinary user hooks still record lifecycle, tools and correlated input/out
   const detail = store.detail(store.items()[0].id), projected = detail.events.find(row => row.kind === 'output');
   assert.equal(projected.turn_id, input.turn_id); assert.equal(projected.resolution, 'matched');
   assert.equal(detail.sessions[0].pending, false);
+});
+
+test('executor-owned hook cwd still identifies a worker when payload cwd points to the user project', t => {
+  const dir = temporary(t), attemptDir = path.join(dir, 'runs', 'run-owned', 'attempt-owned'), cwd = path.join(attemptDir, 'workspace');
+  fs.mkdirSync(cwd, { recursive: true });
+  registerWorkerContext({ dataDir: dir, cwd, attemptDir, engine: 'codex', parent: {
+    run_id: 'run-owned', task_id: 'attempt-owned', work_item_id: 'existing-owner'
+  } });
+  const result = spawnSync(process.execPath, [hook, 'codex'], {
+    cwd, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'native-worker', cwd: ROOT, prompt: '타이틀을 생성합니다.' }),
+    encoding: 'utf8', env: { ...process.env, HARNESS_WORKER: '', HARNESS_DATA_DIR: dir }
+  });
+  assert.equal(result.status, 0); assert.equal(result.stdout, '');
+  assert.equal(fs.existsSync(path.join(dir, 'spool')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'hook-error.json')), false);
 });
 
 test('owned shell hook commands skip workers before spawning Node and still run for users', t => {

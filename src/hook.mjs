@@ -16,9 +16,10 @@ try {
   const raw = JSON.parse(rawText);
   const engine = process.argv[2] || process.env.HARNESS_ENGINE || 'unknown';
   // Keep runtime workers out of user history even when the CLI's hook launcher
-  // drops HARNESS_WORKER. Hook commands run in the session cwd; prefer the
-  // engine-provided cwd and use the process cwd only when that field is absent.
-  if (isWorkerWorkspace(dir, engine, typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : process.cwd())) process.exit(0);
+  // drops HARNESS_WORKER. Either the supplied cwd or the hook process cwd can
+  // prove executor ownership, including hooks invoked after a worker changes cwd.
+  const cwd = typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : process.cwd();
+  if ([...new Set([cwd, process.cwd()])].some(value => isWorkerWorkspace(dir, engine, value))) process.exit(0);
   initRoot(dir);
   const map = { SessionStart: 'session.started', SessionEnd: 'session.ended', UserPromptSubmit: 'input', Stop: 'output',
     PreToolUse: 'tool.started', PostToolUse: 'tool.finished', PostToolUseFailure: 'tool.finished', StopFailure: 'turn.failed', Interrupt: 'turn.interrupted' };
@@ -34,7 +35,7 @@ try {
       observed_order: process.hrtime.bigint().toString().padStart(24, '0'),
       turn_id: turn, source_turn_id: sourceTurn, turn_source: sourceTurn ? 'native' : kind === 'input' ? 'local' : 'missing', hook_schema: 2,
       call_id: raw.tool_use_id || raw.tool_call_id || null, role: 'user',
-      ...(typeof raw.cwd === 'string' ? { cwd: raw.cwd } : {}),
+      cwd,
       text: text == null ? null : redact(text), source: 'system_hook', hook_event_name: raw.hook_event_name };
     // Stable source IDs deduplicate retries; identical prompt contents do not.
     spoolHookEvent(dir, event, !!raw.event_id);

@@ -35,6 +35,33 @@ test('ownerless internal metadata keeps runtime evidence without creating user w
   assert.equal(detail.events.filter(event => event.role === 'user' && event.kind === 'input').length, 1);
   assert.ok(detail.events.some(event => event.role === 'worker'));
 });
+
+test('metadata task identity stays internal when callers omit or clear the internal flag', async t => {
+  const h = await setup(t); await h.start('manager');
+  for (const template of [summary, rewrite('work-item-metadata')]) {
+    for (const flag of [undefined, false]) {
+      const input = { ...template }; delete input.internal;
+      if (flag !== undefined) input.internal = flag;
+      const run = await h.finish(await h.run(input));
+      assert.equal(run.internal, true, 'WorkLog task identity must not depend on a caller flag');
+      assert.equal(run.status, 'completed', run.message);
+      assert.equal(run.attempts.length, 1);
+    }
+  }
+  assert.deepEqual((await h.runtime('/events')).events, []);
+  assert.deepEqual(await h.manager('/items'), []);
+  await h.ingest(pair('real-native-owner', '09:00:00', '09:05:00', 'first', { work_item_id: 'existing-work' }));
+  const run = await h.finish(await h.run({ ...rewrite('work-item-metadata'), internal: false, work_item_id: 'existing-work' }));
+  assert.equal(run.internal, true);
+  const detail = await eventually(() => h.manager('/items/existing-work'), value => value.runs.some(row => row.id === run.id && row.status === 'completed'));
+  assert.deepEqual((await h.manager('/items')).map(item => item.id), ['existing-work']);
+  assert.equal(detail.sessions.length, 1);
+  assert.equal(detail.agents.filter(agent => agent.role === 'user').length, 1);
+  assert.equal(detail.events.filter(event => event.role === 'user' && event.kind === 'input').length, 1);
+  const ordinary = await h.finish(await h.run({ task: 'text.generate', input: { requirements: '사용자가 요청한 문서 제목을 작성합니다.' } }));
+  assert.equal(ordinary.internal, false, 'ordinary text writing must remain a user task');
+  await eventually(() => h.manager('/items'), items => items.length === 2);
+});
 function isolated(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-metadata-workflow-'));
   for (const folder of ['src', 'harness', 'contracts', 'tests/fixtures']) fs.cpSync(path.join(ROOT, folder), path.join(root, folder), { recursive: true });
