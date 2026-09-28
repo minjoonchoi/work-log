@@ -171,10 +171,26 @@ export function executionSettingsUI({ api, esc, modal, toast, showConnections })
     <p class="help">기반 유형의 결과물 형식과 검토·수정 절차, 책임 경계를 그대로 사용합니다. 등록 후에는 기반 유형을 바꿀 수 없습니다.</p>`;
   function bindEditor(task) {
     const instructionTabs = [$('#instruction-preview-tab'), $('#instruction-edit-tab')];
+    function resizeInstruction() {
+      const input = $('#task-instruction');
+      input.style.height = 'auto'; input.style.height = `${input.scrollHeight + 4}px`;
+    }
+    $('#task-instruction').addEventListener('input', resizeInstruction);
+    const source = $('#task-instruction');
+    let sourceWidth = 0;
+    const sizing = new ResizeObserver(() => {
+      if (!source.isConnected) { sizing.disconnect(); return; }
+      if (source.clientWidth && source.clientWidth !== sourceWidth) {
+        sourceWidth = source.clientWidth; resizeInstruction();
+      }
+    });
+    sizing.observe(source);
+    window.addEventListener('worklog:modal-open', () => sizing.disconnect(), { once: true });
     function showInstruction(index, focus = false) {
       const edit = index === 1;
       if (!edit) $('#instruction-preview').innerHTML = markdown($('#task-instruction').value);
       $('#instruction-preview').hidden = edit; $('#instruction-source').hidden = !edit;
+      if (edit) resizeInstruction();
       instructionTabs.forEach((tab, n) => { tab.setAttribute('aria-selected', String(n === index)); tab.tabIndex = n === index ? 0 : -1; });
       if (focus) instructionTabs[index].focus();
     }
@@ -237,24 +253,26 @@ export function executionSettingsUI({ api, esc, modal, toast, showConnections })
       ${errorMarkup}
       <div class="execution-management-tabs" role="tablist" aria-label="작업 관리 영역">${[['worklog', 'WorkLog 자동 생성'], ['harness', '하네스 작업']].map(([group, label]) => `<button type="button" id="execution-group-${group}" role="tab" aria-selected="${currentGroup === group}" aria-controls="execution-management-panel" tabindex="${currentGroup === group ? 0 : -1}">${label}</button>`).join('')}</div>
       <section id="execution-management-panel" role="tabpanel" aria-labelledby="execution-group-${currentGroup}">
+      <div class="execution-settings-layout"><div class="execution-settings-navigation">
       <p class="execution-group-description">${currentGroup === 'worklog' ? '제목·설명, 세션 요약, 업무 요약 등 앱의 자동 생성 기능입니다. 직무 패키지나 에이전트 위임 연결 없이 사용할 수 있습니다.' : '설치한 직무 패키지의 작업 유형만 표시합니다. 제거한 유형의 설정과 사용자 작업은 보존되며, 패키지를 다시 설치하면 표시됩니다.'}</p>
       <div class="execution-task-toolbar"><label for="execution-task">작업 유형</label>${currentGroup === 'harness' ? `<div><button id="manage-harness-packages" class="secondary">직무 패키지 관리</button><button id="add-custom-task" class="secondary" ${(snapshot.templates || []).length ? '' : 'disabled'}>사용자 작업 등록</button></div>` : ''}</div>
       <div class="execution-task-picker">
         <label for="execution-task-search">작업 유형 검색</label>
         <div class="execution-task-search-row"><input type="search" id="execution-task-search" value="${esc(searches.get(currentGroup) || '')}" placeholder="이름, ID, 분류, 목적 검색" autocomplete="off" aria-controls="execution-task" aria-describedby="execution-task-count"><button id="clear-execution-task-search" type="button" class="secondary" hidden>검색 지우기</button></div>
         <p id="execution-task-count" class="help" role="status" aria-live="polite" aria-atomic="true"></p>
-        <select id="execution-task" size="5" aria-describedby="execution-task-count"></select>
+        <select id="execution-task" aria-describedby="execution-task-count"></select>
         <p id="execution-task-empty" class="help" hidden></p>
       </div>
+      ${task ? boundaryDetails(task.boundary) : ''}</div><div class="execution-settings-content">
       ${task ? `
       <h3 class="execution-selected-task"><span>편집 중 · ${esc(task.label)}</span><small>${esc(task.id)}</small></h3>
       ${custom ? `<p class="execution-task-source"><span>사용자 작업</span></p>${metadata(task)}${inherited(template || { id: task.template_id, label: task.template_id })}` : ''}
-      ${boundaryDetails(task.boundary)}<fieldset class="execution-editor-fields">${editor(form)}</fieldset>
+      <fieldset class="execution-editor-fields">${editor(form)}</fieldset>
       ${custom ? '<p class="help">기본값 복원은 지시문과 backend 설정을 복원합니다. 등록한 작업 유형과 이름·목적·키워드는 유지됩니다.</p>' : ''}
       <div class="dialog-actions execution-settings-actions"><button data-close>닫기</button>${custom ? '<button id="delete-custom-task" class="custom-task-delete">작업 등록 삭제</button>' : ''}<button id="reset-execution" class="secondary" ${task.overridden ? '' : 'disabled'}>기본값 복원</button><button id="save-execution" class="primary">저장</button></div>
       ${custom ? `<section id="custom-task-delete-confirmation" class="custom-task-delete-confirmation" aria-label="작업 등록 삭제 확인" hidden><p><strong>${esc(task.label)}</strong> 작업 등록을 삭제할까요? 이후 새 작업에서 선택할 수 없으며, 기존 실행 기록은 유지됩니다.</p><div class="dialog-actions"><button id="cancel-custom-task-delete">취소</button><button id="confirm-custom-task-delete" class="custom-task-delete">등록 삭제</button></div></section>` : ''}`
       : '<div class="dialog-actions"><button data-close>닫기</button></div>'}
-      </section>`);
+      </div></div></section>`);
     const groupTabs = ['worklog', 'harness'].map(group => $(`#execution-group-${group}`));
     const switchGroup = (index, focus = false) => {
       const group = ['worklog', 'harness'][index]; render(undefined, group);

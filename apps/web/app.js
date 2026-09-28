@@ -18,7 +18,7 @@ let listRevision = '', notificationRevision = '', calendarMarkup = '', calendarR
 let calendarLayout = '', calendarFocusNow = false, calendarClockTimer;
 const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
 let streamConnected = false, refreshQueued = false, refreshing = false, refreshTimer;
-const statusLabels = { tracked: '이력 수집', running: '작업 실행 중', queued: '실행 대기', agent_response_pending: '작업 중', completed: '완료', cancelled: '취소됨', failed: '실패', blocked: '진행 불가', interrupted: '중단됨', pending: '실행 대기', session_closed: '구간 종료', session_idle: '대화 대기' };
+const statusLabels = { tracked: '이력 수집', running: '작업 실행 중', queued: '실행 대기', agent_response_pending: '작업 중', completed: '완료', cancelled: '취소됨', failed: '실패', blocked: '진행 불가', interrupted: '중단됨', pending: '실행 대기', session_closed: '구간 종료', session_idle: '대화 대기', session_unknown: '응답 종료 미확인' };
 const checkLabels = { passed: '통과', failed: '실패', not_run: '미실행', running: '실행 중', interrupted: '중단', unknown: '확인 안 됨', incomplete: '검사 미완료', source_changed: '대상 변경 · 재검사 필요' };
 const time = value => new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
 const dateLabel = value => new Intl.DateTimeFormat('ko-KR', { month: 'short', day: 'numeric' }).format(new Date(value));
@@ -167,7 +167,7 @@ function renderSessions() {
   $('#merge').disabled = true;
   $('#item-list').innerHTML = sessions.length ? sessions.map(s => `<article class="session-row" data-session-id="${esc(s.id)}" data-item-id="${esc(s.work_item_id)}">
     <div class="item-main"><button class="session-open" title="${esc(s.title)}">${esc(s.title)}</button><p class="session-owner">${esc(s.work_item_title)} · ${esc(s.engine === 'codex' ? 'Codex' : s.engine === 'claude' ? 'Claude' : '하네스')}</p>${s.description ? `<p class="session-preview">${esc(descriptionPreview(s.description))}</p>` : '<p class="session-preview">아직 작성된 요약이 없습니다.</p>'}${itemTags.listHTML(state.items.find(item => item.id === s.work_item_id) || {})}</div>
-    <div class="session-meta">${badge(s.pending ? 'agent_response_pending' : s.closed ? 'session_closed' : 'session_idle')}<time datetime="${esc(s.start_at)}" title="${esc(`${absoluteTime(s.start_at)} → ${absoluteTime(s.end_at)}`)}">${esc(sessionRange(s))}</time></div></article>`).join('')
+    <div class="session-meta">${badge(s.stale_pending ? 'session_unknown' : s.pending ? 'agent_response_pending' : s.closed ? 'session_closed' : 'session_idle')}<time datetime="${esc(s.start_at)}" title="${esc(`${absoluteTime(s.start_at)} → ${absoluteTime(s.end_at)}`)}">${esc(sessionRange(s))}</time></div></article>`).join('')
     : `<div class="empty"><strong>${$('#search').value ? '검색 결과가 없습니다' : '아직 기록된 세션이 없습니다'}</strong>${$('#search').value ? '세션 제목·요약이나 연결된 업무로 검색해 보세요.' : '에이전트에서 프롬프트를 입력하면 기록 구간이 이곳에 나타납니다.'}</div>`;
   $('#item-list').querySelectorAll('.session-row').forEach(row => row.querySelector('.session-open').onclick = safe(() => openDetail(row.dataset.itemId, row.dataset.sessionId)));
 }
@@ -375,7 +375,7 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
     ${integrations.jiraHTML(data)}
     <section class="detail-section"><h3>세션 이력 <small>${sessions.length}</small></h3><div class="history-toolbar"><span id="history-live">${liveStatus()}</span><span>발생 시각 · 최신순</span></div>${sessions.map(s => {
       const results = runs.filter(r => r.session_id === s.id).sort((a, b) => b.created_at.localeCompare(a.created_at));
-      const pendingLabel = results.some(r => r.status === 'running') ? '작업 실행 중' : results.some(r => r.status === 'pending') ? '실행 대기' : s.pending ? '작업 중' : '';
+      const pendingLabel = results.some(r => r.status === 'running') ? '작업 실행 중' : results.some(r => r.status === 'pending') ? '실행 대기' : s.stale_pending ? '응답 종료 미확인' : s.pending ? '작업 중' : '';
       return `<details class="session-card" data-session-id="${esc(s.id)}" ${s.id === sessionId ? 'open' : ''}><summary><span class="session-time">${dateLabel(s.start_at)} ${time(s.start_at)} → ${time(s.end_at)}${pendingLabel ? ` · ${pendingLabel}` : ''}${results.length ? `<span class="session-result-count">작업 ${results.length}</span>` : ''}</span>${writing.sessionHeadingHTML(s)}</summary>
         <small class="session-source" title="${esc(s.agent_session_id)}">${esc(s.engine === 'codex' ? 'Codex' : s.engine === 'claude' ? 'Claude' : '하네스')} 대화</small>
         ${writing.sessionHTML(s)}${integrations.sessionHTML(s, data)}

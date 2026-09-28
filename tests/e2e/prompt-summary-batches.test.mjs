@@ -20,7 +20,7 @@ async function setup(t, closed = 12, fixture = {}, { runtime = true, events } = 
   t.after(() => h.close());
   const store = managerStore(h.dir);
   store.ingestMany(events || [...Array.from({ length: closed }, (_, i) => pair('history', at(i * 30), at(i * 30 + 1), `turn-${i}`, { source: 'system_hook' })).flat(),
-    event('history', 'input', at(closed * 30), 'pending-window', { source: 'system_hook' })]);
+    event('history', 'input', new Date().toISOString(), 'pending-window', { source: 'system_hook' })]);
   store.db.close();
   if (runtime) await h.start('runtime');
   await h.start('manager'); return h;
@@ -94,10 +94,11 @@ test('a last session idle after an observed output is summarized without closing
 test('pending, interrupted, recent and externally delegated running sessions are not mistaken for idle completed responses', async t => {
   const delegated = pair('delegated-running', ago(25), ago(23), 'delegated', { source: 'system_hook', work_item_id: 'delegated-item' });
   const h = await setup(t, 0, {}, { events: [
-    ...pair('still-answering', ago(60), ago(58), 'old'), event('still-answering', 'input', ago(57), 'awaiting-stop'),
+    ...pair('still-answering', ago(60), ago(58), 'old'), event('still-answering', 'input', ago(57), 'awaiting-stop'), event('still-answering', 'tool.started', ago(1), 'awaiting-stop'),
     event('interrupted', 'input', ago(60), 'interrupted'), event('interrupted', 'turn.interrupted', ago(59), 'interrupted'),
     ...pair('recent-response', ago(5), ago(3), 'recent'),
     ...delegated,
+    event('delegated-running', 'input', ago(22), 'pending-delegated', { work_item_id: 'delegated-item' }),
     event('delegated-running', 'run.updated', ago(22), 'delegated', { work_item_id: 'delegated-item', run: {
       id: 'run-delegated-running', internal: false, status: 'running', origin: { engine: 'codex', agent_session_id: 'delegated-running', turn_id: 'delegated' }
     } })
@@ -111,11 +112,28 @@ test('new input invalidates an in-flight idle summary and a later observed respo
   const original = before.requests[0];
   await h.ingest([event('idle-resumed', 'input', ago(60), 'late-input', { source: 'system_hook' })]);
   await eventually(() => snapshot(h), s => s.requests[0].state === 'superseded');
-  await pause(1250); assert.equal(snapshot(h).requests.length, 1); assert.equal(snapshot(h).accepted, 0);
+  await completed(h, 1); assert.equal(snapshot(h).requests.length, 2);
   const oldRun = await h.runtime(`/runs/${original.run_id}`); assert.ok(['cancelled', 'completed'].includes(oldRun.status));
   await h.ingest([event('idle-resumed', 'output', ago(59), 'late-input', { source: 'system_hook' })]);
-  await completed(h, 1);
-  const final = snapshot(h); assert.deepEqual(final.requests.map(row => row.state), ['superseded', 'completed']);
+  await eventually(() => snapshot(h), s => s.requests.length === 3 && s.requests[2].state === 'completed');
+  const final = snapshot(h); assert.deepEqual(final.requests.map(row => row.state), ['superseded', 'completed', 'completed']);
   assert.notEqual(final.requests[1].run_key, original.run_key);
-  assert.equal(JSON.parse(final.requests[1].snapshot).input.sessions[0].events.length, 4);
+  assert.equal(JSON.parse(final.requests[2].snapshot).input.sessions[0].events.length, 4);
+});
+
+
+test('missing Stop becomes unknown after inactivity, is summarized once, and never invents output or duration', async t => {
+  const h = await setup(t, 0, {}, { events: [event('missing-stop', 'input', ago(35), 'missing', { source: 'system_hook', text: '권한 정책을 분석해 주세요.' })] });
+  await completed(h, 1);
+  const item = (await h.manager('/items'))[0];
+  assert.equal(item.is_current, false);
+  const detail = await h.manager(`/items/${item.id}`), session = detail.sessions[0];
+  assert.equal(session.pending, true); assert.equal(session.stale_pending, true); assert.equal(session.closed, false);
+  assert.equal(detail.events.filter(event => event.kind === 'output' && event.role === 'user').length, 0);
+  const row = snapshot(h).requests[0], source = JSON.parse(row.snapshot).session;
+  assert.equal(session.start_at, session.end_at);
+  assert.deepEqual(source.source.events.map(event => event.kind), ['input']);
+  assert.equal(JSON.parse(row.snapshot).summary_trigger.reason, 'missing_output');
+  await h.stop('manager'); await h.start('manager'); await pause(1200);
+  assert.equal(snapshot(h).requests.length, 1);
 });

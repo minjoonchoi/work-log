@@ -167,3 +167,13 @@ test('failed session rewrite keeps the last accepted summary and offers a fresh 
   await page.getByRole('button', { name: '알림', exact: true }).click();
   await expect(page.locator('.notification-row')).toHaveCount(0);
 });
+
+test('an idle input without Stop shows unknown response status instead of working', async ({ page }) => {
+  await h.ingest([event('missing-stop-ui', 'input', new Date(Date.now() - 35 * 60000).toISOString(), 'missing', { source: 'system_hook', text: '누락 응답 확인 업무' })]);
+  await open(page);
+  await expect(page.locator('.session-card > summary')).toContainText('응답 종료 미확인');
+  await expect(page.locator('.session-card > summary')).not.toContainText('작업 중');
+  const session = page.locator('.session-card');
+  if (!await session.getAttribute('open')) await session.locator(':scope > summary').click();
+  await expect(session.locator('.summary-open')).toHaveText('응답 종료 미확인');
+});

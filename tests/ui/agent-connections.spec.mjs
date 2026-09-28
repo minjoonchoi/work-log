@@ -67,14 +67,16 @@ test('tracking and harness links are independent per engine, do not duplicate pe
   await expect(dialog.getByRole('button', { name: '상태 새로고침', exact: true })).toBeDisabled();
   release(); state.beforeWrite = null;
   await expect(codex).toContainText('연결됨'); await expect(claude).toContainText('연결 안 됨');
+  await dialog.getByRole('tab', { name: '직무 패키지', exact: true }).click();
   await expect(codexHarness).toContainText('연결 안 됨');
   await codexHarness.getByRole('button', { name: '하네스 위임 연결', exact: true }).click();
   await expect(codexHarness).toContainText('연결됨');
+  await dialog.getByRole('tab', { name: '에이전트 연결', exact: true }).click();
   await claude.getByRole('button', { name: '이력 수집 연결', exact: true }).click();
   await expect(claude).toContainText('연결됨');
   await codex.getByRole('button', { name: '이력 수집 해제', exact: true }).click();
   await expect(codex).toContainText('연결 안 됨'); await expect(claude).toContainText('연결됨');
-  await expect(codexHarness).toContainText('연결됨');
+  await expect(dialog.locator('#connections-panel-packages [data-connection=codex-harness]')).toContainText('연결됨');
   expect(state.writes).toEqual([{ engine: 'codex', kind: 'tracking', method: 'POST', body: {} }, { engine: 'codex', kind: 'harness', method: 'POST', body: {} }, { engine: 'claude', kind: 'tracking', method: 'POST', body: {} }, { engine: 'codex', kind: 'tracking', method: 'DELETE', body: {} }]);
   await dialog.evaluate(element => { element.scrollTop = 0; });
   await dialog.screenshot({ path: info.outputPath('agent-connections.png') });
@@ -117,6 +119,7 @@ test('an uninstalled environment disables agent mutations while Atlassian settin
   await expect(dialog).toContainText('설치된 WorkLog 환경에서 연결');
   await expect(page.locator('#connect-codex-tracking')).toBeDisabled(); await expect(page.locator('#connect-claude-tracking')).toBeDisabled();
   await page.locator('#connect-codex-tracking').dispatchEvent('click'); expect(state.writes).toEqual([]);
+  await dialog.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
   await dialog.getByRole('button', { name: 'Atlassian 설정', exact: true }).click();
   await expect(dialog.getByRole('heading', { name: 'Atlassian 연결 설정', exact: true })).toBeVisible();
   await expect(dialog.getByLabel('Client ID', { exact: true })).toBeEditable();
@@ -142,6 +145,7 @@ test('late connection responses cannot replace Atlassian settings or a reopened 
   const gates = [];
   state.beforeWrite = () => new Promise(resolve => gates.push(resolve));
   await page.locator('#connect-codex-tracking').click(); await expect.poll(() => gates.length).toBe(1);
+  await dialog.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
   await dialog.getByRole('button', { name: 'Atlassian 설정', exact: true }).click();
   await dialog.getByLabel('Client ID', { exact: true }).fill('preserve-unsaved-client');
   let response = page.waitForResponse(value => value.url().endsWith('/api/agent-connections/codex/tracking'));
@@ -203,24 +207,31 @@ test('Confluence publishing opens Atlassian setup directly without the agent con
   expect(state.reads).toBe(0); expect(state.writes).toEqual([]);
 });
 
-test('connection tabs separate purposes, support keyboard navigation and return from Atlassian to the selected package view', async ({ page }, info) => {
+test('connection tabs separate purposes, support keyboard navigation and return from Atlassian to its connection tab', async ({ page }, info) => {
   const state = await fixture(page), dialog = await open(page);
   const agents = dialog.getByRole('tab', { name: '에이전트 연결', exact: true });
   const packages = dialog.getByRole('tab', { name: '직무 패키지', exact: true });
   await expect(agents).toHaveAttribute('aria-selected', 'true');
+  await expect(dialog.locator('[data-connection=codex-tracking]')).toBeVisible();
+  await expect(dialog.locator('[data-connection=codex-harness]')).toBeHidden();
+  await expect(dialog.locator('#connections-panel-atlassian')).toBeHidden();
   await expect(dialog.locator('#connections-panel-packages')).toBeHidden();
   await expect(agents).toBeEnabled();
   await agents.focus(); await page.keyboard.press('ArrowRight');
   await expect(packages).toBeFocused(); await expect(packages).toHaveAttribute('aria-selected', 'true');
   await expect(dialog.locator('#connections-panel-agents')).toBeHidden();
+  await expect(dialog.locator('[data-connection=codex-harness]')).toBeVisible();
+  await expect(dialog.locator('[data-connection=claude-harness]')).toBeVisible();
+  await expect(dialog.locator('#open-atlassian-settings')).toBeHidden();
   await expect(dialog.getByRole('region', { name: 'PM 패키지', exact: true })).toBeVisible();
   await dialog.getByRole('button', { name: '상태 새로고침', exact: true }).click();
   await expect(packages).toHaveAttribute('aria-selected', 'true');
   await dialog.screenshot({ path: info.outputPath('settings-packages.png') });
+  await dialog.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
   await dialog.getByRole('button', { name: 'Atlassian 설정', exact: true }).click();
   await expect(dialog.getByRole('tab', { name: 'OAuth 연결', exact: true })).toHaveAttribute('aria-selected', 'true');
   await dialog.getByRole('button', { name: '연결 설정으로 돌아가기', exact: true }).click();
-  await expect(packages).toHaveAttribute('aria-selected', 'true');
+  await expect(dialog.getByRole('tab', { name: 'Atlassian 연결', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(packages).toBeEnabled();
   await packages.focus(); await page.keyboard.press('Home'); await expect(agents).toBeFocused();
   await expect(dialog.locator('#connections-panel-packages')).toBeHidden();

@@ -25,7 +25,7 @@ test('real hook subprocess input/Stop updates current work without treating a na
 
 test('overview caps rows but keeps exact counts and excludes metadata workers and prompt/response bodies', async t => {
   const h = await setup(t), events = [];
-  for (let n = 0; n < 7; n++) events.push(event(`current-${n}`, 'input', '09:00:00', 't1', { work_item_id: `c${n}`, text: `진행 업무 ${n}` }));
+  for (let n = 0; n < 7; n++) events.push(event(`current-${n}`, 'input', new Date().toISOString(), 't1', { work_item_id: `c${n}`, text: `진행 업무 ${n}` }));
   for (let n = 0; n < 4; n++) events.push(...pair(`blocked-${n}`, '09:00:00', '09:01:00', 't1', { work_item_id: `a${n}`, text: `확인 업무 ${n}` }), update(`blocked-${n}`, `a${n}`, 'blocked'));
   for (let n = 0; n < 6; n++) events.push(...pair(`recent-${n}`, '09:00:00', '09:01:00', 't1', { work_item_id: `r${n}`, text: `최근 업무 ${n}` }));
   events.push(event('private-worker', 'input', '09:02:00', 't1', { work_item_id: 'r0', role: 'worker', text: 'PRIVATE-WORKER-PROMPT', parent: { work_item_id: 'r0' } }),
@@ -43,11 +43,11 @@ test('overview caps rows but keeps exact counts and excludes metadata workers an
 
 test('merged concurrent agent sessions count as one work item; interrupted turns stop waiting; restart preserves overview', async t => {
   const h = await setup(t);
-  await h.ingest([event('a', 'input', '09:00:00', 't1', { work_item_id: 'a' }), event('b', 'input', '09:01:00', 't1', { work_item_id: 'b' })]);
+  await h.ingest([event('a', 'input', new Date(Date.now() - 4 * 60000).toISOString(), 't1', { work_item_id: 'a' }), event('b', 'input', new Date(Date.now() - 3 * 60000).toISOString(), 't1', { work_item_id: 'b' })]);
   assert.equal((await h.manager('/quick')).counts.current, 2);
   await h.manager('/merge', { method: 'POST', body: { ids: ['a', 'b'], target: 'a', operation_id: 'quick-merge' } });
   assert.equal((await h.manager('/quick')).counts.current, 1);
-  await h.ingest([event('a', 'output', '09:02:00'), event('b', 'turn.interrupted', '09:03:00')]);
+  await h.ingest([event('a', 'output', new Date(Date.now() - 2 * 60000).toISOString()), event('b', 'turn.interrupted', new Date(Date.now() - 1 * 60000).toISOString())]);
   const before = await h.manager('/quick');
   assert.equal(before.counts.current, 0); assert.equal(before.counts.total, 1);
   await h.stop('manager'); await h.start('manager');

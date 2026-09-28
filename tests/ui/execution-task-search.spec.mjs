@@ -39,7 +39,7 @@ test('installed tasks can be searched by name, identifier, category and purpose 
   const customId = await registerCustomTask();
   const settings = await h.runtime('/execution-settings');
   const dialog = await openSettings(page);
-  await expect(dialog.getByRole('listbox', { name: '작업 유형', exact: true })).toHaveAttribute('size', '5');
+  await expect(dialog.getByRole('combobox', { name: '작업 유형', exact: true })).toBeVisible();
   await selectTask(dialog, 'prd.create');
 
   await search(dialog).fill('엔티티 설계');

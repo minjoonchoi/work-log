@@ -51,7 +51,7 @@ export function writingUI({ api, esc, toast, refresh, absoluteTime }) {
   function sessionHTML(session) {
     const summary = session.summary, lines = summary?.text?.split('\n') || [];
     return `<section class="session-summary" aria-labelledby="summary-heading-${esc(session.id)}"><div class="writing-header">
-      <h4 id="summary-heading-${esc(session.id)}">세션 요약${!session.closed ? '<span class="summary-open">진행 중</span>' : ''}</h4>
+      <h4 id="summary-heading-${esc(session.id)}">세션 요약${session.stale_pending ? '<span class="summary-open">응답 종료 미확인</span>' : !session.closed ? '<span class="summary-open">진행 중</span>' : ''}</h4>
       </div>${summary?.text ? `<div class="summary-text"><strong>${esc(lines[0])}</strong><ul>${summaryItems(lines.slice(1)).map(item => `<li>${esc(item)}</li>`).join('')}</ul></div>` : '<p class="summary-empty">아직 작성된 요약이 없습니다.</p>'}
       ${summary?.text && !summary.current ? '<p class="summary-notice">요약 이후 새 대화가 있습니다.</p>' : ''}
       ${statusHTML(session.rewrite)}${!session.rewrite && summary?.message ? `<p class="writing-message" role="status">${esc(summary.message)}</p>` : ''}</section>`;

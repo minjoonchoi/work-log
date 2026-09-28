@@ -72,3 +72,26 @@ test('instruction preview renders bounded Markdown, preserves edits across tabs,
   fs.mkdirSync('output/screenshots', { recursive: true });
   await dialog.locator('.instruction-editor').screenshot({ path: 'output/screenshots/execution-instruction-markdown.png' });
 });
+
+test('execution settings have one scroll surface for long instructions on desktop and narrow screens', async ({ page }) => {
+  await page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}`);
+  await page.getByRole('button', { name: '작업 실행 설정', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.locator('#execution-task')).not.toHaveAttribute('size', '5');
+  const positions = await dialog.evaluate(node => {
+    const left = node.querySelector('.execution-settings-navigation').getBoundingClientRect();
+    const right = node.querySelector('.execution-settings-content').getBoundingClientRect();
+    return { left: left.right, right: right.left };
+  });
+  expect(positions.right).toBeGreaterThan(positions.left);
+  await dialog.getByRole('tab', { name: '원문 편집', exact: true }).click();
+  const instruction = dialog.locator('#task-instruction');
+  await instruction.fill('# 긴 지시문\n' + '- 확인할 요구사항을 작성합니다.\n'.repeat(90));
+  expect(await instruction.evaluate(node => node.scrollHeight <= node.clientHeight + 2)).toBe(true);
+  await dialog.getByRole('tab', { name: '미리보기', exact: true }).click();
+  expect(await dialog.locator('#instruction-preview').evaluate(node => node.scrollHeight <= node.clientHeight + 2)).toBe(true);
+  for (const width of [1280, 600]) {
+    await page.setViewportSize({ width, height: 800 });
+    expect(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 2)).toBe(true);
+  }
+});

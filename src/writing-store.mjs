@@ -130,6 +130,8 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
         }
         return true;
       }
+      if (row.source === 'automatic' && row.snapshot.summary_trigger?.reason === 'missing_output'
+        && !store.sessionList().find(session => session.id === row.target_id)?.stale_pending) return false;
       const current = snapshot(row.format, row.target_id, false, null,
         { legacyOpenSummaries: row.format === 'work-item-metadata' && !row.snapshot.metadata_source_policy });
       return current.source_digest === row.snapshot.source_digest && current.base_version === row.snapshot.base_version
@@ -195,16 +197,16 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
       .map(row => ({ ...JSON.parse(row.payload), work_item_id: store.canonical(row.work_item_id) }))
       .filter(run => !run.internal && ['pending', 'running'].includes(run.status));
     const idle = integrations.sessionSnapshots(store.sessionList().filter(session => userSession(session)
-      && !closedIds.has(session.id) && !session.pending && observed - Date.parse(session.end_at) >= 1200000
+      && !closedIds.has(session.id) && (!session.pending || session.stale_pending) && observed - Date.parse(session.last_observed_at || session.end_at) >= 1200000
       && !running.some(run => run.origin
         ? run.origin.engine === session.engine && run.origin.agent_session_id === session.agent_session_id
         : run.work_item_id === session.work_item_id)))
       // An interrupted/failed turn is not an observed final response. Likewise,
-      // a missing Stop cannot be inferred from elapsed time or process absence.
-      .filter(session => session.source.events.at(-1)?.kind === 'output'
-        && observed - Date.parse(session.ended) >= 1200000);
+      // a missing Stop is summarized only as incomplete history, never as completion.
+      .filter(session => session.stale_pending || (session.source.events.at(-1)?.kind === 'output'
+        && observed - Date.parse(session.ended) >= 1200000));
     return [...closed.filter(userSession).map(session => ({ session, reason: 'closed' })),
-      ...idle.map(session => ({ session, reason: 'idle' }))];
+      ...idle.map(session => ({ session, reason: session.stale_pending ? 'missing_output' : 'idle' }))];
   }
   const cancellingSummaryCount = () => {
     const cancelled = new Set(db.prepare('SELECT run_id FROM writing_cancellations').all().map(row => row.run_id));

@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS held_events (
 );
 PRAGMA user_version=1;`;
 
-export function managerStore(dir) {
+export function managerStore(dir, { clock = Date.now } = {}) {
   const db = database(path.join(dir, 'memory.sqlite'), schema);
   if (!db.prepare('PRAGMA table_info(work_items)').all().some(column => column.name === 'metadata_protected')) {
     transaction(db, () => {
@@ -461,9 +461,19 @@ export function managerStore(dir) {
     while (pending.size) visit(pending.keys().next().value);
   }
   function sessionList(itemId, { includeDeleted = false } = {}) {
-    return all(`SELECT s.*,a.engine,a.source_id AS agent_session_id FROM work_item_sessions s
+    const activeRuns = runs().filter(run => !run.internal && ['pending', 'running'].includes(run.status));
+    return all(`SELECT s.*,a.engine,a.source_id AS agent_session_id,
+      (SELECT MAX(e.event_at) FROM events e LEFT JOIN event_links l ON l.event_id=e.id
+        WHERE e.agent_id=s.agent_id AND (l.session_id=s.id OR l.session_id IS NULL)) AS last_observed_at FROM work_item_sessions s
       JOIN agent_sessions a ON a.id=s.agent_id WHERE s.active=1 ORDER BY s.start_at,s.id`)
-      .map(s => ({ ...s, original_work_item_id: s.work_item_id, work_item_id: canonical(s.work_item_id), pending: !!s.pending }))
+      .map(s => {
+        const lastActivity = s.last_observed_at || s.end_at;
+        const executing = activeRuns.some(run => run.origin
+          ? run.origin.engine === s.engine && run.origin.agent_session_id === s.agent_session_id
+          : run.work_item_id === canonical(s.work_item_id));
+        return { ...s, original_work_item_id: s.work_item_id, work_item_id: canonical(s.work_item_id), pending: !!s.pending,
+          stale_pending: !!s.pending && !executing && clock() - Date.parse(lastActivity) >= 1200000 };
+      })
       .filter(s => (includeDeleted || !isDeleted(s.work_item_id)) && (!itemId || s.work_item_id === canonical(itemId)));
   }
   function sessionEntries({ q = '' } = {}, summaries = new Map()) {
@@ -487,7 +497,7 @@ export function managerStore(dir) {
       const row = { id: session.id, work_item_id: session.work_item_id, work_item_title: item.title,
         title, description, engine: session.engine, agent_session_id: session.agent_session_id,
         start_at: session.start_at, end_at: session.end_at, last_activity: session.end_at,
-        pending: session.pending,
+        pending: session.pending, stale_pending: session.stale_pending,
         closed: latest.get(session.agent_id) !== session.id && !session.pending,
         summary_state: summary?.state || null, has_summary: !!summaryText };
       return { row, searchable: `${item.title} ${item.description} ${(aliases.get(item.id) || []).join(' ')} ${title} ${description}`.toLowerCase() };
@@ -509,11 +519,11 @@ export function managerStore(dir) {
       const aliases = all('SELECT id,title,description FROM work_items WHERE merged_into IS NOT NULL').filter(a => canonical(a.id) === w.id);
       const state = rr.some(r => ['running', 'pending'].includes(r.status)) ? 'running'
         : rr.length && rr.every(r => r.status === 'completed') && !ss.some(s => s.pending) ? 'completed' : 'tracked';
-      const pending = ss.filter(s => s.pending).length;
+      const pending = ss.filter(s => s.pending && !s.stale_pending).length;
       const activities = [
         rr.some(r => r.status === 'running') && 'running',
         rr.some(r => r.status === 'pending') && 'queued',
-        !rr.some(r => ['running', 'pending'].includes(r.status)) && ss.some(s => s.pending) && 'agent_response_pending'
+        !rr.some(r => ['running', 'pending'].includes(r.status)) && ss.some(s => s.pending && !s.stale_pending) && 'agent_response_pending'
       ].filter(Boolean);
       const activity = activities[0] || 'recent';
       const activityTimes = [...ss.map(s => s.end_at), ...rr.map(r => r.updated_at)].filter(at => typeof at === 'string' && Number.isFinite(Date.parse(at)))
