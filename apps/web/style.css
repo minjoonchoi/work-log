@@ -567,3 +567,11 @@ dialog { max-height: 90vh; overflow: auto; }
 .automation-setting h3 { margin: 0 0 14px; font-size: 14px; }
 .threshold-input { display: flex; align-items: center; gap: 10px; color: var(--muted, #71717a); }
 .threshold-input input { width: 120px; margin: 0; }
+
+/* Settings are grouped by purpose; panels retain their input state. */
+.settings-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 18px 0 16px; padding-bottom: 4px; }
+.settings-tabs [role="tab"] { flex: 1; background: transparent; color: var(--muted); border: 0; border-radius: 6px; padding: 10px 12px; font-weight: 600; }
+.settings-tabs [role="tab"][aria-selected="true"] { background: var(--accent-soft); color: var(--accent-strong); box-shadow: inset 0 -2px var(--accent); }
+.settings-tabs [role="tab"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#connections-panel-packages { margin-top: 0; padding-top: 0; border-top: 0; }
+@media (max-width: 600px) { .settings-tabs [role="tab"] { padding: 10px 6px; } }

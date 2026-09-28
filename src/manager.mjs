@@ -129,6 +129,7 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     const routes = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/history.js': ['history.js', 'text/javascript'], '/integrations.js': ['integrations.js', 'text/javascript'], '/jira.js': ['jira.js', 'text/javascript'], '/writing.js': ['writing.js', 'text/javascript'], '/execution-settings.js': ['execution-settings.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
       '/icons.css': ['icons.css', 'text/css'],
       '/agent-connections.js': ['agent-connections.js', 'text/javascript'],
+      '/settings-tabs.js': ['settings-tabs.js', 'text/javascript'],
       '/description-syntax.js': ['description-syntax.js', 'text/javascript'],
       '/description.js': ['description.js', 'text/javascript'], '/automation-settings.js': ['automation-settings.js', 'text/javascript'], '/item-tags.js': ['item-tags.js', 'text/javascript'], '/reports.js': ['reports.js', 'text/javascript'], '/report-body.js': ['report-body.js', 'text/javascript'],
       '/quick': ['quick.html', 'text/html; charset=utf-8'], '/quick.js': ['quick.js', 'text/javascript'], '/quick.css': ['quick.css', 'text/css'] };

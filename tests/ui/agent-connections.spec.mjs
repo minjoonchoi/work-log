@@ -162,6 +162,7 @@ test('late connection responses cannot replace Atlassian settings or a reopened 
 
 test('role packages install and remove independently of links, preserve revisions and expose conflicts for retry', async ({ page }) => {
   const state = await fixture(page), dialog = await open(page);
+  await dialog.getByRole('tab', { name: '직무 패키지', exact: true }).click();
   const pm = dialog.getByRole('region', { name: 'PM 패키지', exact: true });
   const po = dialog.getByRole('region', { name: 'PO 패키지', exact: true });
   let release; state.beforePackageWrite = () => new Promise(resolve => { release = resolve; });
@@ -182,6 +183,7 @@ test('role packages install and remove independently of links, preserve revision
   expect(state.packageWrites).toEqual([{ id: 'pm', installed: true, revision: 0 }, { id: 'po', installed: true, revision: 1 }, { id: 'pm', installed: false, revision: 1 }]);
   await dialog.getByRole('button', { name: '닫기', exact: true }).click();
   await page.getByRole('button', { name: '연결 설정', exact: true }).click();
+  await dialog.getByRole('tab', { name: '직무 패키지', exact: true }).click();
   await expect(pm).toContainText('미설치');
   expect(state.writes).toEqual([]);
 });
@@ -199,4 +201,30 @@ test('Confluence publishing opens Atlassian setup directly without the agent con
   await expect(dialog.getByRole('heading', { name: 'Atlassian 연결 설정', exact: true })).toBeVisible();
   await expect(dialog.getByLabel('Client ID', { exact: true })).toBeEditable();
   expect(state.reads).toBe(0); expect(state.writes).toEqual([]);
+});
+
+test('connection tabs separate purposes, support keyboard navigation and return from Atlassian to the selected package view', async ({ page }, info) => {
+  const state = await fixture(page), dialog = await open(page);
+  const agents = dialog.getByRole('tab', { name: '에이전트 연결', exact: true });
+  const packages = dialog.getByRole('tab', { name: '직무 패키지', exact: true });
+  await expect(agents).toHaveAttribute('aria-selected', 'true');
+  await expect(dialog.locator('#connections-panel-packages')).toBeHidden();
+  await expect(agents).toBeEnabled();
+  await agents.focus(); await page.keyboard.press('ArrowRight');
+  await expect(packages).toBeFocused(); await expect(packages).toHaveAttribute('aria-selected', 'true');
+  await expect(dialog.locator('#connections-panel-agents')).toBeHidden();
+  await expect(dialog.getByRole('region', { name: 'PM 패키지', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '상태 새로고침', exact: true }).click();
+  await expect(packages).toHaveAttribute('aria-selected', 'true');
+  await dialog.screenshot({ path: info.outputPath('settings-packages.png') });
+  await dialog.getByRole('button', { name: 'Atlassian 설정', exact: true }).click();
+  await expect(dialog.getByRole('tab', { name: 'OAuth 연결', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await dialog.getByRole('button', { name: '연결 설정으로 돌아가기', exact: true }).click();
+  await expect(packages).toHaveAttribute('aria-selected', 'true');
+  await expect(packages).toBeEnabled();
+  await packages.focus(); await page.keyboard.press('Home'); await expect(agents).toBeFocused();
+  await expect(dialog.locator('#connections-panel-packages')).toBeHidden();
+  await page.setViewportSize({ width: 600, height: 800 });
+  await dialog.screenshot({ path: info.outputPath('settings-connections-compact.png') });
+  expect(state.writes).toEqual([]); expect(state.packageWrites).toEqual([]);
 });
