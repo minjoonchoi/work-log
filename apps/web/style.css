@@ -377,6 +377,19 @@ dialog .instruction-editor > .help { margin: 9px 0 0; font-size: 11px; }
 dialog .execution-task-toolbar label { margin: 0; }
 .execution-task-toolbar button { font-size: 12px; }
 .execution-task-toolbar > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.execution-task-picker { padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-muted); }
+dialog .execution-task-picker > label { margin: 0 0 8px; color: var(--muted); }
+.execution-task-search-row { display: flex; align-items: center; gap: 8px; }
+.execution-task-search-row input { flex: 1; min-width: 0; }
+.execution-task-search-row button { flex: none; font-size: 12px; }
+dialog #execution-task-count { margin: 8px 0; font-size: 11px; }
+dialog #execution-task[size] { height: 158px; padding: 5px; font-size: 12px; }
+#execution-task optgroup { padding: 5px; color: var(--muted); font-weight: 600; }
+#execution-task option { padding: 7px 9px; border-radius: 4px; color: var(--text); font-weight: 400; }
+#execution-task option:checked { background: var(--accent-soft) linear-gradient(var(--accent-soft), var(--accent-soft)); color: var(--accent-strong); font-weight: 600; }
+dialog #execution-task-empty { margin: 16px 0 8px; }
+.execution-selected-task { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin: 22px 0 12px; padding-top: 18px; border-top: 1px solid var(--line); }
+.execution-selected-task small { font-size: 11px; font-weight: 400; overflow-wrap: anywhere; }
 .execution-management-tabs { display: flex; gap: 4px; margin: 20px 0 12px; padding: 4px; border-radius: 7px; background: var(--surface-muted); }
 .execution-management-tabs button { flex: 1; border-color: transparent; color: var(--muted); background: transparent; font-size: 13px; }
 .execution-management-tabs button[aria-selected="true"] { border-color: var(--line); color: var(--accent-strong); background: var(--surface); font-weight: 600; }
@@ -408,6 +421,9 @@ dialog:has(.custom-task-registration) { padding: 0; overflow: hidden; }
 .custom-task-registration-body { min-height: 0; overflow: auto; padding: 28px; }
 .custom-task-registration-actions { flex: none; margin-top: 0; padding: 16px 28px; border-top: 1px solid var(--line); background: var(--surface); }
 .connection-note { background: var(--surface-muted); border: 1px solid var(--line); border-radius: 6px; padding: 12px; font-size: 13px; }
+.agent-connection-backbar { position: sticky; top: -28px; z-index: 2; margin: -28px -28px 20px; padding: 14px 28px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.agent-connection-back { font-size: 12px; }
+.agent-connection-backbar ~ #agent-connections .harness-packages { scroll-margin-top: 66px; }
 .agent-connection-explanation { padding: 12px 14px; border-radius: 6px; background: var(--surface-muted); }
 .agent-connection-toolbar, .agent-connection-heading, .agent-atlassian-settings { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .agent-connection-toolbar { margin: 20px 0 12px; }

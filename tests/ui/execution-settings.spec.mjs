@@ -17,7 +17,7 @@ test('GUI edits and resets task instruction, backend and backend-specific model 
   await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: '작업 실행 설정' })).toBeVisible();
-  await dialog.getByLabel('작업 유형').selectOption('entity.design');
+  await dialog.getByLabel('작업 유형', { exact: true }).selectOption('entity.design');
   await dialog.getByRole('tab', { name: '원문 편집' }).click();
   await dialog.getByLabel('작업 지시문').fill('관계 수와 삭제 정책을 명확히 설명한다.');
   await dialog.getByLabel('기본 backend').selectOption('claude');
@@ -44,7 +44,7 @@ test('instruction preview renders bounded Markdown, preserves edits across tabs,
   await page.getByRole('button', { name: '작업 실행 설정' }).click();
   await page.getByRole('tab', { name: '하네스 작업', exact: true }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('작업 유형').selectOption('prd.create');
+  await dialog.getByLabel('작업 유형', { exact: true }).selectOption('prd.create');
   const preview = dialog.locator('#instruction-preview');
   for (const name of ['목적', '입력', '범위', '수행 절차', '완료 기준']) await expect(preview.getByRole('heading', { name, exact: true })).toHaveCount(1);
   await expect(dialog.getByLabel('작업 지시문')).toBeHidden();

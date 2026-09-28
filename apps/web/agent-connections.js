@@ -3,10 +3,13 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
   const purposes = { tracking: '이력 수집', harness: '하네스 위임' };
   const states = { connected: '연결됨', disconnected: '연결 안 됨', needs_attention: '확인 필요' };
 
-  async function showSettings() {
-    modal(`<h2>연결 설정</h2><p>앱 설치만으로 에이전트가 자동으로 연결되지 않습니다. 이력 수집과 작업 위임을 각각 선택하세요.</p>
+  async function showSettings({ onBack, focusPackages = false } = {}) {
+    const canGoBack = typeof onBack === 'function';
+    modal(`${canGoBack ? '<div class="agent-connection-backbar"><button type="button" id="back-execution-settings" class="secondary agent-connection-back">작업 실행 설정으로 돌아가기</button></div>' : ''}
+      <h2>연결 설정</h2><p>앱 설치만으로 에이전트가 자동으로 연결되지 않습니다. 이력 수집과 작업 위임을 각각 선택하세요.</p>
       <div id="agent-connections"></div>`);
     const dialog = document.querySelector('#modal'), root = document.querySelector('#agent-connections');
+    const backButton = canGoBack ? dialog.querySelector('#back-execution-settings') : null;
     const active = () => dialog.open && root.isConnected;
     let snapshot = null, packages = null, pending = null, failure = '', packageFailure = '', feedback = '', readEpoch = 0;
     const connectionPart = (connection, kind) => connection?.[kind] || connection;
@@ -32,19 +35,20 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
     function render() {
       if (!active()) return;
       const busy = !!pending, available = snapshot?.available === true;
+      if (backButton) backButton.disabled = busy;
       const expanded = new Set([...root.querySelectorAll('details[open][data-details]')].map(details => details.dataset.details));
       root.setAttribute('aria-busy', String(busy));
       root.innerHTML = `<p class="agent-connection-explanation">대화 기록만 수집하거나 하네스 위임을 함께 사용할 수 있습니다. 해제할 때는 선택한 기능의 WorkLog 연결만 제거하며 업무 이력과 기존 사용자 설정은 보존합니다.</p>
         <div id="agent-connections-error" class="error" role="alert" ${failure ? '' : 'hidden'}>${esc(failure)}</div>
         ${snapshot && !available ? '<p class="connection-note">설치된 WorkLog 환경에서 연결할 수 있습니다. WorkLog를 설치한 뒤 앱을 다시 열어 주세요.</p>' : ''}
-        <div class="agent-connection-toolbar"><p role="status">${esc(pending === 'refresh' ? '설정을 확인하고 있습니다.' : pending?.engine ? `${names[pending.engine]} ${purposes[pending.kind]} ${pending.method === 'DELETE' ? '연결을 해제' : '연결을 설정'}하고 있습니다.` : pending?.package ? '직무 패키지를 변경하고 있습니다.' : feedback)}</p><button id="refresh-agent-connections" class="secondary" ${busy ? 'disabled' : ''}>상태 새로고침</button></div>
+        <div class="agent-connection-toolbar"><p role="status">${esc(pending === 'refresh' ? '설정을 확인하고 있습니다.' : pending === 'back' ? '작업 실행 설정으로 돌아가고 있습니다.' : pending?.engine ? `${names[pending.engine]} ${purposes[pending.kind]} ${pending.method === 'DELETE' ? '연결을 해제' : '연결을 설정'}하고 있습니다.` : pending?.package ? '직무 패키지를 변경하고 있습니다.' : feedback)}</p><button id="refresh-agent-connections" class="secondary" ${busy ? 'disabled' : ''}>상태 새로고침</button></div>
         <div class="agent-connection-cards">${Object.entries(names).map(([engine, name]) => {
           const connection = snapshot?.connections?.find(row => row.engine === engine);
           return `<section class="agent-connection-card" aria-labelledby="agent-${engine}-title" data-engine="${engine}">
             <h3 id="agent-${engine}-title">${name}</h3>${Object.keys(purposes).map(kind => renderPart(engine, kind, connection, busy, available)).join('')}
           </section>`;
         }).join('')}</div>
-        <section class="harness-packages" aria-labelledby="harness-packages-title"><h3 id="harness-packages-title">직무별 하네스 작업</h3>
+        <section class="harness-packages" aria-labelledby="harness-packages-title"><h3 id="harness-packages-title" tabindex="-1">직무별 하네스 작업</h3>
           <p>사용할 직무의 작업 유형을 설치하세요. 에이전트의 하네스 위임 연결과 별도로 관리하며, WorkLog 자동 생성 기능과 사용자 등록 유형은 유지됩니다.</p>
           <div id="harness-packages-error" class="error" role="alert" ${packageFailure ? '' : 'hidden'}>${esc(packageFailure)}</div>
           ${packages ? `<div class="harness-package-list">${(packages.packages || []).map(value => `<section class="harness-package" aria-label="${esc(value.label)} 패키지" data-package="${esc(value.id)}">
@@ -67,17 +71,38 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
       }
       for (const button of root.querySelectorAll('[data-package-action]')) button.onclick = () => changePackage(button.dataset.packageAction);
     }
-    async function refresh() {
+    function focusPackageSection() {
+      const heading = root.querySelector('#harness-packages-title');
+      heading?.focus({ preventScroll: true });
+      heading?.closest('.harness-packages')?.scrollIntoView({ block: 'start', behavior: 'auto' });
+    }
+    if (backButton) backButton.onclick = async () => {
+      if (pending || !active()) return;
+      readEpoch++;
+      pending = 'back'; failure = ''; render();
+      try { await onBack(); }
+      catch (error) { if (active()) failure = error.message; }
+      finally {
+        pending = null;
+        if (active()) { render(); backButton.focus(); }
+      }
+    };
+    async function refresh({ initial = false } = {}) {
       if (pending || !active()) return;
       readEpoch++;
       pending = 'refresh'; failure = ''; packageFailure = ''; feedback = ''; render();
+      if (initial && focusPackages) focusPackageSection();
       const results = await Promise.allSettled([api('/agent-connections'), api('/harness-packages')]);
       if (active()) {
         if (results[0].status === 'fulfilled') snapshot = results[0].value; else failure = results[0].reason.message;
         if (results[1].status === 'fulfilled') packages = results[1].value; else packageFailure = '직무 패키지를 불러오지 못했습니다. ' + results[1].reason.message;
       }
       pending = null;
-      if (active()) { render(); root.querySelector('#refresh-agent-connections').focus(); }
+      if (active()) {
+        render();
+        if (initial && focusPackages) focusPackageSection();
+        else root.querySelector('#refresh-agent-connections').focus();
+      }
     }
     async function mutate(engine, kind, method) {
       if (pending || !active() || !snapshot?.available) return;
@@ -113,7 +138,7 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
         if (active()) { render(); [...root.querySelectorAll('[data-package-action]')].find(button => button.dataset.packageAction === id)?.focus(); }
       }
     }
-    await refresh();
+    await refresh({ initial: true });
     async function observeCollection() {
       if (!active()) return;
       if (!pending) {
