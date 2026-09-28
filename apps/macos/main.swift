@@ -91,6 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     var servicesStarting = false
     var terminationPending = false
     var serviceControlError: String?
+    var pendingServiceAlert = false
+    var serviceErrorItem: NSMenuItem!
     let routes = ["items", "current", "notifications", "calendar", "settings"]
     func normalizedRoute(_ view: String) -> String {
         ["attention", "waiting-user"].contains(view) ? "notifications" : view
@@ -140,7 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         utilityMenu = NSMenu()
         connectionItem = NSMenuItem(title: "서비스 연결 중…", action: nil, keyEquivalent: "")
-        utilityMenu.addItem(connectionItem); utilityMenu.addItem(.separator())
+        utilityMenu.addItem(connectionItem)
+        serviceErrorItem = NSMenuItem(title: "서비스 오류 확인", action: #selector(openServiceError), keyEquivalent: "")
+        serviceErrorItem.target = self; serviceErrorItem.isHidden = true
+        utilityMenu.addItem(serviceErrorItem); utilityMenu.addItem(.separator())
         for (title, route, key) in [("업무 목록 열기", "items", "1"), ("현재 작업", "current", "2"), ("오늘 캘린더", "calendar", "3"), ("알림", "notifications", "4"), ("연결 설정", "settings", ",")] {
             let item = NSMenuItem(title: title, action: #selector(navigate(_:)), keyEquivalent: key)
             item.representedObject = route; item.target = self; utilityMenu.addItem(item)
@@ -185,9 +190,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }
     func showServiceControlError(_ message: String, stopping: Bool) {
         serviceControlError = message
+        serviceErrorItem.isHidden = false
+        pendingServiceAlert = true
+        // Startup completion can arrive after the user closed/minimized the window.
+        // Background work must never activate or reopen it. Quit failures follow
+        // an explicit user action and still need a visible failure explanation.
+        if stopping { openMain(["view": "items"]) }
+        else if window.isVisible && !window.isMiniaturized { presentServiceError() }
+    }
+    @objc func openServiceError() {
+        pendingServiceAlert = serviceControlError != nil
         openMain(["view": "items"])
+    }
+    func presentServiceError() {
+        guard pendingServiceAlert, window.attachedSheet == nil, let message = serviceControlError else { return }
+        pendingServiceAlert = false
         let alert = NSAlert()
-        alert.messageText = stopping ? "WorkLog를 종료하지 못했습니다." : "로컬 서비스를 시작하지 못했습니다."
+        alert.messageText = "WorkLog 서비스 오류"
         alert.informativeText = message
         alert.addButton(withTitle: "확인")
         alert.beginSheetModal(for: window)
@@ -243,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         navigateWeb()
+        presentServiceError()
     }
     @objc func navigate(_ sender: NSMenuItem) {
         openMain(["view": sender.representedObject as? String ?? "items"])

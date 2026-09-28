@@ -23,22 +23,32 @@ if scenario != "development" {
     })
 }
 application.delegate = delegate
-var quitRequested = false, waitedForStart = false, failureVisible = false, failureMessage = ""
+var closedBeforeFailure = false
+var quitRequested = false, waitedForStart = false, failureVisible = false, failureMessage = "", backgroundFailureHidden = false
 let terminateObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
     let result: [String: Any] = ["waitedForStart": waitedForStart, "failureVisible": failureVisible, "failureMessage": failureMessage,
-        "developmentSkipped": ServiceControlClient.installedPaths(delegate.dataRoot) == nil]
+        "backgroundFailureHidden": backgroundFailureHidden, "developmentSkipped": ServiceControlClient.installedPaths(delegate.dataRoot) == nil]
     print(String(data: try! JSONSerialization.data(withJSONObject: result), encoding: .utf8)!)
     fflush(stdout)
 }
 let poll = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { _ in
     guard delegate.window != nil else { return }
+    if scenario == "start-fails-closed" && !closedBeforeFailure {
+        delegate.openMain(["view": "items"])
+        delegate.window.close()
+        closedBeforeFailure = true
+    }
     if delegate.servicesStarting && delegate.terminationPending { waitedForStart = true }
     if let message = delegate.serviceControlError, !failureVisible {
         failureMessage = message
+        if scenario.hasPrefix("start-fails") {
+            backgroundFailureHidden = !delegate.window.isVisible && delegate.pendingServiceAlert && !delegate.serviceErrorItem.isHidden
+            delegate.openMain(["view": "items"])
+        }
         failureVisible = delegate.window.isVisible && delegate.window.attachedSheet != nil && !delegate.terminationPending
         if let sheet = delegate.window.attachedSheet { delegate.window.endSheet(sheet); sheet.orderOut(nil) }
         NSApp.terminate(nil)
-    } else if !quitRequested && scenario != "start-fails" {
+    } else if !quitRequested && !scenario.hasPrefix("start-fails") {
         waitedForStart = delegate.servicesStarting
         quitRequested = true; NSApp.terminate(nil)
     }
@@ -50,7 +60,7 @@ application.run()
 `);
   const compiled = spawnSync('swiftc', ['-framework', 'Cocoa', '-framework', 'WebKit', source, '-o', executable], { encoding: 'utf8', timeout: 15000 });
   assert.equal(compiled.status, 0, compiled.stderr);
-  for (const scenario of ['stopped', 'user_work_continues', 'stop-fails', 'malformed-stop', 'start-fails', 'development']) await t.test(scenario, async () => {
+  for (const scenario of ['stopped', 'user_work_continues', 'stop-fails', 'malformed-stop', 'start-fails', 'start-fails-closed', 'development']) await t.test(scenario, async () => {
     const workspace = path.join(dir, scenario); fs.mkdirSync(workspace);
     const log = path.join(workspace, 'calls.jsonl');
     fs.symlinkSync(process.execPath, path.join(workspace, 'node'));
@@ -61,7 +71,7 @@ application.run()
       if(action==='start')await new Promise(resolve=>setTimeout(resolve,200));
       const stops=calls.filter(c=>c.phase==='begin'&&c.args[0]==='stop').length;
       fs.appendFileSync(log,JSON.stringify({phase:'end',args})+'\\n');
-      if(action==='start'&&scenario==='start-fails'){console.error(JSON.stringify({error:'서비스 시작 fixture 실패'}));process.exit(1);}
+      if(action==='start'&&scenario.startsWith('start-fails')){console.error(JSON.stringify({error:'서비스 시작 fixture 실패'}));process.exit(1);}
       if(action==='stop'&&scenario==='stop-fails'&&stops===0){console.log(JSON.stringify({status:'needs_attention',preserved:[{reason:'서비스 종료 fixture 실패'}]}));process.exit(2);}
       if(action==='stop'&&scenario==='malformed-stop'&&stops===0){console.log('not a valid result');process.exit(0);}
       console.log(JSON.stringify({status:action==='start'?'started':scenario==='user_work_continues'?'user_work_continues':'stopped'}));
@@ -79,7 +89,8 @@ application.run()
     const expected = ['start', 'stop', ...(['stop-fails', 'malformed-stop'].includes(scenario) ? ['stop'] : [])];
     assert.deepEqual(calls.map(call => `${call.phase}:${call.args[0]}`), expected.flatMap(action => [`begin:${action}`, `end:${action}`]));
     for (const call of calls) assert.deepEqual(call.args.slice(1), ['--app-path', path.join(workspace, 'WorkLog.app'), '--data-root', workspace]);
-    if (scenario !== 'start-fails') assert.equal(result.waitedForStart, true, 'quit waits for the in-flight startup helper');
+    if (scenario.startsWith('start-fails')) assert.equal(result.backgroundFailureHidden, true, 'background startup failure stays in the menu until the user opens the window');
+    if (!scenario.startsWith('start-fails')) assert.equal(result.waitedForStart, true, 'quit waits for the in-flight startup helper');
     if (scenario.includes('fails') || scenario === 'malformed-stop') {
       assert.equal(result.failureVisible, true, 'failure keeps a visible window and alert before the user retries');
       assert.match(result.failureMessage, /fixture 실패|상태를 확인하지 못했습니다/);

@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS work_items (
  merged_into TEXT REFERENCES work_items(id), manual INTEGER NOT NULL DEFAULT 0,
  version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, metadata_protected INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS item_initial_metadata (
+ work_item_id TEXT PRIMARY KEY REFERENCES work_items(id), event_id TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS agent_sessions (
  id TEXT PRIMARY KEY, engine TEXT NOT NULL, source_id TEXT NOT NULL, work_item_id TEXT NOT NULL,
  role TEXT NOT NULL, UNIQUE(engine, source_id)
@@ -238,8 +241,13 @@ export function managerStore(dir) {
         if (counts.get(e.turn_id) === 1) turns.set(e.turn_id, current);
         sid = current; resolution = 'input';
         const item = one('SELECT * FROM work_items WHERE id=?', canonical(owner));
-        if (item.title === '새 작업' && !item.manual && e.text && !isDeleted(item.id)) {
-          exec('UPDATE work_items SET title=?, description=?, version=version+1 WHERE id=?', e.text.trim().slice(0, 70), e.text.slice(0, 500), item.id);
+        if (item.title === '새 작업' && !item.manual && e.text?.trim() && !isDeleted(item.id)
+          && !one('SELECT 1 FROM item_initial_metadata WHERE work_item_id=?', item.id)) {
+          // Bootstrap once from the actual prompt; never schedule a model here.
+          const title = Array.from(e.text.trim().replace(/\s+/g, ' ')).slice(0, 70).join('');
+          const description = Array.from(e.text.trim()).slice(0, 500).join('');
+          exec('UPDATE work_items SET title=?, description=?, version=version+1 WHERE id=?', title, description, item.id);
+          exec('INSERT INTO item_initial_metadata VALUES(?,?)', item.id, row.id);
         }
       } else if (['output', 'turn.interrupted', 'turn.failed'].includes(e.kind) && turns.has(e.turn_id)) {
         sid = turns.get(e.turn_id); resolution = e.text == null && e.kind === 'output' ? 'missing_body' : 'matched';

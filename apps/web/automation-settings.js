@@ -2,17 +2,17 @@ export function automationSettingsUI({ api, esc, modal, toast }) {
   const $ = selector => document.querySelector(selector);
   async function showSettings() {
     const settings = await api('/automation/settings');
-    modal(`<h2>자동 작성 설정</h2><p>수집된 대화와 세션 요약을 기준으로 업무 제목·설명을 자동 갱신합니다. 이 컴퓨터의 모든 업무에 적용합니다.</p>
+    modal(`<h2>자동 작성 설정</h2><p>새 업무의 제목·설명은 첫 프롬프트에서 바로 채우며 모델을 호출하지 않습니다. 아래 기준을 충족하면 수집된 대화와 세션 요약으로 구조화해 갱신합니다. 이 컴퓨터의 모든 업무에 적용합니다.</p>
       <form id="automation-settings-form">
         <div id="automation-settings-error" class="error" role="alert" hidden></div>
         <section class="automation-setting" aria-labelledby="initial-output-heading">
-          <h3 id="initial-output-heading">처음 제목·설명 만들기</h3>
+          <h3 id="initial-output-heading">첫 구조화 갱신</h3>
           <label for="initial-output-count">에이전트 응답 수</label>
           <div class="threshold-input"><input id="initial-output-count" name="initial_output_count" type="number" min="1" max="1000" step="1" required value="${esc(settings.initial_output_count)}" aria-describedby="initial-output-help"><span>회</span></div>
           <p class="help" id="initial-output-help">업무에 연결된 사용자 에이전트 세션의 응답을 합산합니다. 내부 워커 출력과 중복 수집은 제외합니다.</p>
         </section>
         <section class="automation-setting" aria-labelledby="summary-interval-heading">
-          <h3 id="summary-interval-heading">이후 제목·설명 갱신하기</h3>
+          <h3 id="summary-interval-heading">이후 구조화 갱신</h3>
           <label for="summary-interval">요약된 종료 세션 수</label>
           <div class="threshold-input"><input id="summary-interval" name="summary_interval" type="number" min="1" max="1000" step="1" required value="${esc(settings.summary_interval)}" aria-describedby="summary-interval-help"><span>개마다</span></div>
           <p class="help" id="summary-interval-help">5개로 설정하면 종료 세션의 요약이 5개, 10개, 15개 쌓일 때 갱신합니다. 같은 세션의 재요약은 추가로 세지 않습니다.</p>
