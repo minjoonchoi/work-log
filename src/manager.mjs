@@ -150,6 +150,7 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
   publicHandler: async (req, res, url) => {
     const routes = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/history.js': ['history.js', 'text/javascript'], '/integrations.js': ['integrations.js', 'text/javascript'], '/jira.js': ['jira.js', 'text/javascript'], '/writing.js': ['writing.js', 'text/javascript'], '/execution-settings.js': ['execution-settings.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
       '/icons.css': ['icons.css', 'text/css'],
+      '/held-sessions.js': ['held-sessions.js', 'text/javascript'],
       '/agent-connections.js': ['agent-connections.js', 'text/javascript'],
       '/settings-tabs.js': ['settings-tabs.js', 'text/javascript'],
       '/description-syntax.js': ['description-syntax.js', 'text/javascript'],
@@ -252,6 +253,15 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (publishRoute && req.method === 'POST') return reportPublisher.publish(publishRoute[1], await body(req));
     const publicationResolve = p.match(/^\/api\/reports\/([^/]+)\/publications\/([^/]+)\/resolve$/);
     if (publicationResolve && req.method === 'POST') return reportPublisher.resolve(publicationResolve[1], publicationResolve[2], await body(req));
+    if (req.method === 'GET' && p === '/api/held-sessions') {
+      assert([...url.searchParams.keys()].every(k => k === 'before') && url.searchParams.getAll('before').length <= 1, '보류 조회 조건이 잘못되었습니다.');
+      return store.heldSessions(url.searchParams.get('before'));
+    }
+    const heldRoute = p.match(/^\/api\/held-sessions\/([^/]+)(\/promote)?$/);
+    if (heldRoute && req.method === 'GET' && !heldRoute[2]) return store.heldDetail(heldRoute[1]);
+    if (heldRoute && req.method === 'POST' && heldRoute[2]) {
+      const result = store.promoteHeld(heldRoute[1]); notify(); return result;
+    }
     if (req.method === 'GET' && p === '/api/query') return queryData(url.searchParams);
     if (req.method === 'GET' && p === '/api/items') return itemListing(url.searchParams);
     if (req.method === 'GET' && p === '/api/tags') {

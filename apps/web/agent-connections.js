@@ -1,3 +1,4 @@
+import { showHeldSessions } from './held-sessions.js';
 import { settingsTabs, bindSettingsTabs } from './settings-tabs.js';
 
 export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
@@ -46,7 +47,7 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
         <div id="agent-connections-error" class="error" role="alert" ${failure ? '' : 'hidden'}>${esc(failure)}</div>
         ${snapshot && !available ? '<p class="connection-note">설치된 WorkLog 환경에서 연결할 수 있습니다. WorkLog를 설치한 뒤 앱을 다시 열어 주세요.</p>' : ''}
         <div class="agent-connection-toolbar"><p role="status">${esc(pending === 'refresh' ? '설정을 확인하고 있습니다.' : pending === 'back' ? '작업 실행 설정으로 돌아가고 있습니다.' : pending?.engine ? `${names[pending.engine]} ${purposes[pending.kind]} ${pending.method === 'DELETE' ? '연결을 해제' : '연결을 설정'}하고 있습니다.` : pending?.package ? '직무 패키지를 변경하고 있습니다.' : feedback)}</p><button id="refresh-agent-connections" class="secondary" ${busy ? 'disabled' : ''}>상태 새로고침</button></div>
-        <div id="connections-panel-agents"><p class="agent-connection-explanation">이력 수집은 대화를 기록하고, 하네스 위임은 요청한 작업을 실행합니다. 해제 시 선택한 기능의 WorkLog 연결만 제거하며 기존 이력은 보존합니다.</p>
+        <div id="connections-panel-agents"><button id="open-held-sessions" class="secondary">분류 보류 기록</button><p class="agent-connection-explanation">이력 수집은 대화를 기록하고, 하네스 위임은 요청한 작업을 실행합니다. 해제 시 선택한 기능의 WorkLog 연결만 제거하며 기존 이력은 보존합니다.</p>
         <div class="agent-connection-cards">${Object.entries(names).map(([engine, name]) => {
           const connection = snapshot?.connections?.find(row => row.engine === engine);
           return `<section class="agent-connection-card" aria-labelledby="agent-${engine}-title" data-engine="${engine}">
@@ -67,6 +68,7 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
       for (const tab of root.querySelectorAll('[data-settings-tab]')) tab.disabled = busy;
       if (focusedTab) root.querySelector(`[data-settings-tab="${focusedTab}"]`)?.focus();
       root.querySelector('#refresh-agent-connections').onclick = refresh;
+      root.querySelector('#open-held-sessions').onclick = () => showHeldSessions({ api, esc, modal, onBack: () => showSettings({ onBack }) });
       for (const details of root.querySelectorAll('details[data-details]')) details.open = expanded.has(details.dataset.details);
       root.querySelector('#close-agent-connections').onclick = () => dialog.close();
       root.querySelector('#open-atlassian-settings').onclick = async () => {

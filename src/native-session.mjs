@@ -75,5 +75,16 @@ export function readClaudeSession(raw, entrypoint) {
     session_id: raw.agent_id, parent_session_id: raw.session_id, kind: 'subagent' };
   if (claudeHeadlessEntrypoints.has(entrypoint)) return { ...base,
     session_id: raw.session_id, kind: 'print', entrypoint };
+  if (['cli', 'claude-vscode', 'local-agent'].includes(entrypoint)) return { ...base,
+    session_id: raw.session_id, kind: 'interactive', entrypoint };
   return null;
+}
+
+// A versioned, narrow heuristic, never proof of an internal session. Only
+// otherwise unclassified first requests are held; users can explicitly admit them.
+export function titleAutomationCandidate(event) {
+  return ['codex', 'claude'].includes(event.engine) && event.source === 'system_hook'
+    && event.role === 'user' && event.kind === 'input'
+    && !event.native_session && !event.transcript_path && typeof event.text === 'string'
+    && /^Generate a concise, single-line task title at most 36 characters(?=[\s.,:;!?]|$)/i.test(event.text.trimStart());
 }

@@ -1,0 +1,64 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Harness, pair, event } from '../helpers.mjs';
+const prompt = 'Generate a concise, single-line task title at most 36 characters and return only the title.';
+const candidate = (id='title') => pair(id,'09:00:00','09:01:00','t',{source:'system_hook',role:'user',text:prompt});
+test('unidentified automatic title requests stay held through replay, concurrent delivery and restart; explicit promotion restores once', async t => {
+  const h = new Harness(); t.after(()=>h.close()); await h.start('manager');
+  const rows = candidate();
+  await Promise.all([h.ingest(rows),h.ingest(rows)]);
+  assert.deepEqual(await h.manager('/items'),[]);
+  let held = await h.manager('/held-sessions'); assert.equal(held.records.length,1); assert.equal(held.records[0].event_count,2);
+  await h.stop('manager'); await h.start('manager');
+  await h.ingest([event('title','input','09:02:00','t2',{source:'system_hook',text:'follow-up'})]);
+  assert.deepEqual(await h.manager('/items'),[]);
+  const id=held.records[0].id;
+  assert.equal((await h.manager('/held-sessions/'+id)).events.length,3);
+  const results=await Promise.all([1,2].map(()=>h.manager('/held-sessions/'+id+'/promote',{method:'POST',body:{}})));
+  assert.equal(results[0].work_item_id,results[1].work_item_id);
+  assert.equal((await h.manager('/items')).length,1);
+  assert.equal((await h.manager('/items/'+results[0].work_item_id)).events.length,3);
+  await h.ingest(rows);
+  assert.equal((await h.manager('/held-sessions')).records.length,0);
+  assert.equal((await h.manager('/items/'+results[0].work_item_id)).events.length,3);
+});
+test('normal titles and confirmed interactive sessions collect; confirmed internal sessions never promote', async t => {
+  const h=new Harness();t.after(()=>h.close());await h.start('manager');
+  await h.ingest(pair('normal','10:00:00','10:01:00','t',{source:'system_hook',text:'이 작업의 타이틀을 만들어 줘'}));
+  await h.ingest(candidate('interactive').map(e=>({...e,native_session:{adapter:'codex-session-meta-v1',session_id:'interactive',hook_session_id:'interactive',kind:'cli'}})));
+  await h.ingest(candidate('internal').map(e=>({...e,native_session:{adapter:'codex-session-meta-v1',session_id:'internal',hook_session_id:'internal',kind:'exec'}})));
+  assert.equal((await h.manager('/items')).length,2);
+  await h.ingest(candidate('later'));
+  const id=(await h.manager('/held-sessions')).records[0].id;
+  await h.ingest([event('later','session.ended','11:00:00','t',{source:'system_hook',native_session:{adapter:'codex-session-meta-v1',session_id:'later',hook_session_id:'later',kind:'exec'}})]);
+  await assert.rejects(h.manager('/held-sessions/'+id+'/promote',{method:'POST',body:{}}),e=>e.status===409);
+  assert.equal((await h.manager('/held-sessions/'+id)).events.length,2);
+});
+test('held records use bounded pages and conflicting replay is rejected without losing evidence', async t => {
+  const h=new Harness();t.after(()=>h.close());await h.start('manager');
+  await h.ingest(Array.from({length:51},(_,n)=>candidate('bulk-'+n)).flat());
+  const first=await h.manager('/held-sessions');
+  assert.equal(first.records.length,50);assert.ok(first.next_cursor);
+  const second=await h.manager('/held-sessions?before='+first.next_cursor);
+  assert.equal(second.records.length,1);assert.equal(second.next_cursor,null);
+  assert.equal(new Set([...first.records,...second.records].map(r=>r.id)).size,51);
+  const record=await h.manager('/held-sessions/'+first.records[0].id);
+  await assert.rejects(h.ingest([{...record.events[0],text:'changed'}]),e=>e.status===409);
+  assert.equal((await h.manager('/held-sessions/'+record.id)).events[0].text,prompt);
+  await assert.rejects(h.manager('/held-sessions?before=invalid'),e=>e.status===400);
+});
+test('actual hooks without transcript or worker markers are held, including output delivered before input', async t => {
+  const h=new Harness();t.after(()=>h.close());await h.start('manager');
+  const [input,output]=candidate('out-of-order');
+  await h.ingest([output]);await h.ingest([input]);
+  let record=(await h.manager('/held-sessions')).records[0];
+  assert.equal(record.event_count,2);
+  for(const [kind,extra] of [['UserPromptSubmit',{prompt}],['Stop',{last_assistant_message:'간결한 제목'}]])
+    h.hook('codex',{session_id:'real-hook',hook_event_name:kind,turn_id:'t',...extra},{HARNESS_WORKER:''});
+  const { eventually } = await import('../helpers.mjs');
+  await eventually(()=>h.manager('/held-sessions'),data=>data.records.some(r=>r.source_id==='real-hook'&&r.event_count===2));
+  assert.deepEqual(await h.manager('/items'),[]);
+  const restored=await h.manager('/held-sessions/'+record.id+'/promote',{method:'POST',body:{}});
+  const detail=await h.manager('/items/'+restored.work_item_id);
+  assert.equal(detail.events.filter(e=>['input','output'].includes(e.kind)).length,2);
+});

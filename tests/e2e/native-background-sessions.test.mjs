@@ -115,7 +115,7 @@ test('Claude print and SDK title workers outside WorkLog never create items; int
   const h = new Harness(); t.after(() => h.close());
   for (const [session, entrypoint] of [['external-print', 'sdk-cli'], ['external-ts', 'sdk-ts'], ['external-py', 'sdk-py'],
     ['claude-user', 'cli'], ['claude-vscode-user', 'claude-vscode'], ['claude-local-user', 'local-agent'], ['unknown-user', 'future-mode']]) {
-    for (const kind of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) emitClaude(h, session, entrypoint, kind);
+    for (const kind of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) emitClaude(h, session, entrypoint, kind, session === 'unknown-user' ? { prompt: '제목 작성 업무를 진행해 주세요' } : {});
   }
   await h.start('manager'); await drained(h);
   const items = await h.manager('/items'); assert.equal(items.length, 4);
@@ -123,7 +123,7 @@ test('Claude print and SDK title workers outside WorkLog never create items; int
     const detail = await h.manager(`/items/${item.id}`);
     assert.ok(!detail.agents[0].source_id.startsWith('external-'));
     assert.equal(detail.sessions.length, 1); assert.equal(detail.sessions[0].pending, false);
-    assert.equal(detail.events.find(e => e.kind === 'input').text, titlePrompt);
+    assert.equal(detail.events.find(e => e.kind === 'input').text, detail.agents[0].source_id === 'unknown-user' ? '제목 작성 업무를 진행해 주세요' : titlePrompt);
   }
   assert.equal((await h.manager('/health')).quarantined, 0);
 });
@@ -134,7 +134,7 @@ test('confirmed Claude print identity survives spool replay, restart and later m
   await h.stop('manager'); await h.start('manager');
   emitClaude(h, 'shared-id', '', 'UserPromptSubmit'); emitClaude(h, 'shared-id', '', 'Stop');
   // A real Codex session with the same ID belongs to a different engine.
-  emit(h, 'shared-id', undefined, 'UserPromptSubmit'); emit(h, 'shared-id', undefined, 'Stop');
+  emit(h, 'shared-id', undefined, 'UserPromptSubmit', { prompt: '일반 사용자 작업' }); emit(h, 'shared-id', undefined, 'Stop');
   await drained(h);
   const items = await h.manager('/items'); assert.equal(items.length, 1);
   assert.equal((await h.manager(`/items/${items[0].id}`)).agents[0].engine, 'codex');
@@ -201,7 +201,7 @@ test('spool collection preflights later identities and isolates malformed record
     write('001-' + engine, input); write('999-' + engine, output);
   }
   write('000-bad', null);
-  const ordinary = pair('ordinary', '09:00:00', '09:01:00', 't', { source: 'system_hook', role: 'user', text: titlePrompt });
+  const ordinary = pair('ordinary', '09:00:00', '09:01:00', 't', { source: 'system_hook', role: 'user', text: '일반 사용자 작업' });
   write('002-user', ordinary[0]); write('998-user', ordinary[1]);
   await h.start('manager'); await drained(h);
   const items = await h.manager('/items'); assert.equal(items.length, 1);

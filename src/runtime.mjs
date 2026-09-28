@@ -60,7 +60,7 @@ function emit(event) { db.prepare('INSERT INTO outbox(payload) VALUES(?)').run(j
 // Internal jobs without an explicit owner keep their run/attempt evidence in
 // the runtime; they never create a synthetic work item in the user's history.
 function emitWorkEvent(request, event) {
-  if (request.track_work_item !== false && !(request.internal && request.task === 'task.type.draft')) emit(event);
+  if (request.track_work_item !== false && !(request.internal && request.task === 'task.type.draft')) emit({ ...event, internal: !!request.internal });
 }
 function eventBase(request) { return { engine: request.origin.engine, agent_session_id: request.origin.agent_session_id, turn_id: request.origin.turn_id, role: request.internal ? 'metadata' : 'user', work_item_id: request.work_item_id, source: 'runtime' }; }
 function update(runId, fields) {

@@ -2,7 +2,7 @@ import path from 'node:path';
 import { database, transaction, validateEvent, stableId, id, now, json, assert, digest } from './shared.mjs';
 import { currentHookEvent, receivedTurn, resolveHookTurns } from './hook-events.mjs';
 import { isWorkerWorkspace } from './worker-context.mjs';
-import { isNativeBackgroundEvent, nativeBackgroundIdentity } from './native-session.mjs';
+import { isNativeBackgroundEvent, nativeBackgroundIdentity, titleAutomationCandidate } from './native-session.mjs';
 
 const schema = `
 CREATE TABLE IF NOT EXISTS work_items (
@@ -52,6 +52,14 @@ CREATE TABLE IF NOT EXISTS cursors (source TEXT PRIMARY KEY, value TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS native_background_sessions (
  engine TEXT NOT NULL, source_id TEXT NOT NULL, kind TEXT NOT NULL,
  PRIMARY KEY(engine,source_id)
+);
+CREATE TABLE IF NOT EXISTS held_sessions (
+ id TEXT PRIMARY KEY, engine TEXT NOT NULL, source_id TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'pending', reason TEXT NOT NULL, created_at TEXT NOT NULL,
+ UNIQUE(engine,source_id)
+);
+CREATE TABLE IF NOT EXISTS held_events (
+ id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES held_sessions(id), payload TEXT NOT NULL
 );
 PRAGMA user_version=1;`;
 
@@ -255,9 +263,9 @@ export function managerStore(dir) {
     }
     return changedInputTurns(previous, currentLinks);
   }
-  function ingestMany(raws, cursor) {
-    return transaction(db, () => {
-      let inserted = 0, ignoredInternal = 0; const changed = new Set();
+  function ingestMany(raws, cursor, nested = false) {
+    const ingest = () => {
+      let inserted = 0, ignoredInternal = 0, heldCount = 0; const changed = new Set();
       const events = raws.map(validateEvent);
       // Resolve every identity before admitting any input: spool delivery and
       // API batches need not put SessionStart before UserPromptSubmit.
@@ -275,8 +283,38 @@ export function managerStore(dir) {
           || (e.source === 'system_hook' && e.role === 'user' && isWorkerWorkspace(dir, e.engine, e.cwd))) {
           ignoredInternal++; continue;
         }
+        // Internal bookkeeping may attach to an existing item, but must never
+        // reserve or manufacture an owner merely because an ID was supplied.
+        const internal = e.internal === true || e.role === 'metadata' || e.run?.internal === true;
+        if (internal) {
+          const requested = e.work_item_id || e.parent?.work_item_id;
+          if (!requested || !one('SELECT id FROM work_items WHERE id=?', canonical(requested)) || isDeleted(requested)) {
+            ignoredInternal++; continue;
+          }
+        }
         const aid = stableId('agent-', `${e.engine}:${e.agent_session_id}`);
         const uid = stableId('event-', `${e.engine}:${e.agent_session_id}:${e.id}`);
+        if (e.source === 'system_hook' && e.role === 'user') {
+          let held = one('SELECT * FROM held_sessions WHERE id=?', aid);
+          if (!held && titleAutomationCandidate(e)
+            && !one('SELECT 1 FROM agent_sessions WHERE id=?', aid)
+            && !one('SELECT 1 FROM agent_item_bindings WHERE agent_id=?', aid)) {
+            exec('INSERT INTO held_sessions VALUES(?,?,?,?,?,?)', aid, e.engine, e.agent_session_id, 'pending', 'title-automation-v1', now());
+            // Preserve observations delivered before the first input, including
+            // output-first spool ordering, without deleting their source rows.
+            exec('INSERT OR IGNORE INTO held_events SELECT id,agent_id,payload FROM events WHERE agent_id=?', aid);
+            held = { state: 'pending' };
+          }
+          if (held?.state === 'pending') {
+            const previous = one('SELECT payload FROM held_events WHERE id=?', uid);
+            if (previous) {
+              const old = JSON.parse(previous.payload);
+              assert(old.kind === e.kind && old.event_at === e.event_at && old.text === e.text && receivedTurn(old) === receivedTurn(e),
+                '같은 보류 이벤트 키에 다른 내용이 있습니다.', 409);
+            } else exec('INSERT INTO held_events VALUES(?,?,?)', uid, aid, json(e));
+            heldCount++; continue;
+          }
+        }
         const old = one('SELECT payload FROM events WHERE id=?', uid);
         if (old) {
           const previous = JSON.parse(old.payload);
@@ -337,8 +375,41 @@ export function managerStore(dir) {
       }
       projectChanged(changed);
       if (cursor) exec('INSERT INTO cursors VALUES(?,?) ON CONFLICT(source) DO UPDATE SET value=excluded.value', cursor.source, String(cursor.value));
-      return { inserted, duplicates: raws.length - inserted - ignoredInternal,
+      return { inserted, duplicates: raws.length - inserted - ignoredInternal - heldCount,
+        ...(heldCount ? { held: heldCount } : {}),
         ...(ignoredInternal ? { ignored_internal: ignoredInternal } : {}) };
+    };
+    return nested ? ingest() : transaction(db, ingest);
+  }
+  function heldSessions(before) {
+    assert(before == null || /^\d+$/.test(String(before)), '보류 목록 커서가 잘못되었습니다.');
+    const rows = all(`SELECT rowid AS sequence,* FROM held_sessions WHERE state='pending' AND rowid<?
+      ORDER BY rowid DESC LIMIT 51`, before == null ? Number.MAX_SAFE_INTEGER : Number(before));
+    return { records: rows.slice(0,50).map(row => ({ ...row,
+      event_count: one('SELECT COUNT(*) AS n FROM held_events WHERE session_id=?', row.id).n })),
+      next_cursor: rows.length > 50 ? String(rows[49].sequence) : null };
+  }
+  function heldDetail(id) {
+    const row = one('SELECT * FROM held_sessions WHERE id=?', id);
+    assert(row, '보류 기록을 찾을 수 없습니다.', 404);
+    return { ...row, events: all('SELECT payload FROM held_events WHERE session_id=? ORDER BY rowid LIMIT 100', id).map(r => JSON.parse(r.payload)),
+      event_count: one('SELECT COUNT(*) AS n FROM held_events WHERE session_id=?', id).n };
+  }
+  function promoteHeld(id) {
+    return transaction(db, () => {
+      const row = one('SELECT * FROM held_sessions WHERE id=?', id);
+      assert(row, '보류 기록을 찾을 수 없습니다.', 404);
+      assert(!one('SELECT 1 FROM native_background_sessions WHERE engine=? AND source_id=?', row.engine, row.source_id),
+        '내부 실행으로 확인된 세션은 업무로 등록할 수 없습니다.', 409);
+      if (row.state === 'pending') {
+        const events = all('SELECT payload FROM held_events WHERE session_id=? ORDER BY rowid', id).map(r => JSON.parse(r.payload));
+        assert(!events.some(isNativeBackgroundEvent), '내부 실행으로 확인된 세션은 업무로 등록할 수 없습니다.', 409);
+        exec("UPDATE held_sessions SET state='promoted' WHERE id=?", id);
+        ingestMany(events, null, true);
+      }
+      const binding = one('SELECT work_item_id FROM agent_item_bindings WHERE agent_id=?', id);
+      assert(binding, '원본 입력을 업무에 연결하지 못했습니다.', 409);
+      return { work_item_id: canonical(binding.work_item_id) };
     });
   }
   function projectChanged(changed) {
@@ -642,7 +713,7 @@ export function managerStore(dir) {
     }
     return [...grouped.values()].flat();
   }
-  return { db, ingestMany, agentContext, items, quickOverview, detail, history, runEvents, sessionMessages, merge, edit, tagList, editTags, calendar, canonical, sessionList, sessionEntries, isDeleted, visibilityRevision, deleteItems, restoreItems, storedRuns: runs,
+  return { db, ingestMany, heldSessions, heldDetail, promoteHeld, agentContext, items, quickOverview, detail, history, runEvents, sessionMessages, merge, edit, tagList, editTags, calendar, canonical, sessionList, sessionEntries, isDeleted, visibilityRevision, deleteItems, restoreItems, storedRuns: runs,
     cursor: source => one('SELECT value FROM cursors WHERE source=?', source)?.value || '0',
     stats: () => ({ events: one('SELECT COUNT(*) AS n FROM events').n, unresolved: one("SELECT COUNT(*) AS n FROM event_links l JOIN events e ON e.id=l.event_id WHERE l.resolution='unresolved' AND e.kind='output'").n }) };
 }
