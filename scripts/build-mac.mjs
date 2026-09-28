@@ -33,6 +33,8 @@ ${process.env.HARNESS_GUI_DATA_DIR ? `<key>HarnessDataRoot</key><string>${xml(pa
   run('swiftc', ['-O', '-target', 'arm64-apple-macos13.0', '-framework', 'Security', '-framework', 'LocalAuthentication', path.join(ROOT, 'apps/macos/keychain.swift'), '-o', path.join(contents, 'MacOS/WorkLogKeychain')]);
   onProgress('실행 환경과 앱 리소스를 구성합니다.');
   fs.copyFileSync(node, path.join(contents, 'MacOS/node')); fs.chmodSync(path.join(contents, 'MacOS/node'), 0o755);
+  fs.mkdirSync(path.join(contents, 'Helpers'), { recursive: true });
+  run('clang', ['-O2', '-Wall', '-Wextra', '-Werror', '-target', 'arm64-apple-macos13.0', path.join(ROOT, 'apps/macos/cli.c'), '-o', path.join(contents, 'Helpers/worklog')]);
   const bundled = path.join(resources, 'harness'); fs.mkdirSync(bundled, { recursive: true });
   for (const folder of ['src', 'bin', 'harness', 'contracts', 'apps/web', 'skills']) fs.cpSync(path.join(ROOT, folder), path.join(bundled, folder), { recursive: true });
   // Recreate only this build's generated scripts directory; do not ship development fixture launchers.

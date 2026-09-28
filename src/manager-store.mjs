@@ -638,7 +638,7 @@ export function managerStore(dir) {
     }
     return [...grouped.values()].flat();
   }
-  return { db, ingestMany, agentContext, items, quickOverview, detail, history, runEvents, sessionMessages, merge, edit, tagList, editTags, calendar, canonical, sessionList, sessionEntries, isDeleted, visibilityRevision, deleteItems, restoreItems,
+  return { db, ingestMany, agentContext, items, quickOverview, detail, history, runEvents, sessionMessages, merge, edit, tagList, editTags, calendar, canonical, sessionList, sessionEntries, isDeleted, visibilityRevision, deleteItems, restoreItems, storedRuns: runs,
     cursor: source => one('SELECT value FROM cursors WHERE source=?', source)?.value || '0',
     stats: () => ({ events: one('SELECT COUNT(*) AS n FROM events').n, unresolved: one("SELECT COUNT(*) AS n FROM event_links l JOIN events e ON e.id=l.event_id WHERE l.resolution='unresolved' AND e.kind='output'").n }) };
 }

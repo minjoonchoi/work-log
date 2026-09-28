@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { ROOT, dataRoot, initRoot, request, json, sleep } from '../src/shared.mjs';
 import { attachAgentOrigin, inspectAgentContext } from '../src/agent-origin.mjs';
+import { queryHelp, queryResources, validateQuery } from '../src/data-query.mjs';
 
 const args = process.argv.slice(2), command = args.shift(), dir = dataRoot();
 function option(name) {
@@ -83,6 +84,20 @@ try {
     result = await request(dir, 'runtime', command === 'orchestrate' ? '/plans' : '/runs', { method: 'POST', body: linkedPayload });
     if (wait) result = await waitFor(result);
     else notify(result, '시작');
+  } else if (command === 'query') {
+    if (!args.length || (args.length === 1 && ['--help', 'help'].includes(args[0]))) result = queryHelp;
+    else {
+      const resource = args.shift(), allowed = queryResources[resource];
+      if (!Array.isArray(allowed)) throw new Error('지원하지 않는 조회 대상입니다. harness query --help를 확인하세요.');
+      const params = new URLSearchParams({ resource });
+      if (allowed.includes('id') && args[0] && !args[0].startsWith('--')) params.set('id', args.shift());
+      for (const key of allowed.filter(key => key !== 'id')) {
+        const value = option(`--${key}`); if (value !== undefined) params.set(key, value);
+      }
+      if (args.length) throw new Error('지원하지 않거나 중복된 조회 인자입니다. harness query --help를 확인하세요.');
+      validateQuery(params);
+      result = await request(dir, 'manager', `/api/query?${params}`);
+    }
   } else if (command === 'context') {
     const engine = option('--engine') || 'codex', session = option('--session');
     if (args.length) throw new Error('context는 --engine codex|claude와 실제 --session ID만 받습니다.');
@@ -138,8 +153,9 @@ try {
     result = { usage: ['harness start', 'harness run --input request.json --wait [--engine codex|claude]',
       'harness orchestrate --input plan.json --wait [--engine codex|claude]', 'harness status [run-id|plan-id] [--wait]',
       'harness cancel|result run-id|plan-id', 'harness resume run-id|plan-id [--wait]', 'harness evidence run-id',
+      'harness query --help', 'harness query <items|item|sessions|session|history|runs|run|reports|report|tags> [id] [options]',
       'harness catalog [--summary|--task task-id]', 'harness context [--engine codex|claude] [--session native-session-id]', 'harness doctor', 'harness install-plan [--output directory]'],
       note: 'work 스킬이 사용자 요청을 등록 업무의 구조화된 계획으로 분할합니다. 서비스가 실행 순서와 검토·수정을 관리하며 stdout에는 최종 JSON, stderr에는 간단한 진행 상태를 출력합니다.' };
   }
   if (result) console.log(json(result));
-} catch (e) { console.error(json({ error: e.message, ...(typeof e.code === 'string' && e.code.startsWith('agent_') ? { code: e.code, retryable: e.retryable } : {}) })); process.exitCode = 1; }
+} catch (e) { console.error(json({ error: e.message, ...(command === 'query' && e.status ? { status: e.status } : {}), ...(typeof e.code === 'string' && e.code.startsWith('agent_') ? { code: e.code, retryable: e.retryable } : {}) })); process.exitCode = 1; }

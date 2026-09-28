@@ -255,3 +255,7 @@ OAuth 연결 자체는 Jira 티켓을 만들지 않습니다. 상세에서 새�
 공식 연결 규약은 [Codex Hooks](https://learn.chatgpt.com/docs/hooks), [Codex 비대화형 실행](https://learn.chatgpt.com/docs/non-interactive-mode), [Claude Hooks](https://code.claude.com/docs/en/hooks), [Claude headless](https://code.claude.com/docs/en/headless)를 기준으로 작성했습니다. Codex App의 환경별 훅 가시성은 실제 설치 후 별도 확인해야 합니다.
 
 현재 작업 계약·계획 API·복구는 [작업 오케스트레이션](docs/task-orchestration.md), 모델 설정은 [실행 프로필](docs/execution-profiles.md), 설치·제거는 [설치 소유권](docs/installation-ownership.md)에 있습니다. [세션·캘린더 설계](docs/harness-session-calendar-design.md)의 EVAL 목록은 기대 시나리오이며 모두 구현·통과했다는 뜻은 아닙니다. [0.1 구현 기록](docs/implementation-v0.1.md)과 버전별 검증 문서는 당시 상태를 보존한 기록입니다.
+
+## 에이전트의 로컬 기록 조회
+
+`node bin/harness.mjs query items --search "인증"`으로 업무를 검색하고, `query sessions --item ITEM_ID`로 세션 요약을 조회할 수 있습니다. 원본 입출력은 `query history --item ITEM_ID --session SESSION_ID`로 조회합니다. 결과는 페이지 단위 JSON이며 모델 실행이나 데이터 변경을 일으키지 않습니다. 설치 앱에는 `~/Applications/WorkLog.app/Contents/Helpers/worklog` 실행 파일도 포함됩니다. [전체 조회 명령과 사용법](docs/data-query-cli.md)을 참고하세요.

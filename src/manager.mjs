@@ -16,6 +16,7 @@ import { notificationStore } from './notifications.mjs';
 import { reportStore } from './reports.mjs';
 import { reportsCoordinator } from './reports-coordinator.mjs';
 import { confluenceReports } from './confluence-reports.mjs';
+import { dataQuery } from './data-query.mjs';
 
 const dir = dataRoot(); lockService(dir, 'manager');
 // Test and development data roots must never fall back to the user's agent settings.
@@ -53,6 +54,8 @@ const notificationCounts = rows => {
 };
 // List/calendar views need accepted summary labels, not source snapshots or complete histories.
 const sessionSummaries = () => new Map(store.db.prepare('SELECT session_id,state,text FROM session_summaries').all().map(s => [s.session_id, s]));
+const queryData = dataQuery({ store, itemListing, sessionSummaries, reports,
+  itemDetail: itemId => jira.decorate(integrations.decorate(store.detail(itemId, { summary: true }))) });
 function itemListing(params) {
   assert([...params.keys()].every(key => ['q', 'jira', 'trash', 'tag', 'untagged'].includes(key))
     && ['q', 'jira', 'trash', 'tag', 'untagged'].every(key => params.getAll(key).length <= 1), '업무 조회 조건이 잘못되었습니다.');
@@ -230,6 +233,7 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (publishRoute && req.method === 'POST') return reportPublisher.publish(publishRoute[1], await body(req));
     const publicationResolve = p.match(/^\/api\/reports\/([^/]+)\/publications\/([^/]+)\/resolve$/);
     if (publicationResolve && req.method === 'POST') return reportPublisher.resolve(publicationResolve[1], publicationResolve[2], await body(req));
+    if (req.method === 'GET' && p === '/api/query') return queryData(url.searchParams);
     if (req.method === 'GET' && p === '/api/items') return itemListing(url.searchParams);
     if (req.method === 'GET' && p === '/api/tags') {
       assert([...url.searchParams.keys()].every(key => key === 'trash') && url.searchParams.getAll('trash').length <= 1,
