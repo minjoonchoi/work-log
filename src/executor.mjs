@@ -66,7 +66,7 @@ export function execute(context) {
   const allowed = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM', 'CODEX_HOME',
     'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'];
   const env = Object.fromEntries(allowed.filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]]));
-  Object.assign(env, { HARNESS_DATA_DIR: context.dataDir, HARNESS_WORKER: '1', HARNESS_PARENT: json(parent),
+  Object.assign(env, { HARNESS_DATA_DIR: context.dataDir, WORKLOG_TRACKING_DISABLED: '1', HARNESS_WORKER: '1', HARNESS_PARENT: json(parent),
     HARNESS_ATTEMPT_ID: parent.task_id, HARNESS_ENGINE: engine, HARNESS_STAGE: stage,
     HARNESS_TEST_MODE: process.env.HARNESS_TEST_MODE || '' });
   if (!versions.has(command)) {

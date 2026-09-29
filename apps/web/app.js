@@ -133,7 +133,6 @@ async function load(force = false) {
     // Summary edits can change calendar labels without adding an input/output event.
     if (state.view === 'calendar') await renderCalendar();
     if (state.view === 'reports') await reports.refresh();
-    if (state.view === 'queue') await renderQueue();
     $('#error').hidden = true;
   } catch (e) {
     if (requestNumber !== loadRequest) return;
@@ -214,25 +213,14 @@ async function showView(view, currentOnly = false) {
   state.view = view; state.currentOnly = currentOnly;
   $('#items-view').hidden = view !== 'items'; $('#calendar-view').hidden = view !== 'calendar';
   $('#notifications-view').hidden = view !== 'notifications';
-  $('#queue-view').hidden = view !== 'queue';
   $('#reports-view').hidden = view !== 'reports';
-  if (view === 'notifications' || view === 'reports' || view === 'queue') closeDetail();
-  $('#page-title').textContent = view === 'queue' ? '대기열' : view === 'reports' ? '업무 요약' : view === 'calendar' ? '작업 캘린더' : view === 'notifications' ? '알림' : currentOnly ? '현재 작업' : '업무 목록';
-  $('#page-description').textContent = view === 'queue' ? '사용자 요청과 내부 자동 작성의 대기·실행 상태를 확인하세요.' : view === 'reports' ? '일별 기록을 모아 분기·반기·연간 업무 요약을 작성하세요.' : view === 'calendar' ? '업무가 이어진 시간과 세션의 흐름을 살펴보세요.' : view === 'notifications' ? '실행·요약·Jira 연동에서 처리할 문제가 생기면 알려드립니다.' : '여러 에이전트의 작업과 대화를 한곳에서 이어 보세요.';
+  if (view === 'notifications' || view === 'reports') closeDetail();
+  $('#page-title').textContent = view === 'reports' ? '업무 요약' : view === 'calendar' ? '작업 캘린더' : view === 'notifications' ? '알림' : currentOnly ? '현재 작업' : '업무 목록';
+  $('#page-description').textContent = view === 'reports' ? '일별 기록을 모아 분기·반기·연간 업무 요약을 작성하세요.' : view === 'calendar' ? '업무가 이어진 시간과 세션의 흐름을 살펴보세요.' : view === 'notifications' ? '실행·요약·Jira 연동에서 처리할 문제가 생기면 알려드립니다.' : '여러 에이전트의 작업과 대화를 한곳에서 이어 보세요.';
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  $(view === 'queue' ? '#nav-queue' : view === 'reports' ? '#nav-reports' : view === 'calendar' ? '#nav-calendar' : view === 'notifications' ? '#nav-notifications' : '#nav-items').classList.add('active');
+  $(view === 'reports' ? '#nav-reports' : view === 'calendar' ? '#nav-calendar' : view === 'notifications' ? '#nav-notifications' : '#nav-items').classList.add('active');
   listRevision = ''; notificationRevision = '';
   await load(true);
-}
-async function renderQueue() {
-  const queue = await api('/task-queue');
-  if (state.view !== 'queue') return;
-  $('#queue-health').textContent = queue.runtime_connected ? '실시간 갱신 · 완료한 작업은 대기열에서 사라집니다.' : '실행 서비스 연결 끊김 · 실행 상태와 전체 대기열을 확인할 수 없습니다.';
-  $('#queue-list').innerHTML = ['running', 'pending', 'unknown'].map(status => {
-    const rows = queue.rows.filter(row => row.status === status);
-    if (status === 'unknown' && !rows.length) return '';
-    return `<section class="detail-section"><h2>${{ running: '실행 중', pending: '대기 중', unknown: '상태 미확인' }[status]} · ${rows.length}</h2>${rows.map(row => `<article class="run"><div class="result-heading"><h3>${esc(taskLabels[row.task] || row.task)}</h3><span>${row.kind === 'internal' ? 'WorkLog 내부 작업' : '사용자 요청'}</span></div><p>${esc(stageLabels[row.stage] || row.stage || '준비')} · ${esc(absoluteTime(row.created_at))}</p>${row.message ? `<p>${esc(row.message)}</p>` : ''}<small>${esc(row.id)}</small></article>`).join('') || '<p class="help">해당 작업이 없습니다.</p>'}</section>`;
-  }).join('');
 }
 const dismissingNotifications = new Set();
 function focusNotification(id) {
@@ -318,7 +306,7 @@ function runHTML(run) {
   return `<article class="run session-result" data-run-id="${esc(run.id)}"><div class="result-heading"><h4>${esc(taskLabels[run.task] || run.task || '연결된 작업')}</h4>${badge(run.status)}</div>
     <p>${esc(run.message || fallback[run.status] || '실행 상세에서 기록을 확인하세요.')}</p>
     <div class="result-actions">${['pending', 'running'].includes(run.status) ? `<button class="secondary" data-cancel="${esc(run.id)}">실행 취소</button>` : ''}
-      ${['failed', 'blocked', 'interrupted', 'cancelled'].includes(run.status) ? `<button class="secondary" data-resume="${esc(run.id)}">${run.plan_id ? '전체 계획 재개' : '다시 실행'}</button>` : ''}
+      ${['session.summarize', 'text.rewrite', 'work.report.create', 'work-item.result.summarize'].includes(run.task) && !run.plan_id && ['failed', 'blocked', 'interrupted', 'cancelled'].includes(run.status) ? `<button class="secondary" data-resume="${esc(run.id)}">${run.plan_id ? '전체 계획 재개' : '다시 실행'}</button>` : ''}
       ${run.artifact && run.status === 'completed' ? `<button class="writing-action writing-action-accent" data-artifact="${esc(run.id)}">산출물 보기</button>` : ''}
       ${run.evidence ? `<button class="secondary" data-evidence="${esc(run.id)}">검사 결과 보기</button>` : ''}
       <button class="secondary" data-run-details="${esc(run.id)}">실행 상세</button></div></article>`;
@@ -575,7 +563,6 @@ async function renderCalendar() {
 }
 $('#nav-items').onclick = safe(() => showView('items'));
 $('#nav-calendar').onclick = safe(() => showView('calendar'));
-$('#nav-queue').onclick = safe(() => showView('queue'));
 $('#nav-reports').onclick = safe(() => showView('reports'));
 $('#nav-notifications').onclick = safe(() => showView('notifications'));
 $('#refresh-notifications').onclick = safe(() => load(true));

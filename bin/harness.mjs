@@ -68,22 +68,7 @@ try {
     }
     result = { running: true, data_root: dir };
   } else if (command === 'run' || command === 'orchestrate') {
-    const wait = flag('--wait');
-    const task = option('--task'), engine = option('--engine'), item = option('--item'), inputPath = option('--input');
-    if (process.env.HARNESS_WORKER === '1') throw new Error('worker에서 하네스의 재귀 실행은 허용되지 않습니다.');
-    if (command === 'orchestrate' && (!inputPath || task || args.length)) throw new Error('orchestrate는 prompt와 steps를 담은 --input JSON 파일이 필요합니다.');
-    const payload = inputPath ? JSON.parse(fs.readFileSync(inputPath, 'utf8')) : { prompt: args.join(' ') };
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('요청은 JSON 객체여야 합니다.');
-    if (task) payload.task = task;
-    if (engine) payload.engine = engine;
-    if (item) payload.work_item_id = item;
-    // The calling agent's project directory is distinct from the background
-    // service and each worker's isolated temporary directory.
-    payload.workspace ??= fs.realpathSync(process.cwd());
-    const linkedPayload = await attachAgentOrigin(dir, payload);
-    result = await request(dir, 'runtime', command === 'orchestrate' ? '/plans' : '/runs', { method: 'POST', body: linkedPayload });
-    if (wait) result = await waitFor(result);
-    else notify(result, '시작');
+    throw new Error('하네스 작업 위임은 제거되었습니다. WorkLog는 세션 이력 수집·정리만 지원합니다.');
   } else if (command === 'query') {
     if (!args.length || (args.length === 1 && ['--help', 'help'].includes(args[0]))) result = queryHelp;
     else {
@@ -104,26 +89,7 @@ try {
     if (process.env.HARNESS_WORKER === '1') throw new Error('worker에서 사용자 업무 연결을 조회하지 않습니다.');
     result = { status: 'ready', ...await inspectAgentContext(dir, { engine, session_id: session || (engine === 'codex' ? process.env.CODEX_THREAD_ID : undefined) }) };
   } else if (command === 'catalog') {
-    const summary = flag('--summary'), task = option('--task');
-    if (args.length || (summary && task)) throw new Error('catalog는 --summary 또는 --task <업무 ID> 중 하나만 지정하세요.');
-    result = await request(dir, 'runtime', '/catalog?scope=harness');
-    // A previously loaded skill must still discover the current user selection.
-    // Older services ignore the scope query; never treat their full catalog as
-    // an installed-task allowlist or expose WorkLog's app-only writing jobs.
-    if (result.scope !== 'harness' || !Array.isArray(result.jobs)
-      || result.jobs.some(job => job.internal || job.management_group !== 'harness' || job.installed !== true))
-      throw new Error('현재 설치된 하네스 작업 목록을 확인할 수 없습니다. WorkLog 앱과 실행 서비스를 같은 최신 버전으로 업데이트하세요.');
-    if (task) {
-      result = result.jobs.find(job => job.id === task);
-      if (!result) throw new Error(`지원하지 않는 업무입니다: ${task}. 현재 설치된 직무 작업 목록에서 선택하세요.`);
-    } else if (summary) {
-      result = { version: result.version, scope: result.scope, package_revision: result.package_revision, installed_packages: result.installed_packages,
-        jobs: result.jobs.map(({ id, label, category, kind, internal, installed, boundary, routing, review_policy, source, template_id, description, management_group, package_ids }) => ({
-        id, label, category, kind, internal, installed, review_policy, source, template_id, description, management_group, package_ids,
-        ...(boundary ? { boundary: { owns: boundary.owns, excludes: boundary.excludes, deliverable: boundary.deliverable } } : {}),
-        routing
-      })) };
-    }
+    throw new Error('직무 작업 카탈로그는 제거되었습니다. 자동 작성 설정은 앱에서 확인하세요.');
   } else if (['status', 'cancel', 'resume', 'result', 'evidence'].includes(command)) {
     const wait = flag('--wait'), runId = args[0], isPlan = String(runId || '').startsWith('plan-');
     if (!runId && command !== 'status') throw new Error(`${command}에는 run ID 또는 plan ID가 필요합니다.`);
@@ -150,12 +116,9 @@ try {
   } else if (command === 'install-plan') {
     const { prepareInstall } = await import('../scripts/install.mjs'); result = prepareInstall({ output: option('--output') || path.join(ROOT, 'dist/install-plan') });
   } else {
-    result = { usage: ['harness start', 'harness run --input request.json --wait [--engine codex|claude]',
-      'harness orchestrate --input plan.json --wait [--engine codex|claude]', 'harness status [run-id|plan-id] [--wait]',
-      'harness cancel|result run-id|plan-id', 'harness resume run-id|plan-id [--wait]', 'harness evidence run-id',
-      'harness query --help', 'harness query <items|item|sessions|session|history|runs|run|reports|report|tags> [id] [options]',
-      'harness catalog [--summary|--task task-id]', 'harness context [--engine codex|claude] [--session native-session-id]', 'harness doctor', 'harness install-plan [--output directory]'],
-      note: 'work 스킬이 사용자 요청을 등록 업무의 구조화된 계획으로 분할합니다. 서비스가 실행 순서와 검토·수정을 관리하며 stdout에는 최종 JSON, stderr에는 간단한 진행 상태를 출력합니다.' };
+    result = { usage: ['worklog query --help', 'worklog query <items|item|sessions|session|history|runs|run|reports|report|tags> [id] [options]',
+      'worklog status [run-id]', 'worklog result run-id', 'worklog doctor'],
+      note: 'WorkLog는 로컬 세션 이력을 수집하고 요약합니다. 자동 작성과 연동 설정은 앱에서 관리합니다.' };
   }
   if (result) console.log(json(result));
 } catch (e) { console.error(json({ error: e.message, ...(command === 'query' && e.status ? { status: e.status } : {}), ...(typeof e.code === 'string' && e.code.startsWith('agent_') ? { code: e.code, retryable: e.retryable } : {}) })); process.exitCode = 1; }

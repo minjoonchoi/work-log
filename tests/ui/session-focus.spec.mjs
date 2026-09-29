@@ -1,0 +1,34 @@
+import { test, expect } from '@playwright/test';
+import fs from 'node:fs';
+import { Harness } from '../helpers.mjs';
+import { readEndpoint } from '../../src/shared.mjs';
+let h;
+test.beforeEach(async ({ context }) => {
+  h = new Harness(); await h.start('runtime'); await h.start('manager');
+  await context.addInitScript(token => window.__HARNESS_TOKEN__ = token, fs.readFileSync(h.dir + '/token', 'utf8'));
+});
+test.afterEach(async () => h.close());
+test('only history utilities remain in navigation, connections and writer settings', async ({ page }) => {
+  const retired = [];
+  page.on('request', r => { if (/harness-packages|task-queue/.test(r.url())) retired.push(r.url()); });
+  await page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}`);
+  await expect(page.getByRole('button', { name: '대기열', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '연결 설정', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '에이전트 연결', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: '직무 패키지', exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-connection=codex-harness]')).toHaveCount(0);
+  await expect(page.locator('[data-connection=codex-tracking]')).toBeVisible();
+  await page.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Atlassian 설정', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '닫기', exact: true }).click();
+  await page.getByRole('button', { name: '작업 실행 설정', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '하네스 작업', exact: true })).toHaveCount(0);
+  await expect(page.locator('#execution-task option')).toHaveCount(4);
+  expect(await page.locator('#execution-task option').evaluateAll(nodes => nodes.map(n => n.value).sort())).toEqual(['session.summarize', 'text.rewrite', 'work-item.result.summarize', 'work.report.create'].sort());
+  await page.locator('#execution-task').selectOption('session.summarize');
+  await page.getByRole('tab', { name: '원문 편집', exact: true }).click();
+  await page.locator('#task-instruction').fill('제공된 세션 이력만 간결하게 요약합니다.');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page.locator('#toast')).toContainText('저장했습니다');
+  expect(retired).toEqual([]);
+});

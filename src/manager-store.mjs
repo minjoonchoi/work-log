@@ -284,21 +284,28 @@ export function managerStore(dir, { clock = Date.now } = {}) {
       for (const e of events) {
         // Old hook commands and queued deliveries can bypass the hook-side
         // filter. Apply executor-owned identity before reserving any user item.
-        // Runtime worker events are retained under their explicit parent owner.
+        // Headless worker events are excluded even when an explicit parent exists.
         if (isNativeBackgroundEvent(e)
           || (e.source === 'system_hook' && e.role === 'user'
             && one('SELECT 1 FROM native_background_sessions WHERE engine=? AND source_id=?', e.engine, e.agent_session_id))
           || (e.source === 'system_hook' && e.role === 'user' && isWorkerWorkspace(dir, e.engine, e.cwd))) {
           ignoredInternal++; continue;
         }
-        // Internal bookkeeping may attach to an existing item, but must never
-        // reserve or manufacture an owner merely because an ID was supplied.
-        const internal = e.internal === true || e.role === 'metadata' || e.run?.internal === true;
-        if (internal) {
+        // Execution status is a diagnostic of an existing owner, not an agent
+        // session. Neither runtime status nor headless I/O may reserve an item.
+        if (e.kind === 'run.updated') {
           const requested = e.work_item_id || e.parent?.work_item_id;
-          if (!requested || !one('SELECT id FROM work_items WHERE id=?', canonical(requested)) || isDeleted(requested)) {
-            ignoredInternal++; continue;
+          const owner = requested && canonical(requested);
+          if (owner && !isDeleted(owner) && one('SELECT id FROM work_items WHERE id=?', owner) && e.run) {
+            exec('INSERT INTO run_views VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',
+              e.run.id, owner, json(e.run));
+            inserted++; continue; // Notify status subscribers without adding a session event.
           }
+          ignoredInternal++; continue;
+        }
+        if (e.tracking_disabled === true || e.internal === true || e.role !== 'user'
+          || e.run?.internal === true || (e.source && e.source !== 'system_hook')) {
+          ignoredInternal++; continue;
         }
         const aid = stableId('agent-', `${e.engine}:${e.agent_session_id}`);
         const uid = stableId('event-', `${e.engine}:${e.agent_session_id}:${e.id}`);

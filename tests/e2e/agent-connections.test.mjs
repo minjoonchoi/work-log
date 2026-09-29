@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { prepareInstall, applyInstall } from '../../scripts/install.mjs';
 import { applyUninstall } from '../../scripts/uninstall.mjs';
-import { locations, quote } from '../../scripts/install-state.mjs';
+import { locations, quote, skillLinks } from '../../scripts/install-state.mjs';
 import { ROOT, readEndpoint } from '../../src/shared.mjs';
 import { Harness, eventually } from '../helpers.mjs';
 
@@ -145,4 +145,21 @@ test('installed manager controls tracking and harness independently and collecti
   await h.close(false);
   assert.equal(applyUninstall({ homeDir: f.homeDir, deactivate: false }).status, 'uninstalled');
   for (const file of Object.values(loc.configs)) assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), JSON.parse(f.original));
+});
+
+
+test('session-only reinstall removes owned legacy skill links while preserving tracking hooks and data', async t => {
+  const { h, homeDir, loc, plan } = await installedManager(t);
+  await h.manager('/agent-connections/codex/tracking', { method: 'POST', body: {} });
+  await h.stop('manager');
+  const receipt = JSON.parse(fs.readFileSync(loc.manifest, 'utf8'));
+  const links = skillLinks(loc, receipt.skills, receipt.trees[1].path);
+  for (const link of links) { fs.mkdirSync(path.dirname(link.path), { recursive: true }); fs.symlinkSync(link.target, link.path); }
+  receipt.links.push(...links); fs.writeFileSync(loc.manifest, JSON.stringify(receipt));
+  const before = fs.readFileSync(loc.configs.codex, 'utf8');
+  const result = applyInstall(plan, { activate: false, reinstall: true });
+  assert.equal(result.connection_cleanup, undefined);
+  for (const link of links) assert.equal(fs.existsSync(link.path), false);
+  assert.equal(fs.readFileSync(loc.configs.codex, 'utf8'), before);
+  assert.equal(JSON.parse(fs.readFileSync(loc.manifest)).links.length, 0);
 });

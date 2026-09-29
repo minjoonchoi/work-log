@@ -21,7 +21,7 @@ for (const scale of [1, 2]) test(`bundled navigation icons render offline withou
     await page.goto(base);
     await page.addStyleTag({ content: '* { font-family: monospace !important; }' });
     const menus = page.locator('.sidebar button');
-    await expect(menus).toHaveCount(8);
+    await expect(menus).toHaveCount(7);
     for (const menu of await menus.all()) {
       const icon = menu.locator('svg.menu-icon');
       await expect(icon).toBeVisible(); await expect(icon).toHaveAttribute('aria-hidden', 'true');
@@ -54,6 +54,6 @@ test('navigation icons remain visible before scripts run or service authenticati
     const page = await context.newPage();
     await page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}`);
     for (const icon of await page.locator('.sidebar button svg').all()) await expect(icon).toBeVisible();
-    await expect(page.locator('.sidebar button svg')).toHaveCount(8);
+    await expect(page.locator('.sidebar button svg')).toHaveCount(7);
   } finally { await context.close(); }
 });

@@ -35,6 +35,10 @@ function formatResult(operation, result) {
       field('계획 파일', result.output && `${result.output}/plan.json`);
       lines.push('  make install로 설치할 수 있습니다.');
     }
+    if (result.connection_cleanup?.length) {
+      lines.push('  이전 위임 연결 정리 확인 필요:');
+      for (const row of result.connection_cleanup) lines.push(`    - ${row.engine}: ${row.message}`);
+    }
     const cleanup = result.build_cleanup;
     if (cleanup?.removed.length) field('중복 빌드 앱 정리', `${cleanup.removed.length}개`);
     if (cleanup?.preserved.length) {

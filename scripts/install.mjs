@@ -1,3 +1,4 @@
+import { disconnectAgentComponent } from './agent-connections.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -60,7 +61,7 @@ export function checkInstallation({ homeDir = os.homedir(), activate = true, lau
   });
 }
 
-export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, launchctl = spawnSync, onProgress = () => {},
+function applyInstallCore(plan, { homeDir = plan.homeDir, activate = true, launchctl = spawnSync, onProgress = () => {},
   reinstall = false, stopTimeoutMs = 10000 } = {}) {
   return locked(homeDir, loc => {
     onProgress('설치 경로와 기존 소유 기록을 확인합니다.');
@@ -146,6 +147,16 @@ export function applyInstall(plan, { homeDir = plan.homeDir, activate = true, la
       throw e;
     } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   });
+}
+
+export function applyInstall(plan, options = {}) {
+  const result = applyInstallCore(plan, options);
+  const cleanup = [];
+  for (const engine of ['codex', 'claude']) {
+    try { disconnectAgentComponent(engine, 'harness', { homeDir: options.homeDir || plan.homeDir }); }
+    catch (error) { cleanup.push({ engine, message: error.message }); }
+  }
+  return { ...result, ...(cleanup.length ? { connection_cleanup: cleanup } : {}) };
 }
 
 const invokedAsProgram = process.argv[1]

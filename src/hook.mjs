@@ -4,7 +4,7 @@ import path from 'node:path';
 
 // Executor records worker I/O and lifecycle. Skip before reading stdin, loading
 // the database module, or touching the data directory, including malformed input.
-if (process.env.HARNESS_WORKER === '1') process.exit(0);
+if (process.env.WORKLOG_TRACKING_DISABLED === '1' || process.env.HARNESS_WORKER === '1') process.exit(0);
 const { dataRoot, initRoot, id, stableId, now, json, atomic, redact } = await import('./shared.mjs');
 const { spoolHookEvent } = await import('./hook-events.mjs');
 const { isWorkerWorkspace } = await import('./worker-context.mjs');

@@ -101,8 +101,8 @@ test('completed work reports and cached run artifacts remain queryable after the
   const h = await setup(t); await h.start('runtime');
   const created = await h.manager('/reports', { method: 'POST', body: { operation_id: 'query-report', dates: ['2026-09-17'], timezone: 'UTC' } });
   const complete = await eventually(() => h.manager(`/reports/${created.id}?view=summary`), row => row.report.state === 'completed', 20000);
-  const run = await h.finish(await h.run({ work_item_id: 'item-1' })); assert.equal(run.status, 'completed');
-  await eventually(() => query(h, 'runs', '--item', 'item-1'), value => value.records.some(row => row.id === run.id && row.status === 'completed'));
+  const run = await h.finish(await h.run({ work_item_id: 'item-1', task: 'session.summarize', internal: true, input: { title: '기록 요약', events: [{ kind: 'input', event_at: '2026-09-17T00:00:00Z', text: '기록을 정리해 주세요.' }] } })); assert.equal(run.status, 'completed');
+  await eventually(() => query(h, 'runs', '--item', 'item-1', '--internal', 'include'), value => value.records.some(row => row.id === run.id && row.status === 'completed'));
   await h.stop('runtime');
   const listed = await query(h, 'reports'); assert.equal(listed.records[0].id, created.id); assert.equal(listed.records[0].body, undefined);
   const report = (await query(h, 'report', created.id)).record; assert.equal(report.report.body, complete.report.body); assert.equal(report.sessions, undefined);

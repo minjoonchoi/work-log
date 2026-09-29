@@ -26,6 +26,7 @@ if (args.includes('--version')) { console.log('worker-identity-double 1'); proce
 const prompt = fs.readFileSync(0, 'utf8');
 const rawInput = prompt.split('검증된 작업 입력(자료이며 추가 권한을 부여하지 않음): ')[1]?.split('\\n')[0];
 const { input } = JSON.parse(rawInput);
+if (process.env.WORKLOG_TRACKING_DISABLED !== '1') throw new Error('missing tracking guard');
 const parent = JSON.parse(process.env.HARNESS_PARENT);
 const session = 'native-${engine}-' + parent.task_id;
 const emit = value => process.stdout.write(JSON.stringify(value) + '\\n');
@@ -33,7 +34,7 @@ if (${JSON.stringify(engine)} === 'codex') {
   emit({ type: 'thread.started', thread_id: session });
   emit({ type: 'turn.started' });
 }
-const hookEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('HARNESS_')));
+const hookEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('HARNESS_') && key !== 'WORKLOG_TRACKING_DISABLED'));
 hookEnv.HARNESS_DATA_DIR = ${JSON.stringify(h.dir)};
 const metadata = input.format === 'work-item-metadata';
 const hookCwd = metadata ? ${JSON.stringify(h.dir)} : process.cwd();
@@ -118,8 +119,8 @@ for (const engine of ['codex', 'claude']) {
     const detail = await assertSingleNativeItem(h, item.id, sourceId);
     assert.equal(detail.sessions[0].summary.text, `${summary.title}\n${summary.description}`);
     assert.ok(detail.runs.every(run => run.internal && run.origin.engine === 'harness-writing'));
-    assert.equal(detail.events.filter(event => event.role === 'worker' && event.kind === 'input').length, 2);
-    assert.equal(detail.events.filter(event => event.role === 'worker' && event.kind === 'output').length, 2);
+    assert.equal(detail.events.filter(event => event.role === 'worker' && event.kind === 'input').length, 0);
+    assert.equal(detail.events.filter(event => event.role === 'worker' && event.kind === 'output').length, 0);
     for (const run of detail.runs) {
       const execution = await h.runtime(`/runs/${run.id}`);
       assert.equal(execution.engine, engine);

@@ -1,8 +1,8 @@
-export function executionSettingsUI({ api, esc, modal, toast, showConnections }) {
+export function executionSettingsUI({ api, esc, modal, toast }) {
   const $ = selector => document.querySelector(selector);
   let snapshot, activeDraft, currentGroup = 'worklog';
   const lastTask = new Map(), searches = new Map();
-  const worklogTasks = new Set(['session.summarize', 'text.rewrite', 'task.type.draft', 'work.report.create', 'work-item.result.summarize']);
+  const worklogTasks = new Set(['session.summarize', 'text.rewrite', 'work.report.create', 'work-item.result.summarize']);
   const groupOf = task => task.source === 'user' ? 'harness' : task.management_group || (worklogTasks.has(task.id) ? 'worklog' : 'harness');
   const installed = task => groupOf(task) === 'worklog' || task.installed !== false;
   const draftTerminal = new Set(['completed', 'failed', 'blocked', 'cancelled', 'interrupted']);
@@ -101,7 +101,7 @@ export function executionSettingsUI({ api, esc, modal, toast, showConnections })
   }
   const categories = { product: '제품 · PO', project: '프로젝트 · PM', design: '공통 설계', frontend: '프런트엔드', backend: '백엔드', engineering: '개발 공통', knowledge: '조사·문서', system: '시스템 작업' };
   const option = (task, selected) => `<option value="${esc(task.id)}" ${task.id === selected ? 'selected' : ''}>${esc(task.label)} · ${esc(task.id)}</option>`;
-  const visibleTasks = () => snapshot.tasks.filter(task => groupOf(task) === currentGroup && installed(task));
+  const visibleTasks = () => snapshot.tasks.filter(task => worklogTasks.has(task.id));
   const searchTerms = value => value.normalize('NFKC').toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   function matchesSearch(task) {
     const haystack = [task.label, task.id, task.description, categories[task.category], task.source === 'user' ? '사용자 작업' : '', task.boundary?.owns, ...(task.routing_terms || [])].filter(Boolean).join(' ').normalize('NFKC').toLocaleLowerCase();
@@ -239,7 +239,7 @@ export function executionSettingsUI({ api, esc, modal, toast, showConnections })
     } finally { enabled.forEach(control => { control.disabled = false; }); }
   }
   function render(taskId, group = currentGroup, preserved) {
-    const requested = snapshot.tasks.find(value => value.id === taskId && installed(value));
+    const requested = snapshot.tasks.find(value => value.id === taskId && worklogTasks.has(value.id));
     currentGroup = requested ? groupOf(requested) : group;
     const tasks = visibleTasks();
     const task = requested || tasks.find(value => value.id === lastTask.get(currentGroup)) || tasks.filter(matchesSearch)[0] || tasks[0];
@@ -251,11 +251,10 @@ export function executionSettingsUI({ api, esc, modal, toast, showConnections })
     const template = custom && snapshot.tasks.find(value => value.id === task.template_id);
     modal(`<h2>작업 실행 설정</h2><p>새로 시작하는 작업에 적용할 지시문과 backend 설정입니다. 진행 중인 작업의 고정 설정은 바뀌지 않습니다.</p>
       ${errorMarkup}
-      <div class="execution-management-tabs" role="tablist" aria-label="작업 관리 영역">${[['worklog', 'WorkLog 자동 생성'], ['harness', '하네스 작업']].map(([group, label]) => `<button type="button" id="execution-group-${group}" role="tab" aria-selected="${currentGroup === group}" aria-controls="execution-management-panel" tabindex="${currentGroup === group ? 0 : -1}">${label}</button>`).join('')}</div>
-      <section id="execution-management-panel" role="tabpanel" aria-labelledby="execution-group-${currentGroup}">
+      <section id="execution-management-panel" aria-label="자동 작성 설정">
       <div class="execution-settings-layout"><div class="execution-settings-navigation">
-      <p class="execution-group-description">${currentGroup === 'worklog' ? '제목·설명, 세션 요약, 업무 요약 등 앱의 자동 생성 기능입니다. 직무 패키지나 에이전트 위임 연결 없이 사용할 수 있습니다.' : '설치한 직무 패키지의 작업 유형만 표시합니다. 제거한 유형의 설정과 사용자 작업은 보존되며, 패키지를 다시 설치하면 표시됩니다.'}</p>
-      <div class="execution-task-toolbar"><label for="execution-task">작업 유형</label>${currentGroup === 'harness' ? `<div><button id="manage-harness-packages" class="secondary">직무 패키지 관리</button><button id="add-custom-task" class="secondary" ${(snapshot.templates || []).length ? '' : 'disabled'}>사용자 작업 등록</button></div>` : ''}</div>
+      <p class="execution-group-description">세션 요약, 업무 제목·설명, 업무 요약과 Jira 결과 댓글의 작성 방식을 설정합니다.</p>
+      <div class="execution-task-toolbar"><label for="execution-task">작업 유형</label></div>
       <div class="execution-task-picker">
         <label for="execution-task-search">작업 유형 검색</label>
         <div class="execution-task-search-row"><input type="search" id="execution-task-search" value="${esc(searches.get(currentGroup) || '')}" placeholder="이름, ID, 분류, 목적 검색" autocomplete="off" aria-controls="execution-task" aria-describedby="execution-task-count"><button id="clear-execution-task-search" type="button" class="secondary" hidden>검색 지우기</button></div>
@@ -273,34 +272,7 @@ export function executionSettingsUI({ api, esc, modal, toast, showConnections })
       ${custom ? `<section id="custom-task-delete-confirmation" class="custom-task-delete-confirmation" aria-label="작업 등록 삭제 확인" hidden><p><strong>${esc(task.label)}</strong> 작업 등록을 삭제할까요? 이후 새 작업에서 선택할 수 없으며, 기존 실행 기록은 유지됩니다.</p><div class="dialog-actions"><button id="cancel-custom-task-delete">취소</button><button id="confirm-custom-task-delete" class="custom-task-delete">등록 삭제</button></div></section>` : ''}`
       : '<div class="dialog-actions"><button data-close>닫기</button></div>'}
       </div></div></section>`);
-    const groupTabs = ['worklog', 'harness'].map(group => $(`#execution-group-${group}`));
-    const switchGroup = (index, focus = false) => {
-      const group = ['worklog', 'harness'][index]; render(undefined, group);
-      if (focus) $(`#execution-group-${group}`).focus();
-    };
-    groupTabs.forEach((tab, index) => {
-      tab.onclick = () => switchGroup(index);
-      tab.onkeydown = event => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        event.preventDefault(); switchGroup(event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1 - index, true);
-      };
-    });
     bindTaskSearch(task);
-    if ($('#manage-harness-packages')) $('#manage-harness-packages').onclick = () => {
-      const saved = task ? { taskId: task.id, values: { ...executionValues(), revision: formRevision },
-        metadata: custom ? Object.fromEntries(['custom-task-label', 'custom-task-description', 'custom-task-terms'].map(id => [id, $(`#${id}`).value])) : {},
-        editing: $('#instruction-edit-tab').getAttribute('aria-selected') === 'true', boundaryOpen: !!$('#task-boundary details')?.open
-      } : null;
-      const priorGroup = currentGroup;
-      return showConnections?.({ focusPackages: true, onBack: async () => {
-        const root = $('#agent-connections');
-        const fresh = await api('/execution-settings');
-        if (!root?.isConnected || !$('#modal').open) return;
-        snapshot = fresh; render(task?.id, priorGroup, saved);
-        $('#manage-harness-packages')?.focus();
-      } });
-    };
-    if ($('#add-custom-task')) $('#add-custom-task').onclick = () => { if ((snapshot.templates || []).length) renderDraftRequest(task?.id); };
     if (!task) return;
     bindEditor(form);
     if (restore) {
@@ -332,110 +304,6 @@ export function executionSettingsUI({ api, esc, modal, toast, showConnections })
         toast('사용자 작업 등록을 삭제했습니다.'); render(task.template_id);
       });
     }
-  }
-  function renderDraftRequest(previousId, request = '', priorDraft = null, guide = {}) {
-    modal(`<h2>사용자 작업 등록</h2><p>어떤 작업을 맡기고 무엇을 고려해야 하는지 알려 주세요. 내용을 바탕으로 작업 이름, 목적, 키워드와 지시문을 작성합니다.</p>
-      ${errorMarkup}
-      <section class="custom-draft-guidance" aria-label="작업 설명 안내"><p>다음 내용을 포함하면 원하는 작업에 맞게 작성할 수 있습니다.</p>
-        <ul><li><strong>목적과 대상</strong> — 어떤 일을 누구를 위해 하나요?</li><li><strong>입력 자료</strong> — 어떤 정보나 문서를 받나요?</li><li><strong>기대 결과</strong> — 어떤 내용을 어떤 형식으로 만들까요?</li><li><strong>범위와 제외 사항</strong> — 어디까지 수행하고 무엇은 하지 않을까요?</li><li><strong>품질 기준과 제약</strong> — 꼭 확인할 사항이나 지켜야 할 조건이 있나요?</li></ul>
-        <details><summary>설명 예시</summary><p>팀 리더에게 공유할 주간 회의 기록을 작성하는 작업입니다. 회의 메모를 받아 결정 사항, 담당자, 마감일을 Markdown 문서로 정리해 주세요. 실제 일정 변경이나 메시지 발송은 하지 않고, 메모에 없는 내용은 추측하지 말고 확인이 필요하다고 표시해야 합니다.</p></details>
-      </section>
-      <label for="custom-draft-request">어떤 작업을 등록할까요?</label><textarea id="custom-draft-request" maxlength="12000" aria-describedby="custom-draft-help" placeholder="작업의 목적, 입력 자료, 기대 결과와 고려할 사항을 자유롭게 적어 주세요.">${esc(request)}</textarea>
-      <p id="custom-draft-help" class="help">작성된 내용은 등록 전에 확인하고 수정할 수 있습니다.${priorDraft ? ' 다시 작성하면 현재 등록 초안이 새 내용으로 바뀝니다.' : ''}</p>
-      <p id="custom-draft-status" class="custom-draft-status" role="status" hidden></p>
-      <div class="dialog-actions custom-draft-actions"><button id="cancel-custom-draft">취소</button><button id="manual-custom-task" class="secondary">${priorDraft ? '초안으로 돌아가기' : '직접 입력'}</button><button id="cancel-draft-generation" hidden>작성 중단</button><button id="generate-custom-draft" class="primary">등록 내용 작성</button></div>`);
-    const input = $('#custom-draft-request'), generate = $('#generate-custom-draft'), cancel = $('#cancel-draft-generation'), status = $('#custom-draft-status'), error = $('#dialog-error');
-    let submission;
-    $('#cancel-custom-draft').onclick = () => render(previousId);
-    $('#manual-custom-task').onclick = () => renderCreate(previousId, priorDraft?.template_id || 'document.create', priorDraft || {}, { ...guide, request: input.value });
-    const busy = value => { input.disabled = value; generate.disabled = value; cancel.hidden = !value; };
-    const current = work => activeDraft === work && $('#custom-draft-request') === input && $('#modal')?.open;
-    const failed = (work, message, terminal = false) => {
-      if (!current(work)) return;
-      if (terminal) {
-        work.settled = true; activeDraft = null;
-        if (submission === work.submission) submission = null;
-      } else {
-        // The worker may still be running when a response is lost. Retain its
-        // handle for cancellation and replay the same declaration on retry.
-        work.paused = true; clearTimeout(work.timer);
-      }
-      busy(false);
-      cancel.hidden = terminal || !work.id;
-      status.hidden = terminal;
-      if (!terminal) status.textContent = '작성은 계속 진행 중일 수 있습니다. 같은 요청으로 다시 시도하면 기존 작성 상태를 확인합니다.';
-      error.textContent = message; error.hidden = false; error.focus();
-    };
-    cancel.onclick = () => {
-      abandonDraft(); submission = null; busy(false); error.hidden = true; status.hidden = false;
-      status.textContent = '작성 중단을 요청했습니다. 요청을 수정하거나 다시 작성할 수 있습니다.';
-    };
-    generate.onclick = async () => {
-      if (activeDraft && !activeDraft.paused) return;
-      const request = input.value.trim();
-      if (!request) { error.textContent = '등록할 작업과 고려할 사항을 입력해 주세요.'; error.hidden = false; input.focus(); return; }
-      if (activeDraft && activeDraft.submission.request !== request) abandonDraft();
-      // Retrying a POST whose response was lost reuses its declaration key.
-      if (submission?.request !== request) submission = { request, idempotency_key: crypto.randomUUID() };
-      error.hidden = true; busy(true); status.hidden = false; status.textContent = '등록 내용을 작성하고 있습니다. 잠시 기다려 주세요.';
-      const work = activeDraft || { id: null, settled: false, timer: null, submission };
-      work.paused = false;
-      activeDraft = work;
-      const receive = async result => {
-        work.id = result.id;
-        if (!current(work)) { if (!draftTerminal.has(result.status)) cancelRemoteDraft(work).catch(() => {}); return; }
-        if (result.status === 'completed') {
-          work.settled = true;
-          const draft = result.draft;
-          if (!draft || !snapshot.templates.includes(draft.template_id)) { failed(work, '등록 내용을 불러오지 못했습니다. 요청을 확인하고 다시 작성해 주세요.', true); return; }
-          if (submission === work.submission) submission = null;
-          const { label, description, routing_terms, instruction } = draft;
-          renderCreate(previousId, draft.template_id, { label, description, routing_terms, instruction }, { request, generated: true });
-          return;
-        }
-        if (draftTerminal.has(result.status)) {
-          failed(work, result.message || '등록 내용을 작성하지 못했습니다. 요청을 수정하거나 직접 입력해 주세요.', true); return;
-        }
-        status.textContent = result.status === 'pending' || result.status === 'queued' ? '등록 내용 작성 순서를 기다리고 있습니다.' : '등록 내용을 작성하고 있습니다. 잠시 기다려 주세요.';
-        work.timer = setTimeout(async () => {
-          if (!current(work)) return;
-          try { await receive(await api(`/execution-settings/custom-task-drafts/${encodeURIComponent(work.id)}`)); }
-          catch (failure) { failed(work, failure.message); }
-        }, 600);
-      };
-      try {
-        const result = await api('/execution-settings/custom-task-drafts', { method: 'POST', body: submission });
-        await receive(result);
-      }
-      catch (failure) { failed(work, failure.message); }
-    };
-  }
-  function renderCreate(previousId, templateId = 'document.create', draft = {}, guide = {}) {
-    const templates = (snapshot.templates || []).map(id => snapshot.tasks.find(task => task.id === id)).filter(task => task && installed(task));
-    const template = templates.find(task => task.id === templateId) || templates[0];
-    const form = template && { ...template, instruction: draft.instruction ?? template.instruction,
-      backend: draft.backend ?? (guide.generated ? 'codex' : template.backend),
-      backends: Object.fromEntries(['codex', 'claude'].map(engine => [engine, { ...template.backends[engine],
-        ...(guide.generated ? { model: null, effort: null } : {}), ...(draft.backends?.[engine] || {}) }])) };
-    modal(`<div class="custom-task-registration"><div class="custom-task-registration-body"><h2>사용자 작업 등록</h2><p>기존 작업을 기반으로 자주 사용하는 작업 유형을 등록하세요. 등록한 유형은 설정을 다시 열거나 앱을 다시 시작해도 유지됩니다.</p>
-      ${errorMarkup}
-      ${guide.generated ? '<p class="custom-draft-status" role="status">등록 내용을 작성했습니다. 내용을 확인한 뒤 등록을 누르세요.</p>' : ''}
-      <div class="custom-draft-request-actions"><button id="edit-draft-request" class="secondary">${guide.generated ? '요청 수정·다시 작성' : '설명으로 작성하기'}</button></div>
-      <label for="custom-task-template">기반 작업 유형</label><select id="custom-task-template">${templates.map(task => option(task, template?.id)).join('')}</select>
-      <p class="help">기반 유형을 바꾸면 지시문과 backend 입력을 새 유형에 맞게 다시 채웁니다.</p>
-      ${template ? `${metadata(draft)}${inherited(template)}${boundaryDetails(template.boundary)}${editor(form)}` : '<p class="help">등록에 사용할 수 있는 기반 작업 유형이 없습니다.</p>'}
-      </div><div class="dialog-actions custom-task-registration-actions"><button id="cancel-custom-task">취소</button><button id="create-custom-task" class="primary" ${template ? '' : 'disabled'}>등록</button></div></div>`);
-    $('#cancel-custom-task').onclick = () => render(previousId);
-    if (!template) return;
-    $('#edit-draft-request').onclick = () => renderDraftRequest(previousId, guide.request || '', { ...metadataValues(), ...executionValues(), template_id: template.id }, guide);
-    $('#custom-task-template').onchange = event => renderCreate(previousId, event.target.value, metadataValues(), guide);
-    bindEditor(form);
-    $('#create-custom-task').onclick = () => mutate(async () => {
-      snapshot = await api('/execution-settings/custom-tasks', { method: 'POST', body: {
-        ...executionValues(), ...metadataValues(), template_id: template.id
-      } });
-      toast('사용자 작업을 등록했습니다.'); render(snapshot.created_task_id);
-    });
   }
   async function showSettings() { snapshot = await api('/execution-settings'); searches.clear(); render(undefined, 'worklog'); }
   return { showSettings };

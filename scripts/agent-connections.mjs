@@ -212,11 +212,12 @@ function connect(engine, selected, { homeDir = os.homedir() } = {}) {
   });
 }
 
-export const connectAgent = (engine, options) => connect(engine, components, options);
+export const connectAgent = (engine, options) => connect(engine, ['tracking'], options);
 export const disconnectAgent = (engine, options) => disconnect(engine, components, options);
 
 export function connectAgentComponent(engine, component, options) {
   validateComponent(component);
+  assert(component === 'tracking', '하네스 위임 기능은 제거되었습니다. 이력 수집만 연결할 수 있습니다.', 410);
   return connect(engine, [component], options);
 }
 

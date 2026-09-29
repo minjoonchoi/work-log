@@ -1,4 +1,4 @@
-import { taskQueue } from './task-queue.mjs';
+import { retiredWorkMessage } from './product-scope.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -179,6 +179,7 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
       return withAgentCollection(store, connectionOptions ? getAgentConnections(connectionOptions) : unavailableConnections());
     const agentConnection = p.match(/^\/api\/agent-connections\/(claude|codex)(?:\/(tracking|harness))?$/);
     if (agentConnection && ['POST', 'DELETE'].includes(req.method)) {
+      if (agentConnection[2] === 'harness' && req.method === 'POST') assert(false, retiredWorkMessage, 410);
       assert(connectionOptions, '설치된 WorkLog 앱에서 에이전트를 연결하거나 해제하세요.');
       const input = await body(req);
       assert(input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).length === 0
@@ -205,26 +206,10 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     if (p === '/api/integrations/atlassian/jira-preview' && req.method === 'GET') return atlassian.lookupIssue(url.searchParams.get('cloud_id'), url.searchParams.get('key'));
     if (p === '/api/integrations/atlassian/jira-search' && req.method === 'GET') return atlassian.searchIssues(url.searchParams.get('cloud_id'), url.searchParams.get('query'), url.searchParams.get('next_page_token'));
     if (p === '/api/integrations/atlassian/confluence-page' && req.method === 'GET') return atlassian.confluencePage(url.searchParams.get('cloud_id'), url.searchParams.get('id'));
-    if (p === '/api/harness-packages' && req.method === 'GET') return request(dir, 'runtime', '/harness-packages');
-    const harnessPackage = p.match(/^\/api\/harness-packages\/([^/]+)$/);
-    if (harnessPackage && req.method === 'PUT') {
-      const result = await request(dir, 'runtime', `/harness-packages/${harnessPackage[1]}`, { method: 'PUT', body: await body(req) });
-      notify(); return result;
-    }
+    if (p.startsWith('/api/harness-packages') || p.startsWith('/api/execution-settings/custom-task') || p === '/api/task-queue') assert(false, retiredWorkMessage, 410);
     if (p === '/api/execution-settings' && req.method === 'GET') return request(dir, 'runtime', '/execution-settings');
-    if (p === '/api/execution-settings/custom-task-drafts' && req.method === 'POST')
-      return request(dir, 'runtime', '/execution-settings/custom-task-drafts', { method: 'POST', body: await body(req) });
-    const taskDraft = p.match(/^\/api\/execution-settings\/custom-task-drafts\/([^/]+)(?:\/(cancel))?$/);
-    if (taskDraft && req.method === 'GET' && !taskDraft[2])
-      return request(dir, 'runtime', `/execution-settings/custom-task-drafts/${taskDraft[1]}`);
-    if (taskDraft && req.method === 'POST' && taskDraft[2] === 'cancel')
-      return request(dir, 'runtime', `/execution-settings/custom-task-drafts/${taskDraft[1]}/cancel`, { method: 'POST', body: await body(req) });
-    if (p === '/api/execution-settings/custom-tasks' && req.method === 'POST') return request(dir, 'runtime', '/execution-settings/custom-tasks', { method: 'POST', body: await body(req) });
-    const customSetting = p.match(/^\/api\/execution-settings\/custom-tasks\/([^/]+)$/);
-    if (customSetting && req.method === 'DELETE') return request(dir, 'runtime', `/execution-settings/custom-tasks/${customSetting[1]}`, { method: 'DELETE', body: await body(req) });
     let executionSetting = p.match(/^\/api\/execution-settings\/([^/]+)$/);
     if (executionSetting && ['PUT', 'DELETE'].includes(req.method)) return request(dir, 'runtime', `/execution-settings/${executionSetting[1]}`, { method: req.method, body: await body(req) });
-    if (req.method === 'GET' && p === '/api/task-queue') return taskQueue(dir, writings);
     if (req.method === 'GET' && p === '/api/automation/settings') return writings.automationSettings();
     if (req.method === 'PATCH' && p === '/api/automation/settings') { const result = writings.saveAutomationSettings(await body(req)); notify(); return result; }
     if (req.method === 'GET' && p === '/api/health') return health();

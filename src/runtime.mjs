@@ -1,3 +1,4 @@
+import { historyTasks, historySettings, retiredWorkMessage } from './product-scope.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, dataRoot, lockService, database, transaction, id, stableId, now, json, digest, atomic, serve, body, assert, alive, redactExecutionRequest } from './shared.mjs';
@@ -12,7 +13,6 @@ import { resolveTask } from './intake.mjs';
 import { isMergedWorkItemRetry } from './agent-origin.mjs';
 import { executionSettings } from './execution-settings.mjs';
 import { harnessPackages } from './harness-packages.mjs';
-import { taskDrafts } from './task-drafts.mjs';
 import { assertModelSelection } from './model-capabilities.mjs';
 import { planOrchestrator } from './plans.mjs';
 import { validateCodeInput } from './code-bundle.mjs';
@@ -61,6 +61,7 @@ function emit(event) { db.prepare('INSERT INTO outbox(payload) VALUES(?)').run(j
 // Internal jobs without an explicit owner keep their run/attempt evidence in
 // the runtime; they never create a synthetic work item in the user's history.
 function emitWorkEvent(request, event) {
+  if (event.role === 'worker') return; // Headless I/O stays in attempt diagnostics, never session history.
   if (request.track_work_item !== false && !(request.internal && request.task === 'task.type.draft')) emit({ ...event, internal: !!request.internal });
 }
 function eventBase(request) { return { engine: request.origin.engine, agent_session_id: request.origin.agent_session_id, turn_id: request.origin.turn_id, role: request.internal ? 'metadata' : 'user', work_item_id: request.work_item_id, source: 'runtime' }; }
@@ -195,6 +196,7 @@ function register({ runId, request, definition }) {
   queueMicrotask(schedule); return view(get(runId));
 }
 async function create(input) {
+  assert(historyTasks.has(input?.task), retiredWorkMessage, 410);
   assert(!draining && !shuttingDown, '앱 종료 후 기존 업무를 마무리하는 중입니다. WorkLog를 다시 열고 요청하세요.', 503);
   validateSchema(runSchema, input, '실행 요청');
   // Idempotency identifies the accepted declaration, not mutable files or later defaults.
@@ -559,7 +561,6 @@ for (const row of db.prepare("SELECT * FROM runs WHERE status='running'").all())
   }
   update(row.id, { status: 'interrupted', message: '실행 서비스 중단 후 상태 대조가 필요합니다.' });
 }
-const drafts = taskDrafts({ settings, createRun: create, getRun: get, cancelRun: cancel });
 function catalog(searchParams) {
   assert([...searchParams.keys()].every(key => key === 'scope') && searchParams.getAll('scope').length <= 1,
     '카탈로그 조회는 scope 하나만 지정할 수 있습니다.');
@@ -567,6 +568,7 @@ function catalog(searchParams) {
   assert(['all', 'harness'].includes(scope), '카탈로그 scope는 all 또는 harness여야 합니다.');
   const available = packages.selection();
   const jobs = Object.entries(definitions.jobs).flatMap(([id, job]) => {
+    if (!historyTasks.has(id)) return [];
     const access = available.access(id, job);
     if (!access.installed || (scope === 'harness' && access.management_group !== 'harness')) return [];
     return [{ id, label: job.label, workflow: job.workflow,
@@ -601,39 +603,21 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
     draining = false; clearTimeout(drainTimer); drainTimer = null; schedule(); return { status: 'running' };
   }
   if (req.method === 'GET' && url.pathname === '/catalog') return catalog(url.searchParams);
-  if (req.method === 'GET' && url.pathname === '/execution-settings') return settings.snapshot();
-  if (req.method === 'GET' && url.pathname === '/harness-packages') return packages.snapshot();
-  const packageMatch = url.pathname.match(/^\/harness-packages\/([^/]+)$/);
-  if (packageMatch && req.method === 'PUT') return packages.set(decodeURIComponent(packageMatch[1]), await body(req));
-  if (req.method === 'POST' && url.pathname === '/execution-settings/custom-task-drafts') return drafts.create(await body(req));
-  const draftMatch = url.pathname.match(/^\/execution-settings\/custom-task-drafts\/([^/]+)(?:\/(cancel))?$/);
-  if (draftMatch && req.method === 'GET' && !draftMatch[2]) return drafts.detail(draftMatch[1]);
-  if (draftMatch && req.method === 'POST' && draftMatch[2] === 'cancel') {
-    const input = await body(req); assert(input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).length === 0, '작성 중단 요청은 빈 객체여야 합니다.');
-    return drafts.cancel(draftMatch[1]);
-  }
-  if (req.method === 'POST' && url.pathname === '/execution-settings/custom-tasks') return settings.create(await body(req));
-  const customSettingMatch = url.pathname.match(/^\/execution-settings\/custom-tasks\/([^/]+)$/);
-  if (customSettingMatch && req.method === 'DELETE') return settings.remove(decodeURIComponent(customSettingMatch[1]), (await body(req)).revision);
+  if (req.method === 'GET' && url.pathname === '/execution-settings') return historySettings(settings.snapshot());
+  if (url.pathname.startsWith('/harness-packages') || url.pathname.startsWith('/execution-settings/custom-task') || url.pathname === '/task-queue')
+    assert(false, retiredWorkMessage, 410);
   let settingMatch = url.pathname.match(/^\/execution-settings\/([^/]+)$/);
-  if (settingMatch && req.method === 'PUT') return settings.save(decodeURIComponent(settingMatch[1]), await body(req));
-  if (settingMatch && req.method === 'DELETE') return settings.reset(decodeURIComponent(settingMatch[1]), (await body(req)).revision);
+  if (settingMatch) assert(historyTasks.has(decodeURIComponent(settingMatch[1])), retiredWorkMessage, 410);
+  if (settingMatch && req.method === 'PUT') return historySettings(settings.save(decodeURIComponent(settingMatch[1]), await body(req)));
+  if (settingMatch && req.method === 'DELETE') return historySettings(settings.reset(decodeURIComponent(settingMatch[1]), (await body(req)).revision));
   if (req.method === 'GET' && url.pathname === '/events') {
     const after = Number(url.searchParams.get('after') || 0); assert(Number.isSafeInteger(after) && after >= 0, '잘못된 커서입니다.');
     const rows = db.prepare('SELECT * FROM outbox WHERE seq>? ORDER BY seq LIMIT 500').all(after);
     return { events: rows.map(r => JSON.parse(r.payload)), cursor: rows.at(-1)?.seq || after };
   }
   if (req.method === 'POST' && url.pathname === '/runs') return create(await body(req));
-  if (req.method === 'GET' && url.pathname === '/task-queue') return {
-    runs: db.prepare("SELECT * FROM runs WHERE status IN ('pending','running') ORDER BY created_at").all().map(view),
-    plans: db.prepare("SELECT id FROM plans WHERE status IN ('pending','running') ORDER BY created_at").all().map(row => plans.view(row.id))
-  };
   if (req.method === 'GET' && url.pathname === '/runs') return db.prepare('SELECT * FROM runs ORDER BY created_at DESC').all().map(view);
-  if (req.method === 'POST' && url.pathname === '/plans') {
-    const input = await body(req);
-    assert(!draining && !shuttingDown, '앱 종료 후 기존 업무를 마무리하는 중입니다. WorkLog를 다시 열고 요청하세요.', 503);
-    return plans.create(input);
-  }
+  if (req.method === 'POST' && url.pathname === '/plans') assert(false, retiredWorkMessage, 410);
   if (req.method === 'GET' && url.pathname === '/plans') return plans.list();
   const planMatch = url.pathname.match(/^\/plans\/([^/]+)(?:\/(cancel|resume))?$/);
   if (planMatch) {
@@ -641,7 +625,7 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
     if (req.method === 'POST' && planMatch[2] === 'resume') {
       assertResumeBody(await body(req));
       assert(!draining && !shuttingDown, '앱 종료 후 기존 업무를 마무리하는 중입니다. WorkLog를 다시 열고 재개하세요.', 503);
-      return plans.resume(planMatch[1]);
+      assert(false, retiredWorkMessage, 410);
     }
     if (req.method === 'GET' && !planMatch[2]) return plans.view(planMatch[1]);
   }
@@ -653,7 +637,7 @@ const { server, endpoint } = await serve({ dir, role: 'runtime', port: Number(pr
       assert(!draining && !shuttingDown, '앱 종료 후 기존 업무를 마무리하는 중입니다. WorkLog를 다시 열고 재개하세요.', 503);
       const row = get(match[1]); assert(row, '실행이 없습니다.', 404);
       const request = JSON.parse(row.request);
-      if (request.plan_id) { plans.resume(request.plan_id); return view(get(row.id)); }
+      assert(historyTasks.has(request.task) && !request.plan_id, retiredWorkMessage, 410);
       return resume(match[1]);
     }
     if (req.method === 'GET') {
