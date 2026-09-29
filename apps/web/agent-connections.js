@@ -9,7 +9,7 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
   async function showSettings({ onBack, tab = null } = {}) {
     const canGoBack = typeof onBack === 'function';
     modal(`${canGoBack ? '<div class="agent-connection-backbar"><button type="button" id="back-execution-settings" class="secondary agent-connection-back">작업 실행 설정으로 돌아가기</button></div>' : ''}
-      <h2>연결 설정</h2><p>대화 수집과 Jira·Confluence 연결을 설정합니다.</p>
+      <h2 tabindex="-1" autofocus class="settings-initial-heading">연결 설정</h2><p>대화 수집과 Jira·Confluence 연결을 설정합니다.</p>
       <div id="agent-connections"></div>`);
     const dialog = document.querySelector('#modal'), root = document.querySelector('#agent-connections');
     const backButton = canGoBack ? dialog.querySelector('#back-execution-settings') : null;

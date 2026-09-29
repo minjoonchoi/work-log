@@ -369,6 +369,8 @@ header p { color: var(--muted); font-size: var(--text-compact); margin-bottom: 0
 .run button { font-size: var(--text-small); padding: var(--space-1) var(--space-2); }
 .run-id { font-size: var(--text-micro) !important; overflow-wrap: anywhere; }
 dialog { border: 1px solid var(--line); border-radius: var(--radius-dialog); padding: var(--dialog-padding); max-width: 640px; width: calc(100% - 90px); box-shadow: var(--shadow-dialog); color: var(--text); background: var(--surface); }
+/* Initial dialog focus announces the heading without selecting a control. */
+.settings-initial-heading:focus { outline: none; }
 dialog::backdrop { background: var(--overlay); }
 dialog h2 { margin-bottom: var(--space-3); }
 dialog p { font-size: var(--text-compact); color: var(--muted); line-height: var(--line-prose); }

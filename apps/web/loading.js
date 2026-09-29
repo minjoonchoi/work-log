@@ -1,7 +1,7 @@
 export function showListSkeleton(root) {
   root.dataset.loading = 'true';
   root.setAttribute('aria-busy', 'true');
-  root.innerHTML = '<div class="list-skeleton"><p role="status">목록을 불러오는 중…</p>' +
+  root.innerHTML = '<div class="list-skeleton" role="status" aria-label="목록을 불러오는 중">' +
     Array.from({ length: 5 }, () => '<div class="skeleton-row" aria-hidden="true"><span class="skeleton-line skeleton-title"></span><span class="skeleton-line"></span><span class="skeleton-line skeleton-meta"></span></div>').join('') + '</div>';
 }
 export function finishListLoading(root, retry) {

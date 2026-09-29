@@ -29,13 +29,30 @@ const eventTime = value => new Intl.DateTimeFormat('ko-KR', { year: 'numeric', m
 function isoDate(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function dayStart(date) { return new Date(date.getFullYear(), date.getMonth(), date.getDate()); }
 function addDays(date, days) { const d = new Date(date); d.setDate(d.getDate() + days); return d; }
+// Short-lived, in-memory query cache. Never persist conversation data in browser storage.
+const listCache = new Map();
+function invalidateLists() { listCache.clear(); }
+function listData(url) {
+  const previous = listCache.get(url);
+  if (previous && previous.expires > Date.now()) return previous.promise;
+  const entry = { expires: Date.now() + 30_000 };
+  entry.promise = api(url).catch(error => {
+    if (listCache.get(url) === entry) listCache.delete(url);
+    throw error;
+  });
+  listCache.set(url, entry);
+  if (listCache.size > 50) listCache.delete(listCache.keys().next().value);
+  return entry.promise;
+}
 async function api(url, options = {}) {
   const token = window.__HARNESS_TOKEN__;
   if (!token) throw new Error('앱 연결 정보가 없습니다. 설치된 WorkLog 앱으로 열어 주세요.');
   const response = await fetch(`/api${url}`, { ...options, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     ...(options.body ? { body: JSON.stringify(options.body) } : {}) });
   const result = await response.json();
-  if (!response.ok) { const e = new Error(result.error); e.status = response.status; throw e; } return result;
+  if (!response.ok) { const e = new Error(result.error); e.status = response.status; throw e; }
+  if (options.method && options.method !== 'GET') invalidateLists();
+  return result;
 }
 function error(e) { $('#error').textContent = e.message; $('#error').hidden = false; }
 function safe(fn) { return async (...args) => { try { return await fn(...args); } catch (e) { error(e); } }; }
@@ -90,7 +107,7 @@ async function subscribeChanges() {
       reader = response.body.getReader();
       setStreamConnected(true);
       // Refresh metadata, then catch up by ingestion sequence without downloading old pages again.
-      scheduleRefresh();
+      invalidateLists(); scheduleRefresh();
       const decoder = new TextDecoder(); let pending = '';
       while (true) {
         const { value, done } = await reader.read(); if (done) break;
@@ -98,7 +115,7 @@ async function subscribeChanges() {
         let end;
         while ((end = pending.indexOf('\n\n')) !== -1) {
           const frame = pending.slice(0, end); pending = pending.slice(end + 2);
-          if (frame.split('\n').includes('event: change')) scheduleRefresh();
+          if (frame.split('\n').includes('event: change')) { invalidateLists(); scheduleRefresh(); }
         }
       }
     } catch { /* Keep the recorded history visible and retry the local stream. */ }
@@ -114,7 +131,7 @@ async function load(force = false) {
   try {
     updateListControls();
     const sessionsMode = isSessionList(), query = encodeURIComponent($('#search').value);
-    const [health, items, sessions, notifications, tags] = await Promise.all([api('/health'), api(`/items?q=${sessionsMode ? '' : query}&jira=${state.trash ? 'all' : $('#jira-filter').value}&trash=${state.trash}${itemTags.filterQuery()}`), sessionsMode ? api(`/sessions?q=${query}`) : Promise.resolve([]), api('/notifications'), api(`/tags?trash=${state.trash}`)]);
+    const [health, items, sessions, notifications, tags] = await Promise.all([listData('/health'), listData(`/items?q=${sessionsMode ? '' : query}&jira=${state.trash ? 'all' : $('#jira-filter').value}&trash=${state.trash}${itemTags.filterQuery()}`), sessionsMode ? listData(`/sessions?q=${query}`) : Promise.resolve([]), listData('/notifications'), listData(`/tags?trash=${state.trash}`)]);
     if (requestNumber !== loadRequest) return;
     itemTags.updateFilter(tags);
     $('#connection').textContent = health.runtime_connected ? '서비스 연결됨' : '실행 서비스 연결 대기';
@@ -595,8 +612,8 @@ $('#nav-items').onclick = safe(() => showView('items'));
 $('#nav-calendar').onclick = safe(() => showView('calendar'));
 $('#nav-reports').onclick = safe(() => showView('reports'));
 $('#nav-notifications').onclick = safe(() => showView('notifications'));
-$('#refresh-notifications').onclick = safe(() => load(true));
-$('#refresh').onclick = safe(() => load(true));
+$('#refresh-notifications').onclick = safe(() => { invalidateLists(); return load(true); });
+$('#refresh').onclick = safe(() => { invalidateLists(); return load(true); });
 function closeDetail() { detailRequest++; $('#detail').hidden = true; state.detail = null; history.clear(); }
 function clearSelection() { state.selected.clear(); updateSelection(); document.querySelectorAll('.item-row').forEach(row => { row.classList.remove('selected'); row.querySelector('input').checked = false; }); }
 let searchTimer; $('#search').oninput = () => { clearTimeout(searchTimer); clearSelection(); loadRequest++; searchTimer = setTimeout(() => load(true), 200); };

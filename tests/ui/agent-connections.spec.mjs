@@ -221,3 +221,22 @@ test('connection tabs preserve drafts, support keyboard navigation and fit compa
   await dialog.screenshot({ path: info.outputPath('settings-connections-compact.png') });
   expect(state.writes).toEqual([]); expect(state.packageWrites).toEqual([]);
 });
+
+test('opening connections starts at a quiet heading and preserves keyboard navigation', async ({ page }) => {
+  await fixture(page);
+  const dialog = await open(page);
+  await expect(dialog.getByRole('button', { name: '상태 새로고침', exact: true })).toBeEnabled();
+  const heading = dialog.getByRole('heading', { name: '연결 설정', exact: true });
+  await expect(heading).toBeFocused();
+  await expect(heading).toHaveCSS('outline-style', 'none');
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('tab', { name: '에이전트 연결', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  const opener = page.getByRole('button', { name: '연결 설정', exact: true });
+  await expect(opener).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(heading).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('tab', { name: '에이전트 연결', exact: true })).toBeFocused();
+});
