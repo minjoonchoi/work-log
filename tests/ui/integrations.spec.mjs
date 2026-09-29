@@ -273,3 +273,56 @@ test('OAuth and network settings share one form separated by a divider and retai
   await dialog.screenshot({ path: info.outputPath('settings-atlassian-sections.png') });
   expect((await h.manager('/integrations/atlassian')).config.client_id).toBe(clientSettings.client_id);
 });
+
+test('Atlassian fields render immediately during slow loading and local health stays in the agents tab', async ({ page }) => {
+  await saveSettings(h); await open(page);
+  let release, releaseHealth;
+  await page.route('**/api/health', async route => {
+    await new Promise(resolve => { releaseHealth = resolve; });
+    await route.continue();
+  });
+  await page.route('**/api/integrations/atlassian', async route => {
+    if (!release) await new Promise(resolve => { release = resolve; });
+    await route.continue();
+  });
+  await showSettings(page);
+  await expect(clientField(page)).toBeVisible();
+  await expect(clientField(page)).toBeDisabled();
+  await expect(page.locator('#atlassian-status')).toHaveText('설정을 불러오는 중…');
+  await expect(page.locator('#save-atlassian')).toBeDisabled();
+  await expect(page.locator('#connections-panel-atlassian .service-details')).toHaveCount(0);
+  await page.getByRole('tab', { name: '에이전트 연결', exact: true }).click();
+  await expect(page.locator('#connections-panel-agents .service-details')).toBeVisible();
+  await expect.poll(() => typeof release).toBe('function');
+  release();
+  await page.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
+  await expect(clientField(page)).toBeEnabled();
+  await expect(clientField(page)).toHaveValue(clientSettings.client_id);
+  await expect(secretField(page)).toHaveValue('');
+  await expect.poll(() => typeof releaseHealth).toBe('function');
+  releaseHealth();
+});
+
+test('failed initial settings load keeps the form and offers retry; late responses cannot change a new dialog', async ({ page }) => {
+  await open(page);
+  let calls = 0, release;
+  await page.route('**/api/integrations/atlassian', async route => {
+    calls++;
+    if (calls === 1) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '일시적인 조회 실패' }) });
+    if (calls === 2) await new Promise(resolve => { release = resolve; });
+    await route.continue();
+  });
+  await showSettings(page);
+  await expect(page.locator('#retry-atlassian-settings')).toBeVisible();
+  await expect(clientField(page)).toBeVisible();
+  await expect(clientField(page)).toBeDisabled();
+  await page.locator('#retry-atlassian-settings').click();
+  await expect.poll(() => typeof release).toBe('function');
+  await page.getByRole('button', { name: '닫기', exact: true }).click();
+  await showSettings(page);
+  await expect(clientField(page)).toBeEnabled();
+  await clientField(page).fill('new-dialog-edit');
+  const response = page.waitForResponse(value => new URL(value.url()).pathname === '/api/integrations/atlassian');
+  release(); await response;
+  await expect(clientField(page)).toHaveValue('new-dialog-edit');
+});

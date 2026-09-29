@@ -19,12 +19,11 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
       if (atlassianLoading || atlassianLoaded || !active()) return;
       atlassianLoading = true;
       const target = root.querySelector('#connections-panel-atlassian');
-      target.textContent = 'Atlassian 설정을 불러오고 있습니다.';
       try { await showAtlassian({ target }); atlassianLoaded = active() && !!target.querySelector('#atlassian-client-id'); }
       catch (error) { if (active()) target.textContent = error.message; }
       finally { atlassianLoading = false; }
     }
-    let snapshot = null, pending = null, failure = '', feedback = '', readEpoch = 0;
+    let health = null, healthError = '', snapshot = null, pending = null, failure = '', feedback = '', readEpoch = 0;
     let selectedTab = ['agents', 'atlassian'].includes(tab) ? tab : 'agents';
     const connectionPart = (connection, kind) => connection?.[kind] || connection;
 
@@ -64,13 +63,14 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
           return `<section class="agent-connection-card" aria-labelledby="agent-${engine}-title" data-engine="${engine}">
             <h3 id="agent-${engine}-title">${name}</h3>${renderPart(engine, 'tracking', connection, busy, available)}
           </section>`;
-        }).join('')}</div></div>
+        }).join('')}</div>
+        <details class="service-details" data-details="service-health"><summary>로컬 서비스 상태</summary><p role="status">${health ? `관리: 연결됨 · 실행: ${health.runtime_connected ? '연결됨' : '연결 대기'}<br>수집 이벤트 ${esc(health.events)}개 · 미확인 출력 ${esc(health.unresolved)}개<br>버전 ${esc(health.version)}` : esc(healthError || '서비스 상태를 불러오는 중…')}</p></details></div>
         <section id="connections-panel-atlassian" class="atlassian-settings-panel" aria-label="Atlassian 연결"></section>
         <div class="dialog-actions"><button id="close-agent-connections">닫기</button></div>`;
       if (atlassianPanel) root.querySelector('#connections-panel-atlassian').replaceWith(atlassianPanel);
       bindSettingsTabs(root, 'connections', selectedTab, key => { selectedTab = key; if (key === 'atlassian') void mountAtlassian(); });
       if (focusedTab) root.querySelector(`[data-settings-tab="${focusedTab}"]`)?.focus();
-      root.querySelector('#refresh-agent-connections').onclick = refresh;
+      root.querySelector('#refresh-agent-connections').onclick = () => { void refreshHealth(); void refresh(); };
       root.querySelector('#open-held-sessions').onclick = () => showHeldSessions({ api, esc, modal, onBack: () => showSettings({ onBack }) });
       for (const details of root.querySelectorAll('details[data-details]')) details.open = expanded.has(details.dataset.details);
       root.querySelector('#close-agent-connections').onclick = () => dialog.close();
@@ -102,7 +102,7 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
       pending = null;
       if (active()) {
         render();
-        root.querySelector('#refresh-agent-connections').focus();
+        if (!initial && selectedTab === 'agents') root.querySelector('#refresh-agent-connections').focus();
       }
     }
     async function mutate(engine, kind, method) {
@@ -122,6 +122,11 @@ export function agentConnectionsUI({ api, esc, modal, showAtlassian }) {
         if (active()) { render(); root.querySelector(`[data-connection="${engine}-${kind}"] button`)?.focus(); }
       }
     }
+    async function refreshHealth() {
+      try { const value = await api('/health'); if (active()) { health = value; healthError = ''; render(); } }
+      catch { if (active()) { healthError = '서비스 상태를 불러오지 못했습니다.'; render(); } }
+    }
+    void refreshHealth();
     await refresh({ initial: true });
     async function observeCollection() {
       if (!active()) return;
