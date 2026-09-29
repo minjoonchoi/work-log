@@ -45,38 +45,31 @@ test('first input binding wins over lifecycle hints, out-of-order timestamps and
   assert.deepEqual(await h.ingest(events), { inserted: 0, duplicates: events.length });
 });
 
-test('worker and metadata references use an already bound parent without adding user windows', async t => {
+test('worker and metadata references are excluded even with an already bound parent', async t => {
   const h = await setup(t), owner = 'known-parent-owner';
   await h.ingest(pair('known-parent', '09:00:00', '09:05:00', 'parent-turn', { work_item_id: owner }));
-  const before = await h.manager(`/items/${owner}`), session = before.sessions[0];
+  const before = await h.manager(`/items/${owner}`);
   for (const role of ['worker', 'metadata']) await h.ingest(pair(`${role}-child`, '10:00:00', '10:20:00', `${role}-turn`, {
     role, work_item_id: `${role}-incorrect-owner`, parent: { engine: 'codex', agent_session_id: 'known-parent', turn_id: 'parent-turn', work_item_id: `${role}-incorrect-parent` }
   }));
   const detail = await onlyItem(h, owner);
   assert.deepEqual(detail.sessions, before.sessions);
   const internal = detail.events.filter(row => row.role !== 'user');
-  assert.equal(internal.length, 4); assert.ok(internal.every(row => row.work_item_id === owner && row.session_id === session.id && row.resolution === 'parent'));
-  assert.ok(internal.every(row => row.parent.work_item_id === owner && row.requested_work_item_id === `${row.role}-incorrect-owner`
-    && row.parent.requested_work_item_id === `${row.role}-incorrect-parent`));
+  assert.equal(internal.length, 0);
   assert.ok(detail.agents.every(agent => agent.work_item_id === owner));
 });
 
-test('a worker delivered before its native parent reserves the parent binding for later real hooks', async t => {
-  const h = await setup(t), owner = 'worker-first-owner';
+test('a worker delivered before its native parent cannot reserve a work item', async t => {
+  const h = await setup(t); let owner = 'worker-first-owner';
   const first = pair('first-worker', '09:00:00', '09:02:00', 'attempt', {
     role: 'worker', work_item_id: owner, parent: { engine: 'claude', agent_session_id: 'late-native', turn_id: 'native-turn', work_item_id: owner }
   });
   await h.ingest(first);
-  const pending = await onlyItem(h, owner); assert.equal(pending.sessions.length, 0);
-  assert.equal(pending.events.filter(row => row.role === 'user').length, 0, 'reserving a parent binding must not fabricate native history');
-  const contextPath = '/agent-context?engine=claude&session_id=late-native';
-  assert.deepEqual(await h.manager(contextPath), { work_item_id: owner, origin: null });
+  assert.equal((await h.manager('/items')).length, 0);
   h.hook('claude', { session_id: 'late-native', turn_id: 'native-turn', hook_event_name: 'UserPromptSubmit', prompt: '뒤늦게 전달된 실제 입력' });
-  await eventually(() => h.manager('/health'), health => health.events === 3);
-  assert.deepEqual(await h.manager(contextPath), { work_item_id: owner,
-    origin: { engine: 'claude', agent_session_id: 'late-native', turn_id: 'native-turn' } });
+  owner = (await eventually(() => h.manager('/items'), items => items.length === 1))[0].id;
   h.hook('claude', { session_id: 'late-native', turn_id: 'native-turn', hook_event_name: 'Stop', last_assistant_message: '실제 출력' });
-  await eventually(() => h.manager('/health'), health => health.events === 4);
+  await eventually(() => h.manager('/health'), health => health.events === 2);
   const detail = await onlyItem(h, owner);
   assert.equal(detail.sessions.length, 1); assert.equal(detail.sessions[0].pending, false);
   assert.ok(detail.events.filter(row => row.role === 'worker').every(row => row.session_id === detail.sessions[0].id));
@@ -160,7 +153,7 @@ test('concurrent first inputs choose one durable binding and retries after resta
   assert.equal((await onlyItem(h, owner)).events.length, 6);
 });
 
-test('real fixture orchestration with a conflicting item hint remains linked to the original native task', async t => {
+test('retired orchestration cannot split the original native task', async t => {
   const h = await setup(t, true), owner = 'native-orchestration-owner';
   const origin = { engine: 'codex', agent_session_id: 'orchestration-native', turn_id: 'native-turn' };
   await h.ingest([event(origin.agent_session_id, 'input', '09:00:00', origin.turn_id, { work_item_id: owner, text: '요구사항을 작성하고 엔티티를 설계하세요.' })]);
@@ -169,19 +162,16 @@ test('real fixture orchestration with a conflicting item hint remains linked to 
       { id: 'prd', task: 'prd.create', output_key: 'prd', request_excerpt: '요구사항 작성', input: { requirements: '가입 초대 요구사항을 작성하세요.' }, depends_on: [] },
       { id: 'entity', task: 'entity.design', output_key: 'entity', request_excerpt: '엔티티 설계', input: { requirements: '선행 요구사항을 근거로 초대 엔티티를 설계하세요.' }, depends_on: ['prd'] }
     ] };
-  const plan = await h.runtime('/plans', post(body));
-  const done = await eventually(() => h.runtime(`/plans/${plan.id}`), value => !['pending', 'running'].includes(value.status), 20000);
-  assert.equal(done.status, 'completed', done.message);
-  await eventually(() => h.manager(`/items/${owner}`), detail => detail.runs.length === 2 && detail.runs.every(run => run.status === 'completed'));
+  await assert.rejects(h.runtime('/plans', post(body)), error => error.status === 410);
   await h.ingest([event(origin.agent_session_id, 'output', '09:10:00', origin.turn_id, { work_item_id: 'conflicting-stop-item', text: '검증한 결과를 전달합니다.' })]);
   const detail = await onlyItem(h, owner); assert.equal(detail.sessions.length, 1); assert.equal(detail.sessions[0].pending, false);
   assert.equal(detail.events.filter(row => row.role === 'user' && ['input', 'output'].includes(row.kind)).length, 2);
-  assert.ok(detail.events.some(row => row.role === 'worker'));
+  assert.equal(detail.events.some(row => row.role === 'worker'), false);
   assert.ok(detail.events.every(row => row.work_item_id === owner));
   assert.ok(detail.runs.every(run => run.work_item_id === owner && run.session_id === detail.sessions[0].id));
-  assert.equal((await h.runtime('/plans', post(body))).id, plan.id);
+  assert.equal(detail.runs.length, 0);
   await h.stop('manager'); await h.start('manager');
-  assert.equal((await onlyItem(h, owner)).runs.length, 2);
+  assert.equal((await onlyItem(h, owner)).runs.length, 0);
 });
 
 test('preexisting split history is retained while subsequent input returns to the original session binding', async t => {

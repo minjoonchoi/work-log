@@ -223,23 +223,29 @@ export function managerStore(dir, { clock = Date.now } = {}) {
       const key = JSON.parse(row.payload).turn_id; counts.set(key, (counts.get(key) || 0) + 1);
     }
     const turns = new Map(), windows = new Map();
-    let current, lastOutput = null, previousOwner = null;
+    let current;
+    const activityKinds = new Set(['input', 'output', 'tool.started', 'tool.finished', 'turn.interrupted', 'turn.failed']);
     for (const row of rows) {
       const e = JSON.parse(row.payload);
       let sid = null, resolution = 'unresolved';
-      if (e.kind === 'input') {
-        const owner = e.work_item_id || previousOwner || agent.work_item_id;
-        ensureItem(owner, e.event_at);
-        // Compare original owners, not canonical aliases: a merge must never resegment history.
-        if (!current || owner !== previousOwner || (lastOutput !== null && Date.parse(e.event_at) - lastOutput >= 1200000)) {
+      // Session windows describe observed time, independently of turn matching.
+      // Lifecycle notifications alone cannot start or extend an activity window.
+      if (activityKinds.has(e.kind) && (current || e.kind === 'input')) {
+        if (!current || Date.parse(e.event_at) - Date.parse(windows.get(current).end) >= 1200000) {
+          const owner = e.work_item_id || (current ? windows.get(current).owner : agent.work_item_id);
+          ensureItem(owner, e.event_at);
           current = stableId('session-', row.id);
           windows.set(current, { id: current, owner, first: row.id, start: e.event_at, end: e.event_at, pending: new Set() });
         }
-        previousOwner = owner;
-        const w = windows.get(current); w.end = e.event_at > w.end ? e.event_at : w.end;
+        sid = current;
+        windows.get(current).end = e.event_at;
+      }
+      if (e.kind === 'input') {
+        const owner = windows.get(current).owner;
+        const w = windows.get(current);
         w.pending.add(e.turn_id);
         if (counts.get(e.turn_id) === 1) turns.set(e.turn_id, current);
-        sid = current; resolution = 'input';
+        resolution = 'input';
         const item = one('SELECT * FROM work_items WHERE id=?', canonical(owner));
         if (item.title === '새 작업' && !item.manual && e.text?.trim() && !isDeleted(item.id)
           && !one('SELECT 1 FROM item_initial_metadata WHERE work_item_id=?', item.id)) {
@@ -250,12 +256,13 @@ export function managerStore(dir, { clock = Date.now } = {}) {
           exec('INSERT INTO item_initial_metadata VALUES(?,?)', item.id, row.id);
         }
       } else if (['output', 'turn.interrupted', 'turn.failed'].includes(e.kind) && turns.has(e.turn_id)) {
-        sid = turns.get(e.turn_id); resolution = e.text == null && e.kind === 'output' ? 'missing_body' : 'matched';
-        const w = windows.get(sid); w.end = e.event_at > w.end ? e.event_at : w.end;
-        w.pending.delete(e.turn_id);
-        // An observed Stop with missing body still proves output timing; unmatched output never does.
-        if (e.kind === 'output') lastOutput = Date.parse(e.event_at);
-      } else if (turns.has(e.turn_id)) { sid = turns.get(e.turn_id); resolution = 'matched'; }
+        resolution = e.text == null && e.kind === 'output' ? 'missing_body' : 'matched';
+        // Completion relates to the original turn, but its record belongs to
+        // the time window where it was observed, even after a long silent gap.
+        windows.get(turns.get(e.turn_id)).pending.delete(e.turn_id);
+      } else if (turns.has(e.turn_id)) { resolution = 'matched'; }
+      // Unmatched output stays unresolved at turn level but is still visible
+      // in its temporal session; never invent an input/output pairing.
       exec('INSERT INTO event_links VALUES(?,?,?)', row.id, sid, resolution);
     }
     // Appends keep paging snapshots valid. Only reassigning an existing record invalidates them.

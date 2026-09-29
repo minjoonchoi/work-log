@@ -94,7 +94,10 @@ test('a last session idle after an observed output is summarized without closing
 test('pending, interrupted, recent and externally delegated running sessions are not mistaken for idle completed responses', async t => {
   const delegated = pair('delegated-running', ago(25), ago(23), 'delegated', { source: 'system_hook', work_item_id: 'delegated-item' });
   const h = await setup(t, 0, {}, { events: [
-    ...pair('still-answering', ago(60), ago(58), 'old'), event('still-answering', 'input', ago(57), 'awaiting-stop'), event('still-answering', 'tool.started', ago(1), 'awaiting-stop'),
+    ...pair('still-answering', ago(60), ago(58), 'old'), event('still-answering', 'input', ago(57), 'awaiting-stop'), event('still-answering', 'tool.started', ago(40), 'awaiting-stop'),
+    event('still-answering', 'tool.finished', ago(22), 'awaiting-stop'),
+    event('still-answering', 'tool.started', ago(10), 'awaiting-stop'),
+    event('still-answering', 'tool.finished', ago(1), 'awaiting-stop'),
     event('interrupted', 'input', ago(60), 'interrupted'), event('interrupted', 'turn.interrupted', ago(59), 'interrupted'),
     ...pair('recent-response', ago(5), ago(3), 'recent'),
     ...delegated,

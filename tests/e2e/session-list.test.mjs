@@ -15,6 +15,7 @@ test('session list keeps agent-specific 20-minute windows, canonical merge owner
   await h.ingest([
     ...pair('author', '09:00:00', '09:05:00', 'first', { work_item_id: 'item-author', text: '첫 번째 계획\n상세 원문은 목록에 포함하지 않습니다.' }),
     ...pair('author', '09:25:00', '09:30:00', 'second', { work_item_id: 'item-author', text: '두 번째 구현' }),
+    event('reviewer', 'tool.finished', '09:21:00', 'parallel', { engine: 'claude', work_item_id: 'item-review' }),
     ...pair('reviewer', '09:02:00', '09:40:00', 'parallel', { engine: 'claude', work_item_id: 'item-review', text: '병렬 검토' }),
     ...pair('tie-one', '09:30:00', '09:40:00', 'tie', { work_item_id: 'item-tie', text: '같은 시각' }),
     ...pair('tie-two', '09:30:00', '09:40:00', 'tie', { work_item_id: 'item-tie', text: '같은 시각' }),
@@ -114,4 +115,58 @@ test('session list validates search parameters and returns empty results without
   assert.deepEqual(await h.manager('/sessions?q=not-present'), []);
   assert.equal((await h.manager('/sessions?q=%20%20')).length, 1);
   assert.equal((await h.manager('/health')).events, 2);
+});
+
+test('continuous inputs and tool activity extend one window when Stop is missing, including after an idle split', async t => {
+  const h = await setup(t);
+  const e = (kind, time, turn) => event('continuous', kind, time, turn, { source: 'system_hook', work_item_id: 'continuous-item' });
+  await h.ingest([e('input', '09:00:00', 'first'), e('output', '09:01:00', 'first')]);
+  await h.ingest([e('input', '09:21:00', 'second')]);
+  const split = await h.manager('/sessions');
+  assert.equal(split.length, 2, 'exactly 20 minutes starts a new window');
+  const activeId = split[0].id;
+  await h.ingest([e('input', '09:22:00', 'third')]);
+  let sessions = await h.manager('/sessions');
+  assert.equal(sessions.length, 2, 'missing Stop must not reuse the old window output as every input boundary');
+  assert.equal(sessions[0].id, activeId);
+  await h.ingest([e('tool.started', '09:35:00', 'third'), e('tool.finished', '09:45:00', 'third')]);
+  await h.ingest([e('input', '10:04:59', 'fourth'), e('output', '10:05:00', 'fourth')]);
+  sessions = await h.manager('/sessions');
+  assert.equal(sessions.length, 2, 'observed tool activity also keeps the window continuous');
+  const history = await h.manager('/items/continuous-item/history?session_id=' + activeId);
+  assert.equal(history.records.filter(r => r.kind === 'input').length, 3);
+  await h.ingest([e('input', '10:25:00', 'fifth')]);
+  assert.equal((await h.manager('/sessions')).length, 3);
+  await h.stop('manager'); await h.start('manager');
+  assert.equal((await h.manager('/sessions')).length, 3);
+});
+
+test('ambiguous turns stay in the temporal window and only a 20-minute activity gap splits history', async t => {
+  const h = await setup(t);
+  const make = (kind, at, turn, source = null) => event('overlapping', kind, at, turn, {
+    source: 'system_hook', hook_schema: 2, source_turn_id: source,
+    turn_source: source ? 'native' : kind === 'input' ? 'local' : 'missing',
+    work_item_id: 'overlapping-item'
+  });
+  await h.ingest([
+    make('input', '09:00:00', 'local-a'),
+    make('input', '09:01:00', 'local-b'),
+    make('tool.finished', '09:15:00', null),
+    make('output', '09:30:00', null),
+    make('input', '09:49:59', 'local-c')
+  ]);
+  let sessions = await h.manager('/sessions');
+  assert.equal(sessions.length, 1);
+  const history = await h.manager('/items/overlapping-item/history?session_id=' + sessions[0].id);
+  assert.equal(history.records.length, 4);
+  const output = history.records.find(e => e.kind === 'output');
+  assert.equal(output.resolution, 'unresolved');
+  assert.equal(output.turn_id, null, 'time grouping must not invent a turn match');
+  await h.ingest([make('session.started', '10:00:00', null)]);
+  await h.ingest([make('output', '10:09:59', 'local-c', 'local-c')]);
+  sessions = await h.manager('/sessions');
+  assert.equal(sessions.length, 2, 'a 20-minute gap splits even when the turn identity matches');
+  assert.equal(sessions[0].start_at, '2026-09-17T10:09:59.000Z');
+  await h.ingest([make('input', '10:10:00', 'local-d')]);
+  assert.equal((await h.manager('/sessions')).length, 2);
 });
