@@ -149,7 +149,7 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     return true;
   },
   publicHandler: async (req, res, url) => {
-    const routes = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/history.js': ['history.js', 'text/javascript'], '/integrations.js': ['integrations.js', 'text/javascript'], '/jira.js': ['jira.js', 'text/javascript'], '/writing.js': ['writing.js', 'text/javascript'], '/execution-settings.js': ['execution-settings.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
+    const routes = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/loading.js': ['loading.js', 'text/javascript'], '/history.js': ['history.js', 'text/javascript'], '/integrations.js': ['integrations.js', 'text/javascript'], '/jira.js': ['jira.js', 'text/javascript'], '/writing.js': ['writing.js', 'text/javascript'], '/execution-settings.js': ['execution-settings.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
       '/icons.css': ['icons.css', 'text/css'],
       '/held-sessions.js': ['held-sessions.js', 'text/javascript'],
       '/agent-connections.js': ['agent-connections.js', 'text/javascript'],

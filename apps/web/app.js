@@ -1,3 +1,4 @@
+import { showListSkeleton, finishListLoading } from './loading.js';
 import { integrationUI } from './integrations.js';
 import { agentConnectionsUI } from './agent-connections.js';
 import { writingUI } from './writing.js';
@@ -108,6 +109,8 @@ async function subscribeChanges() {
 
 async function load(force = false) {
   const requestNumber = ++loadRequest;
+  const listRoot = state.view === 'items' ? $('#item-list') : state.view === 'notifications' ? $('#notification-list') : null;
+  if (listRoot && !listRoot.children.length) showListSkeleton(listRoot);
   try {
     updateListControls();
     const sessionsMode = isSessionList(), query = encodeURIComponent($('#search').value);
@@ -125,11 +128,11 @@ async function load(force = false) {
     $('#item-count').textContent = health.visible_items;
     const revision = JSON.stringify([sessionsMode, state.trash, state.items, state.sessions]);
     if (state.view === 'items' && (force || revision !== listRevision)) {
-      renderItems(); listRevision = revision;
+      renderItems(); finishListLoading($('#item-list')); listRevision = revision;
     }
     const notices = JSON.stringify(notifications);
     if (state.view === 'notifications' && (force || notices !== notificationRevision)) {
-      renderNotifications(); notificationRevision = notices;
+      renderNotifications(); finishListLoading($('#notification-list')); notificationRevision = notices;
     }
     // Summary edits can change calendar labels without adding an input/output event.
     if (state.view === 'calendar') await renderCalendar();
@@ -137,6 +140,7 @@ async function load(force = false) {
     $('#error').hidden = true;
   } catch (e) {
     if (requestNumber !== loadRequest) return;
+    if (listRoot) finishListLoading(listRoot, () => { showListSkeleton(listRoot); void load(true); });
     $('#connection').textContent = '관리 서비스 연결 끊김'; $('#connection').classList.add('offline'); error(e);
   }
 }
@@ -209,7 +213,7 @@ function updateSelection() {
   $('#selection-label').textContent = state.selected.size ? `${state.selected.size}개 선택됨${state.selected.size > 100 ? ' · 병합은 한 번에 100개까지' : ''}` : '업무를 선택해 이력을 확인하세요';
 }
 async function showView(view, currentOnly = false) {
-  calendarRequest++;
+  calendarRequest++; loadRequest++;
   state.selected.clear(); state.trash = false;
   state.view = view; state.currentOnly = currentOnly;
   $('#items-view').hidden = view !== 'items'; $('#calendar-view').hidden = view !== 'calendar';
@@ -222,6 +226,8 @@ async function showView(view, currentOnly = false) {
   $(view === 'reports' ? '#nav-reports' : view === 'calendar' ? '#nav-calendar' : view === 'notifications' ? '#nav-notifications' : '#nav-items').classList.add('active');
   listRevision = ''; notificationRevision = '';
   if (view === 'calendar') return renderCalendar();
+  if (view === 'reports') return reports.enter();
+  showListSkeleton($(view === 'notifications' ? '#notification-list' : '#item-list'));
   await load(true);
 }
 const dismissingNotifications = new Set();
@@ -596,7 +602,7 @@ function clearSelection() { state.selected.clear(); updateSelection(); document.
 let searchTimer; $('#search').oninput = () => { clearTimeout(searchTimer); clearSelection(); loadRequest++; searchTimer = setTimeout(() => load(true), 200); };
 $('#jira-filter').onchange = safe(async () => { clearTimeout(searchTimer); clearSelection(); await load(true); });
 $('#tag-filter').onchange = safe(async () => { clearTimeout(searchTimer); clearSelection(); await load(true); });
-$('#select-all').onchange = e => { state.selected = e.target.checked ? new Set(visibleItems().map(item => item.id)) : new Set(); renderItems(); };
+$('#select-all').onchange = e => { if ($('#item-list').dataset.loading) { e.target.checked = false; return; } state.selected = e.target.checked ? new Set(visibleItems().map(item => item.id)) : new Set(); renderItems(); };
 $('#trash-view').onclick = safe(async () => {
   clearTimeout(searchTimer); closeDetail(); clearSelection(); state.trash = true;
   state.currentOnly = false; $('#search').value = '';
@@ -630,7 +636,7 @@ $('#list-mode').onchange = safe(async e => {
   state.listMode = e.target.value; saveMode('worklog.list-mode', state.listMode);
   state.selected.clear(); listRevision = '';
   updateListControls();
-  $('#item-list').innerHTML = '<div class="empty" role="status">목록을 불러오는 중입니다.</div>';
+  showListSkeleton($('#item-list'));
   await load(true);
 });
 $('#merge').onclick = () => {

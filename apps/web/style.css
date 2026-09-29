@@ -695,3 +695,11 @@ input[type=checkbox], input[type=radio] { flex: none; padding: 0; margin: 0; }
 @media (prefers-reduced-motion: reduce) { .settings-loading-label::before { animation: none; } }
 
 #calendar-loading { min-height: 1.5em; margin: var(--space-2) 0; color: var(--muted); font-size: var(--text-small); }
+
+.list-skeleton { width: 100%; color: var(--muted); }
+.skeleton-row { padding: var(--space-5); border-bottom: 1px solid var(--line); }
+.skeleton-line { display: block; width: 85%; height: 12px; margin: var(--space-3) 0; border-radius: var(--radius-control); background: var(--line); animation: skeleton-pulse 1.4s ease-in-out infinite alternate; }
+.skeleton-title { width: 45%; height: 18px; }
+.skeleton-meta { width: 25%; }
+@keyframes skeleton-pulse { to { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .skeleton-line { animation: none; } }

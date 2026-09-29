@@ -1,3 +1,4 @@
+import { showListSkeleton, finishListLoading } from './loading.js';
 import { descriptionHTML } from './description.js';
 import { reportBodyMarkdown } from './report-body.js';
 
@@ -164,11 +165,18 @@ export function reportsUI({ api, esc, modal, toast, absoluteTime, navigate, acti
   }
   async function refresh() {
     if (!active()) return;
-    const version = ++requestVersion, rows = await api('/reports');
+    const version = ++requestVersion;
+    let rows;
+    try { rows = await api('/reports'); }
+    catch (error) {
+      if (active() && version === requestVersion) finishListLoading($('#report-list'), enter);
+      return;
+    }
     if (!active() || version !== requestVersion) return;
     const serialized = JSON.stringify(rows);
     if (serialized !== listRevision) {
       listRevision = serialized;
+      finishListLoading($('#report-list'));
       const focused = $('#report-list').contains(document.activeElement) ? document.activeElement.closest('[data-report-id]')?.dataset.reportId : null;
       $('#report-list').innerHTML = rows.length ? rows.map(report => `<article class="report-row" data-report-id="${esc(report.id)}"><div><button class="report-open">${esc(report.title || '요약 작성 중')}</button><p>${esc(periodLabel(report.dates))} · 세션 ${report.session_count}개</p></div><div class="report-row-meta"><span class="badge">${esc(labels[report.state] || report.state)}</span><time datetime="${esc(report.created_at)}">${esc(absoluteTime(report.created_at))}</time></div></article>`).join('') : '<div class="empty"><strong>작성한 업무 요약이 없습니다</strong>캘린더에서 날짜를 선택하거나 분기·반기·연간 요약을 작성하세요.</div>';
       $('#report-list').querySelectorAll('.report-open').forEach(button => button.onclick = () => { selectedReport = button.closest('[data-report-id]').dataset.reportId; detailRevision = ''; void refresh().catch(e => toast(e.message)); });
@@ -176,7 +184,7 @@ export function reportsUI({ api, esc, modal, toast, absoluteTime, navigate, acti
     }
     if (!selectedReport) { $('#report-detail').hidden = true; cachedDetail = null; detailKey = ''; return; }
     const id = selectedReport, nextKey = JSON.stringify(rows.find(report => report.id === id));
-    if (cachedDetail?.report.id === id && detailKey === nextKey && detailRevision) return;
+    if (cachedDetail?.report.id === id && detailKey === nextKey && detailRevision) { $('#report-detail').hidden = false; return; }
     const update = await api(`/reports/${encodeURIComponent(id)}${cachedDetail?.report.id === id ? '?view=summary' : ''}`);
     if (!active() || version !== requestVersion || id !== selectedReport) return;
     const data = { ...update, sessions: update.sessions || cachedDetail?.sessions || [] };
@@ -205,5 +213,11 @@ export function reportsUI({ api, esc, modal, toast, absoluteTime, navigate, acti
   $('#clear-report-dates').onclick = () => { selectedDates.clear(); updateSelection(); };
   $('#create-calendar-report').onclick = () => { if (selectedDates.size) createDialog([...selectedDates].sort()); };
   $('#create-period-report').onclick = () => createDialog();
-  return { selectDateHTML, bindCalendar, refresh };
+  function enter() {
+    listRevision = ''; requestVersion++;
+    $('#report-detail').hidden = true;
+    showListSkeleton($('#report-list'));
+    return refresh();
+  }
+  return { selectDateHTML, bindCalendar, refresh, enter };
 }
