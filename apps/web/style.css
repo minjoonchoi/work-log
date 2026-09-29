@@ -672,3 +672,6 @@ input[type=checkbox], input[type=radio] { flex: none; padding: 0; margin: 0; }
 
 .settings-help { margin-top: var(--space-4); color: var(--muted); font-size: var(--text-small); }
 .settings-help > summary { cursor: pointer; }
+
+.settings-divider { border: 0; border-top: 1px solid var(--line); margin: var(--space-6) 0; }
+.atlassian-settings-section > h3 { margin: 0 0 var(--space-3); font-size: var(--text-body); }

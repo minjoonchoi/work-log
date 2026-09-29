@@ -1,4 +1,3 @@
-import { settingsTabs, bindSettingsTabs } from './settings-tabs.js';
 import { jiraUI } from './jira.js';
 import { descriptionHTML } from './description.js';
 
@@ -34,8 +33,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     if (ticket !== opening || (target && !target.isConnected)) return;
     const renderSettings = target ? html => { target.innerHTML = html; } : modal;
     renderSettings(`${onBack ? '<button type="button" id="back-connection-settings" class="secondary">연결 설정으로 돌아가기</button>' : ''}${target ? '' : '<h2>Atlassian 연결 설정</h2>'}<p>Jira·Confluence 연결은 선택 사항입니다. 연결 없이도 WorkLog를 사용할 수 있습니다.</p>
-      ${settingsTabs('atlassian', 'Atlassian 설정 영역', [['oauth', 'OAuth 연결'], ['network', '네트워크·진단']])}
-      <div id="dialog-error" class="error" role="alert" hidden></div><div id="atlassian-panel-oauth">
+      <div id="dialog-error" class="error" role="alert" hidden></div><div id="atlassian-panel-oauth" class="atlassian-settings-section"><h3>OAuth 연결</h3>
       <label for="atlassian-site-url">Atlassian 사이트 주소</label><input id="atlassian-site-url" maxlength="300" placeholder="https://company.atlassian.net" autocomplete="url" spellcheck="false" aria-describedby="atlassian-site-help" value="${esc(s.config?.site_url || '')}">
       <p id="atlassian-site-help" class="help">기본으로 사용할 사이트입니다. 비워 두면 연결 후 선택할 수 있습니다.</p>
       <label for="atlassian-client-id">Client ID</label><input id="atlassian-client-id" maxlength="200" autocomplete="off" spellcheck="false" value="${esc(s.config?.client_id || '')}">
@@ -43,7 +41,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       <p id="client-secret-help" class="help">Keychain에 안전하게 보관합니다. Client ID가 같으면 빈칸으로 저장해도 기존 값을 유지합니다.</p>
       <details class="settings-help"><summary>OAuth 앱 등록 안내</summary><label for="oauth-callback">OAuth 앱의 Callback URL</label><input id="oauth-callback" readonly value="${esc(s.callback_url)}">
       <p class="help">OAuth 앱에 위 주소를 등록하세요. 연결은 기본 브라우저에서 진행됩니다.</p></details>
-      </div><div id="atlassian-panel-network"><p class="help">회사 네트워크에서 연결되지 않으면 추가 인증서를 설정하세요.</p>
+      </div><hr class="settings-divider"><div id="atlassian-panel-network" class="atlassian-settings-section"><h3>네트워크·진단</h3><p class="help">회사 네트워크에서 연결되지 않으면 추가 인증서를 설정하세요.</p>
       <label for="atlassian-ca-cert-path">추가 CA 인증서 파일 경로</label><input id="atlassian-ca-cert-path" maxlength="4096" placeholder="~/Certificates/company-ca.pem" autocomplete="off" spellcheck="false" aria-describedby="atlassian-ca-cert-help" value="${esc(s.config?.ca_cert_path || '')}">
       <p id="atlassian-ca-cert-help" class="help">회사 루트·중간 CA 인증서(.pem/.crt)의 절대 경로 또는 ~/ 경로를 입력하세요. 비워서 저장하면 추가 인증서만 해제하며, 기존 연결은 유지합니다.</p>
       <details class="service-details"><summary>로컬 서비스 상태</summary><p>관리: 연결됨 · 실행: ${health.runtime_connected ? '연결됨' : '연결 대기'}<br>수집 이벤트 ${health.events}개 · 미확인 출력 ${health.unresolved}개<br>버전 ${esc(health.version)}</p></details>
@@ -52,7 +50,6 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       <div class="settings-actions"><button id="save-atlassian" class="secondary">설정 저장</button><button id="connect-atlassian" class="primary">Atlassian 연결</button><button id="disconnect-atlassian" class="secondary">연결 해제</button></div>
       ${target ? '' : '<div class="dialog-actions"><button data-close>닫기</button></div>'}`);
     const dialog = $('#modal'), client = $('#atlassian-client-id'), secret = $('#atlassian-client-secret'), toggle = $('#toggle-client-secret'), site = $('#atlassian-site-url'), caCert = $('#atlassian-ca-cert-path');
-    bindSettingsTabs(dialog, 'atlassian', 'oauth');
     let config = s.config, hasSecret = !!s.has_client_secret, origin = null, revision = 0, revealing = 0, busy = false, disposed = false;
     const view = { status: $('#atlassian-status'), active: () => !disposed && settings === view && dialog.open && client.isConnected,
       dispose: () => { disposed = true; clearSecret(); dialog.removeEventListener('close', closed); } };

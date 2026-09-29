@@ -72,7 +72,7 @@ test('live status polling preserves unsaved credentials and disconnect retains t
   await open(page); await showSettings(page);
   await expect(page.locator('#atlassian-status')).toContainText('Atlassian 연결됨');
   await clientField(page).fill('unsaved-client'); await secretField(page).fill('unsaved-secret');
-  await page.getByRole('tab', { name: '네트워크·진단', exact: true }).click(); await caField(page).fill('~/Certificates/unsaved-company-ca.pem');
+  await caField(page).fill('~/Certificates/unsaved-company-ca.pem');
   const initialPolls = polls; await h.ingest(pair('live-settings', '09:00:00', '09:05:00'));
   await expect(page.locator('.item-row')).toHaveCount(1);
   await expect.poll(() => polls).toBeGreaterThan(initialPolls);
@@ -153,7 +153,7 @@ test('saving, reopening and clearing an additional CA path retains OAuth and pre
   await expect(page.locator('#atlassian-status')).toContainText('Atlassian 연결됨');
   await expect(caField(page)).toHaveAttribute('aria-describedby', 'atlassian-ca-cert-help');
   await expect(page.locator('#atlassian-ca-cert-help')).toContainText('루트·중간 CA');
-  await page.getByRole('tab', { name: '네트워크·진단', exact: true }).click(); await caField(page).fill(tls.caPath);
+  await caField(page).fill(tls.caPath);
   const before = polls; await expect.poll(() => polls).toBeGreaterThan(before);
   await expect(caField(page)).toHaveValue(tls.caPath);
   await page.getByRole('button', { name: '설정 저장', exact: true }).click();
@@ -171,7 +171,7 @@ test('saving, reopening and clearing an additional CA path retains OAuth and pre
   expect(fs.readFileSync(path.join(h.dir, 'integrations/atlassian.json'), 'utf8')).not.toContain('BEGIN CERTIFICATE');
   await page.getByRole('button', { name: '닫기', exact: true }).click(); await showSettings(page);
   await expect(caField(page)).toHaveValue(tls.caPath); await expect(secretField(page)).toHaveValue('');
-  await page.getByRole('tab', { name: '네트워크·진단', exact: true }).click(); await caField(page).fill('');
+  await caField(page).fill('');
   await page.getByRole('button', { name: '설정 저장', exact: true }).click();
   await expect(page.locator('#save-atlassian')).toBeEnabled();
   expect(saves.at(-1)).toEqual({ client_id: clientSettings.client_id, ca_cert_path: '' });
@@ -189,7 +189,7 @@ test('invalid certificate paths surface backend errors without replacing a saved
   const tokenCalls = f.state.tokenCalls.length;
   await open(page); await showSettings(page);
   for (const candidate of [path.join(h.dir, 'missing-ca.pem'), invalid, tls.privateKeyPath, tls.serverCertPath]) {
-    await page.getByRole('tab', { name: '네트워크·진단', exact: true }).click(); await caField(page).fill(candidate);
+    await caField(page).fill(candidate);
     await page.getByRole('button', { name: '설정 저장', exact: true }).click();
     await expect(page.locator('#dialog-error')).toBeVisible();
     await expect(page.locator('#dialog-error')).toContainText(/인증서|CA|PEM/);
@@ -209,7 +209,7 @@ test('connect saves a changed CA path before authorization while unchanged paths
   page.on('request', request => {
     if (new URL(request.url()).pathname === '/api/integrations/atlassian' && request.method() === 'PUT') saves.push(request.postDataJSON());
   });
-  await open(page); await showSettings(page); await page.getByRole('tab', { name: '네트워크·진단', exact: true }).click(); await caField(page).fill(tls.caPath);
+  await open(page); await showSettings(page); await caField(page).fill(tls.caPath);
   await page.getByRole('button', { name: 'Atlassian 연결', exact: true }).click();
   await expect(page.locator('#connect-atlassian')).toBeEnabled();
   await expect.poll(() => page.evaluate(() => window.__lastExternalURL)).toContain('fixture=ca');
@@ -254,21 +254,22 @@ test('manual ticket creation → live session summary and Jira worklog status wi
   expect(f.state.issues).toHaveLength(1);
 });
 
-test('OAuth and network tabs keep drafts across keyboard navigation and hide unrelated settings', async ({ page }, info) => {
+test('OAuth and network settings share one form separated by a divider and retain drafts', async ({ page }, info) => {
   await saveSettings(h); await open(page); await showSettings(page);
   const dialog = page.getByRole('dialog');
-  const oauth = dialog.getByRole('tab', { name: 'OAuth 연결', exact: true });
-  const network = dialog.getByRole('tab', { name: '네트워크·진단', exact: true });
-  await expect(caField(page)).toBeHidden();
+  await expect(dialog.getByRole('tab', { name: 'OAuth 연결', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('tab', { name: '네트워크·진단', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('heading', { name: 'OAuth 연결', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: '네트워크·진단', exact: true })).toBeVisible();
+  await expect(dialog.locator('.settings-divider')).toHaveCount(1);
   await clientField(page).fill('draft-client'); await secretField(page).fill('draft-secret');
-  await oauth.focus(); await page.keyboard.press('End');
-  await expect(network).toBeFocused(); await expect(clientField(page)).toBeHidden();
   await caField(page).fill('~/Certificates/draft.pem');
-  await dialog.screenshot({ path: info.outputPath('settings-network.png') });
-  await network.focus(); await page.keyboard.press('ArrowLeft');
-  await expect(oauth).toBeFocused(); await expect(clientField(page)).toHaveValue('draft-client');
-  await expect(secretField(page)).toHaveValue('draft-secret'); await expect(secretField(page)).toHaveAttribute('type', 'password');
-  await network.click(); await expect(caField(page)).toHaveValue('~/Certificates/draft.pem');
   await dialog.getByRole('tab', { name: '에이전트 연결', exact: true }).click();
+  await dialog.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
+  await expect(clientField(page)).toHaveValue('draft-client');
+  await expect(secretField(page)).toHaveValue('draft-secret');
+  await expect(secretField(page)).toHaveAttribute('type', 'password');
+  await expect(caField(page)).toHaveValue('~/Certificates/draft.pem');
+  await dialog.screenshot({ path: info.outputPath('settings-atlassian-sections.png') });
   expect((await h.manager('/integrations/atlassian')).config.client_id).toBe(clientSettings.client_id);
 });
