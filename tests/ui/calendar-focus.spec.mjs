@@ -201,3 +201,59 @@ test.describe('local wall-clock position across daylight saving time', () => {
     expect(await page.locator('.current-time-line').evaluate(element => parseFloat(element.style.top))).toBe(90);
   });
 });
+
+for (const view of ['day', 'week', 'month']) test(view + ' renders its grid before data and preserves the grid when entries arrive', async ({ page }) => {
+  await h.ingest(pair('progressive-calendar', '09:00:00', '09:05:00', 'first', { text: '늦게 도착하는 일정' }));
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/calendar?*', async route => { await gate; await route.continue(); });
+  await open(page);
+  await chooseDate(page, '2026-09-17');
+  await button(page, view).click();
+  const grid = view === 'month' ? '.month-grid' : '.time-calendar';
+  await expect(page.locator(grid)).toBeVisible();
+  await chosen(page, view);
+  await expect(page.locator('#calendar-loading')).toContainText('불러오는 중');
+  expect(await page.locator('#calendar [data-event]').count()).toBe(0);
+  await page.evaluate(selector => { window.initialCalendarGrid = document.querySelector(selector); }, grid);
+  release();
+  await expect.poll(() => page.locator('#calendar [data-event]').count()).toBeGreaterThan(0);
+  await expect(page.locator('#calendar-loading')).toHaveText('');
+  expect(await page.evaluate(selector => window.initialCalendarGrid === document.querySelector(selector), grid)).toBe(true);
+  await chosen(page, view);
+});
+
+test('calendar failure keeps the date grid available for navigation and retry', async ({ page }) => {
+  let reject = true;
+  await page.route('**/api/calendar?*', route => reject
+    ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '일시적 오류' }) })
+    : route.continue());
+  await open(page);
+  await expect(page.locator('#calendar-loading')).toContainText('불러오지 못했습니다');
+  await expect(page.locator('.month-grid')).toBeVisible();
+  reject = false;
+  await button(page, 'week').click();
+  await expect(page.locator('.time-calendar')).toBeVisible();
+  await expect(page.locator('#calendar-loading')).toHaveText('');
+});
+
+test('an older calendar response arriving last cannot erase the newly selected period', async ({ page }) => {
+  await h.ingest(pair('new-period', '09:00:00', '09:05:00', 'first', { text: '선택한 날짜의 일정' }));
+  let release, first = true;
+  await page.route('**/api/calendar?*', async route => {
+    if (!first) return route.continue();
+    first = false;
+    await new Promise(resolve => { release = resolve; });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+  });
+  await open(page);
+  await expect.poll(() => typeof release).toBe('function');
+  await chooseDate(page, '2026-09-17'); await button(page, 'day').click();
+  await expect.poll(() => page.locator('#calendar [data-event]').count()).toBeGreaterThan(0);
+  const count = await page.locator('#calendar [data-event]').count();
+  const response = page.waitForResponse(value => new URL(value.url()).pathname === '/api/calendar');
+  release(); await response;
+  await expect(page.locator('#calendar [data-event]')).toHaveCount(count);
+  await expect(page.locator('#calendar-date')).toHaveValue('2026-09-17');
+  await chosen(page, 'day');
+});

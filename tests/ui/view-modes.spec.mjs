@@ -110,7 +110,7 @@ test('list and calendar unit preferences persist independently; special work que
 });
 
 test('calendar day, week and month count merged work and individual sessions separately and expose all overflow entries', async ({ page }) => {
-  for (let index = 0; index < 5; index++) await h.ingest(sample(`calendar-unit-${index}`, `독립 세션 ${index}`, '09:00:00', '09:30:00'));
+  for (let index = 0; index < 5; index++) await h.ingest(sample(`calendar-unit-${index}`, `독립 세션 ${index}`, '09:00:00', '09:15:00'));
   const items = await h.manager('/items'), target = items[0];
   await h.manager('/merge', post({ ids: items.map(item => item.id), target: target.id, operation_id: 'merge-calendar-units' }));
   await open(page); await calendar(page);

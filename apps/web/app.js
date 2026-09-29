@@ -15,6 +15,7 @@ function savedMode(key, fallback) {
 function saveMode(key, value) { try { localStorage.setItem(key, value); } catch { /* The current view still works if storage is unavailable. */ } }
 const state = { items: [], sessions: [], notifications: [], selected: new Set(), view: 'items', trash: false, currentOnly: false, listMode: savedMode('worklog.list-mode', 'items'), calendarView: 'month', mode: savedMode('worklog.calendar-mode', 'sessions'), date: new Date(), detail: null };
 let listRevision = '', notificationRevision = '', calendarMarkup = '', calendarRequest = 0, loadRequest = 0, detailRequest = 0;
+let calendarData = [], calendarDataKey = '';
 let calendarLayout = '', calendarFocusNow = false, calendarClockTimer;
 const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
 let streamConnected = false, refreshQueued = false, refreshing = false, refreshTimer;
@@ -220,6 +221,7 @@ async function showView(view, currentOnly = false) {
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
   $(view === 'reports' ? '#nav-reports' : view === 'calendar' ? '#nav-calendar' : view === 'notifications' ? '#nav-notifications' : '#nav-items').classList.add('active');
   listRevision = ''; notificationRevision = '';
+  if (view === 'calendar') return renderCalendar();
   await load(true);
 }
 const dismissingNotifications = new Set();
@@ -490,8 +492,23 @@ function eventButton(e, cls = '', style = '') {
 }
 async function renderCalendar() {
   const requestNumber = ++calendarRequest;
-  const mode = state.mode, { start, end } = range(), entries = await api(`/calendar?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}&mode=${mode}`);
-  if (requestNumber !== calendarRequest || state.view !== 'calendar') return;
+  const mode = state.mode, { start, end } = range();
+  const key = `${state.calendarView}:${mode}:${start.toISOString()}:${end.toISOString()}`;
+  paintCalendar(calendarDataKey === key ? calendarData : []);
+  $('#calendar-loading').textContent = '일정을 불러오는 중…';
+  try {
+    const entries = await api(`/calendar?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}&mode=${mode}`);
+    if (requestNumber !== calendarRequest || state.view !== 'calendar') return;
+    calendarData = entries; calendarDataKey = key;
+    paintCalendar(entries);
+    $('#calendar-loading').textContent = '';
+  } catch (failure) {
+    if (requestNumber !== calendarRequest || state.view !== 'calendar') return;
+    $('#calendar-loading').textContent = '일정을 불러오지 못했습니다. 날짜나 뷰를 다시 선택해 주세요.';
+  }
+}
+function paintCalendar(entries) {
+  const mode = state.mode, { start, end } = range();
   $('#calendar-mode').value = mode;
   $('#calendar-unit-label').textContent = mode === 'items' ? '업무별 보기' : '세션별 보기';
   $('#calendar-date').value = isoDate(state.date);
@@ -507,20 +524,20 @@ async function renderCalendar() {
   if (state.calendarView === 'month') {
     markup = `<div class="month-grid">${weekdays.map((d, i) => `<div class="weekday" data-weekday="${i}">${d}</div>`).join('')}${days.map((d, i) => {
       const list = dayEntries[i];
-      return `<div class="month-day ${d.getMonth() === state.date.getMonth() ? '' : 'outside'}" data-date="${isoDate(d)}"><time class="day-number" datetime="${isoDate(d)}">${d.getDate()}</time>${reports.selectDateHTML(isoDate(d))}${list.slice(0, 2).map(e => eventButton(e)).join('')}${list.length > 2 ? (moreLists.push({ entries: list, day: d }), `<button class="more" data-more="${moreLists.length - 1}">+${list.length - 2}개 더보기</button>`) : ''}</div>`;
+      return `<div class="month-day ${d.getMonth() === state.date.getMonth() ? '' : 'outside'}" data-date="${isoDate(d)}"><time class="day-number" datetime="${isoDate(d)}">${d.getDate()}</time>${reports.selectDateHTML(isoDate(d))}<div class="calendar-entries">${list.slice(0, 2).map(e => eventButton(e)).join('')}${list.length > 2 ? (moreLists.push({ entries: list, day: d }), `<button class="more" data-more="${moreLists.length - 1}">+${list.length - 2}개 더보기</button>`) : ''}</div></div>`;
     }).join('')}</div>`;
   } else {
     const labels = Array.from({ length: 24 }, (_, h) => `<span style="top:${h * 60 + 4}px">${String(h).padStart(2, '0')}:00</span>`).join('');
-    markup = `<div class="time-calendar" style="--days:${days.length}"><div class="time-header"><div>시간</div>${days.map((d, i) => `<div data-date="${isoDate(d)}"><time datetime="${isoDate(d)}">${dateLabel(d)} <span class="day-weekday">(${weekdays[d.getDay()]})</span></time>${state.calendarView === 'week' ? reports.selectDateHTML(isoDate(d)) : ''}${dayEntries[i].length > 2 ? (moreLists.push({ entries: dayEntries[i], day: d }), `<button class="more day-more" data-more="${moreLists.length - 1}">${state.mode === 'items' ? '업무' : '세션'} ${dayEntries[i].length}개 더보기</button>`) : ''}</div>`).join('')}</div><div class="time-body"><div class="time-labels">${labels}</div>${days.map((day, i) => {
+    markup = `<div class="time-calendar" style="--days:${days.length}"><div class="time-header"><div>시간</div>${days.map((d, i) => `<div data-date="${isoDate(d)}"><time datetime="${isoDate(d)}">${dateLabel(d)} <span class="day-weekday">(${weekdays[d.getDay()]})</span></time>${state.calendarView === 'week' ? reports.selectDateHTML(isoDate(d)) : ''}<span class="calendar-entries">${dayEntries[i].length > 2 ? (moreLists.push({ entries: dayEntries[i], day: d }), `<button class="more day-more" data-more="${moreLists.length - 1}">${state.mode === 'items' ? '업무' : '세션'} ${dayEntries[i].length}개 더보기</button>`) : ''}</span></div>`).join('')}</div><div class="time-body"><div class="time-labels">${labels}</div>${days.map((day, i) => {
       const list = dayEntries[i];
       // Position by local wall clock; DST offsets remain visible in full timestamps in the detail.
       const position = timestamp => { const date = new Date(timestamp); return date <= day ? 0 : date >= addDays(day, 1) ? 1440 : date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60; };
       const placed = list.map(e => ({ e, top: position(e.start_at), bottom: Math.max(position(e.start_at) + 38, position(e.end_at)) })).sort((a, b) => a.top - b.top);
       const clusters = []; for (const p of placed) { let c = clusters.at(-1); if (!c || p.top >= c.end) { c = { entries: [], end: p.bottom }; clusters.push(c); } c.entries.push(p); c.end = Math.max(c.end, p.bottom); }
-      return `<div class="time-day" data-date="${isoDate(day)}">${clusters.map(c => {
+      return `<div class="time-day" data-date="${isoDate(day)}"><div class="calendar-entries">${clusters.map(c => {
         const visible = c.entries.slice(0, 2);
         return visible.map((p, n) => eventButton(p.e, 'timed-event', `top:${p.top}px;height:${Math.min(1440 - p.top, p.bottom - p.top)}px;left:${n * 50 + 1}%;width:${visible.length > 1 ? 48 : 97}%`)).join('') + (c.entries.length > 2 ? (moreLists.push({ entries: list, day }), `<button class="more time-more" style="top:${Math.min(c.entries[0].top + 40, 1400)}px" data-more="${moreLists.length - 1}">+${c.entries.length - 2}개 더보기</button>`) : '');
-      }).join('')}</div>`;
+      }).join('')}</div></div>`;
     }).join('')}</div></div>`;
   }
   // Repeated snapshots must not detach a keyboard-focused button or reset scroll.
@@ -534,7 +551,14 @@ async function renderCalendar() {
     const focusReportDate = focused?.dataset.reportDate;
     const focusDate = focused?.closest('[data-date]')?.dataset.date;
     const focusMore = focused?.hasAttribute('data-more');
-    calendarMarkup = markup; $('#calendar').innerHTML = markup;
+    calendarMarkup = markup;
+    if (!changedPeriod && $('#calendar .calendar-entries')) {
+      const template = document.createElement('template'); template.innerHTML = markup;
+      const slots = [...template.content.querySelectorAll('.calendar-entries')];
+      $('#calendar').querySelectorAll('.calendar-entries').forEach((slot, index) => {
+        if (slot.innerHTML !== slots[index].innerHTML) slot.innerHTML = slots[index].innerHTML;
+      });
+    } else $('#calendar').innerHTML = markup;
     const next = $('#calendar .time-calendar');
     if (next && scroll && !changedPeriod) { next.scrollTop = scroll.top; next.scrollLeft = scroll.left; }
     if (!changedPeriod && focused) {

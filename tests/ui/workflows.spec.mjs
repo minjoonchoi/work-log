@@ -72,7 +72,7 @@ test('20-minute boundary is visible in detail with real prompt/output timestamps
   await page.screenshot({ path: 'output/playwright/session-history.png', fullPage: true });
 });
 test('month/day/week overflow opens all hidden entries; count follows selected display unit', async ({ page }) => {
-  for (let i = 0; i < 5; i++) await h.ingest(sample(`a${i}`, `캘린더 업무 ${i}`));
+  for (let i = 0; i < 5; i++) await h.ingest(sample(`a${i}`, `캘린더 업무 ${i}`, '09:00:00', '09:15:00'));
   await open(page); await calendar(page);
   const monthDay = page.locator('.month-day[data-date="2026-09-17"]');
   await expect(monthDay.locator('.calendar-event')).toHaveCount(2);
@@ -94,8 +94,8 @@ test('month/day/week overflow opens all hidden entries; count follows selected d
   await page.getByLabel('캘린더 표시 단위').selectOption('sessions'); await expect(monthDay.locator('.more')).toHaveText('+3개 더보기');
 });
 test('timed overflow lists the entire date including sessions outside the overlapping cluster', async ({ page }) => {
-  for (let i = 0; i < 3; i++) await h.ingest(sample(`overlap-${i}`, `오전 업무 ${i}`));
-  await h.ingest(sample('afternoon', '오후 별도 작업', '14:00:00', '14:30:00'));
+  for (let i = 0; i < 3; i++) await h.ingest(sample(`overlap-${i}`, `오전 업무 ${i}`, '09:00:00', '09:15:00'));
+  await h.ingest(sample('afternoon', '오후 별도 작업', '14:00:00', '14:15:00'));
   await h.ingest(pair('other-day', '2026-09-18T09:00:00+09:00', '2026-09-18T09:30:00+09:00', 't1', { text: '다음 날 작업' }));
   await open(page); await calendar(page, 'sessions', 'day');
   for (const view of ['day', 'week']) {
@@ -159,7 +159,7 @@ test('verified artifact is opened through work item; changed file is rejected', 
   await expect(page.getByRole('alert')).toContainText('검증 후 산출물이 변경');
 });
 test('keyboard navigation reaches hidden calendar entries and selects an item', async ({ page }) => {
-  for (let i = 0; i < 4; i++) await h.ingest(sample(`keyboard${i}`, `키보드 작업 ${i}`));
+  for (let i = 0; i < 4; i++) await h.ingest(sample(`keyboard${i}`, `키보드 작업 ${i}`, '09:00:00', '09:15:00'));
   await open(page); await calendar(page);
   const more = page.locator('.month-day[data-date="2026-09-17"] .more'); await more.focus();
   // A concurrent snapshot of the same calendar must preserve keyboard focus.

@@ -693,3 +693,5 @@ input[type=checkbox], input[type=radio] { flex: none; padding: 0; margin: 0; }
 .settings-loading-close { position: relative; z-index: 6; }
 @keyframes settings-loading-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .settings-loading-label::before { animation: none; } }
+
+#calendar-loading { min-height: 1.5em; margin: var(--space-2) 0; color: var(--muted); font-size: var(--text-small); }
