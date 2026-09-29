@@ -1,3 +1,4 @@
+import { setSettingsLoading } from './settings-tabs.js';
 import { jiraUI } from './jira.js';
 import { descriptionHTML } from './description.js';
 
@@ -50,8 +51,9 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       ${target ? '' : '<div class="dialog-actions"><button data-close>닫기</button></div>'}`);
     const dialog = $('#modal'), client = $('#atlassian-client-id'), secret = $('#atlassian-client-secret'), toggle = $('#toggle-client-secret'), site = $('#atlassian-site-url'), caCert = $('#atlassian-ca-cert-path');
     let config = s.config, hasSecret = !!s.has_client_secret, origin = null, revision = 0, revealing = 0, busy = false, disposed = false;
+    let clearLoading = () => {};
     const view = { loading: true, status: $('#atlassian-status'), active: () => !disposed && settings === view && dialog.open && client.isConnected,
-      dispose: () => { disposed = true; clearSecret(); dialog.removeEventListener('close', closed); } };
+      dispose: () => { disposed = true; clearLoading(); clearSecret(); dialog.removeEventListener('close', closed); } };
     function present() {
       toggle.textContent = secret.type === 'password' ? '보기' : '숨기기';
       toggle.setAttribute('aria-label', `Client Secret ${toggle.textContent}`);
@@ -118,6 +120,8 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     async function loadSettings() {
       if (!view.active()) return;
       view.loading = true;
+      const finishLoading = setSettingsLoading(target || $('#modal-content'), true);
+      clearLoading = finishLoading;
       formControls.forEach(control => control.disabled = true);
       retry.hidden = true;
       view.status.textContent = '설정을 불러오는 중…';
@@ -135,7 +139,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
         if (!view.active()) return;
         view.status.textContent = '설정을 불러오지 못했습니다. 다시 시도하세요.';
         currentError(error); retry.hidden = false;
-      }
+      } finally { finishLoading(); }
     }
     retry.onclick = () => { $('#dialog-error').hidden = true; void loadSettings(); };
     await loadSettings();

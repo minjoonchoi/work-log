@@ -675,3 +675,21 @@ input[type=checkbox], input[type=radio] { flex: none; padding: 0; margin: 0; }
 
 .settings-divider { border: 0; border-top: 1px solid var(--line); margin: var(--space-6) 0; }
 .atlassian-settings-section > h3 { margin: 0 0 var(--space-3); font-size: var(--text-body); }
+
+.settings-loading { position: relative; min-height: 160px; }
+.settings-loading-overlay {
+  position: absolute; inset: 0; z-index: 5; cursor: wait;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  display: flex; align-items: flex-start; justify-content: center; padding: var(--space-8);
+}
+.settings-loading-label {
+  position: sticky; top: var(--space-8); display: flex; align-items: center; gap: var(--space-3);
+  color: var(--text-secondary); font-size: var(--font-body); line-height: var(--line-body);
+}
+.settings-loading-label::before {
+  content: ''; width: 16px; height: 16px; border: 2px solid var(--line);
+  border-top-color: var(--accent); border-radius: 50%; animation: settings-loading-spin 1s linear infinite;
+}
+.settings-loading-close { position: relative; z-index: 6; }
+@keyframes settings-loading-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .settings-loading-label::before { animation: none; } }

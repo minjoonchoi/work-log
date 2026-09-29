@@ -288,6 +288,8 @@ test('Atlassian fields render immediately during slow loading and local health s
   await showSettings(page);
   await expect(clientField(page)).toBeVisible();
   await expect(clientField(page)).toBeDisabled();
+  await expect(page.locator('#connections-panel-atlassian .settings-loading-overlay')).toBeVisible();
+  await expect(clientField(page)).toHaveJSProperty('inert', true);
   await expect(page.locator('#atlassian-status')).toHaveText('설정을 불러오는 중…');
   await expect(page.locator('#save-atlassian')).toBeDisabled();
   await expect(page.locator('#connections-panel-atlassian .service-details')).toHaveCount(0);
@@ -298,6 +300,8 @@ test('Atlassian fields render immediately during slow loading and local health s
   await page.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
   await expect(clientField(page)).toBeEnabled();
   await expect(clientField(page)).toHaveValue(clientSettings.client_id);
+  await expect(page.locator('#connections-panel-atlassian .settings-loading-overlay')).toHaveCount(0);
+  await expect(clientField(page)).toHaveJSProperty('inert', false);
   await expect(secretField(page)).toHaveValue('');
   await expect.poll(() => typeof releaseHealth).toBe('function');
   releaseHealth();
@@ -325,4 +329,27 @@ test('failed initial settings load keeps the form and offers retry; late respons
   const response = page.waitForResponse(value => new URL(value.url()).pathname === '/api/integrations/atlassian');
   release(); await response;
   await expect(clientField(page)).toHaveValue('new-dialog-edit');
+});
+
+for (const [title, endpoint, ready] of [
+  ['자동 작성 설정', '/api/automation/settings', '#initial-output-count'],
+  ['작업 실행 설정', '/api/execution-settings', '#task-backend']
+]) test(title + ' covers the modal during loading, supports closing, and ignores stale responses', async ({ page }) => {
+  await open(page);
+  let release, requests = 0;
+  await page.route('**' + endpoint, async route => {
+    if (++requests === 1) await new Promise(resolve => { release = resolve; });
+    await route.continue();
+  });
+  await page.getByRole('button', { name: title, exact: true }).click();
+  await expect(page.locator('#modal .settings-loading-overlay')).toBeVisible();
+  await expect(page.locator('#modal-content')).toHaveAttribute('aria-busy', 'true');
+  await page.getByRole('button', { name: '닫기', exact: true }).click();
+  await expect(page.locator('#modal')).not.toBeVisible();
+  await page.getByRole('button', { name: title, exact: true }).click();
+  await expect(page.locator(ready)).toBeEnabled();
+  const response = page.waitForResponse(value => new URL(value.url()).pathname === endpoint);
+  release(); await response;
+  await expect(page.locator(ready)).toBeEnabled();
+  await expect(page.locator('#modal .settings-loading-overlay')).toHaveCount(0);
 });

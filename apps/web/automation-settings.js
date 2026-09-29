@@ -1,7 +1,9 @@
+import { loadSettingsModal } from './settings-tabs.js';
 export function automationSettingsUI({ api, esc, modal, toast }) {
   const $ = selector => document.querySelector(selector);
   async function showSettings() {
-    const settings = await api('/automation/settings');
+    const settings = await loadSettingsModal({ modal, title: '자동 작성 설정', load: () => api('/automation/settings'), retry: showSettings });
+    if (!settings) return;
     modal(`<h2>자동 작성 설정</h2><p>대화가 쌓이면 업무 제목·설명을 자동 갱신합니다. 이 컴퓨터의 모든 업무에 적용됩니다.</p>
       <form id="automation-settings-form">
         <div id="automation-settings-error" class="error" role="alert" hidden></div>

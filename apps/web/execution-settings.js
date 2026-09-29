@@ -1,3 +1,4 @@
+import { loadSettingsModal } from './settings-tabs.js';
 export function executionSettingsUI({ api, esc, modal, toast }) {
   const $ = selector => document.querySelector(selector);
   let snapshot, activeDraft, currentGroup = 'worklog';
@@ -305,6 +306,6 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
       });
     }
   }
-  async function showSettings() { snapshot = await api('/execution-settings'); searches.clear(); render(undefined, 'worklog'); }
+  async function showSettings() { const loaded = await loadSettingsModal({ modal, title: '작업 실행 설정', load: () => api('/execution-settings'), retry: showSettings }); if (!loaded) return; snapshot = loaded; searches.clear(); render(undefined, 'worklog'); }
   return { showSettings };
 }
