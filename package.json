@@ -14,6 +14,7 @@
     "test:ui": "playwright test",
     "build:mac": "node scripts/build-mac.mjs",
     "doctor": "node bin/harness.mjs doctor",
+    "check:design": "node scripts/check-design-tokens.mjs",
     "verify:self": "node scripts/self-verify.mjs"
   },
   "devDependencies": {

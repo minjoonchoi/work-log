@@ -8,7 +8,7 @@ test.beforeEach(async ({ context }) => {
   await context.addInitScript(token => window.__HARNESS_TOKEN__ = token, fs.readFileSync(h.dir + '/token', 'utf8'));
 });
 test.afterEach(async () => h.close());
-test('only history utilities remain in navigation, connections and writer settings', async ({ page }) => {
+test('only history utilities remain in navigation, connections and writer settings', async ({ page }, info) => {
   const retired = [];
   page.on('request', r => { if (/harness-packages|task-queue/.test(r.url())) retired.push(r.url()); });
   await page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager').port}`);
@@ -18,8 +18,20 @@ test('only history utilities remain in navigation, connections and writer settin
   await expect(page.getByRole('tab', { name: '직무 패키지', exact: true })).toHaveCount(0);
   await expect(page.locator('[data-connection=codex-harness]')).toHaveCount(0);
   await expect(page.locator('[data-connection=codex-tracking]')).toBeVisible();
+  await page.screenshot({ path: info.outputPath('connection-agents.png') });
   await page.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Atlassian 설정', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Client ID', { exact: true })).toBeVisible();
+  await expect(page.locator('#open-atlassian-settings')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('connection-atlassian.png') });
+  await page.getByLabel('Client ID', { exact: true }).fill('unsaved-client');
+  await page.getByRole('tab', { name: '에이전트 연결', exact: true }).click();
+  await page.getByRole('button', { name: '상태 새로고침', exact: true }).click();
+  await page.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
+  await expect(page.getByLabel('Client ID', { exact: true })).toHaveValue('unsaved-client');
+  expect((await page.locator('#modal').boundingBox()).height).toBeGreaterThanOrEqual(640);
+  await page.setViewportSize({ width: 900, height: 550 });
+  expect((await page.locator('#modal').boundingBox()).height).toBeLessThanOrEqual(495);
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole('button', { name: '닫기', exact: true }).click();
   await page.getByRole('button', { name: '작업 실행 설정', exact: true }).click();
   await expect(page.getByRole('tab', { name: '하네스 작업', exact: true })).toHaveCount(0);

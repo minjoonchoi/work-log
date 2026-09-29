@@ -15,7 +15,7 @@ const open = page => page.goto(`http://127.0.0.1:${readEndpoint(h.dir, 'manager'
 const siteField = page => page.getByLabel('Atlassian 사이트 주소', { exact: true });
 async function settings(page) {
   await page.getByRole('button', { name: '연결 설정', exact: true }).click();
-  await page.getByRole('button', { name: 'Atlassian 설정', exact: true }).click();
+  await page.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
 }
 const saveSite = site_url => h.manager('/integrations/atlassian', { method: 'PUT', body: { client_id: 'fixture-client', site_url } });
 function multipleSites() {

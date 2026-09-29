@@ -1,9 +1,16 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Harness, event, pair } from '../helpers.mjs';
+import { Harness, event as sourceEvent } from '../helpers.mjs';
 import { readEndpoint } from '../../src/shared.mjs';
 
+// Keep live-state fixtures recent; old absolute dates are correctly marked idle.
+const event = (agent, kind, time, turn, extra) => {
+  const stamp = time.includes('T') ? time : new Date(Date.now() - 300000 +
+    (Date.parse('2000-01-01T' + time + 'Z') - Date.parse('2000-01-01T09:00:00Z'))).toISOString();
+  return sourceEvent(agent, kind, stamp, turn, extra);
+};
+const pair = (agent, start, end, turn, extra) => [event(agent, 'input', start, turn, extra), event(agent, 'output', end, turn, extra)];
 let h;
 test.beforeEach(async ({ context }) => {
   h = await new Harness().start('manager');

@@ -103,21 +103,16 @@ test('raw hook I/O stays independent of a new task type, tool events and interna
   await page.setViewportSize({ width: 900, height: 800 });
   expect(await page.locator('#detail').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
   await page.screenshot({ path: 'output/screenshots/session-record-history-compact.png' });
-  await page.locator('.session-results > summary').click();
-  await expect(page.locator('.session-result')).toContainText('research.future-format');
-  await expect(page.locator('.session-result')).toContainText('작업이 완료되었습니다.');
-  await expect(page.getByRole('button', { name: '산출물 보기' })).toHaveCount(0);
-  await page.getByRole('button', { name: '실행 상세', exact: true }).click();
-  expect(diagnostics).toHaveLength(1);
-  await page.locator('.execution-event > summary').click();
-  await expect(page.getByRole('dialog')).toContainText('{"arbitrary":"result data"}');
+  await expect(page.locator('.session-results')).not.toHaveAttribute('open', '');
+  expect(diagnostics).toHaveLength(0);
+  expect((await h.manager('/items/' + item.id)).events.some(e => e.role === 'worker')).toBe(false);
 });
 
-test('a late Stop that splits a session removes moved records from an already open history', async ({ page }) => {
+test('a late Stop updates the correct open time window without moving later records', async ({ page }) => {
   await h.ingest([event('resplit-ui', 'input', '09:00:00', 'first', { text: '세션 경계 갱신' }),
     ...pair('resplit-ui', '09:30:00', '09:31:00', 'second', { text: '다음 세션의 대화' })]);
-  await open(page); const firstId = await page.locator('.session-card').getAttribute('data-session-id');
-  await page.locator('.session-card > summary').click(); await page.locator('.raw-history > summary').click(); await expect(page.locator('.event')).toHaveCount(3);
+  await open(page); const firstId = await page.locator('.session-card').last().getAttribute('data-session-id');
+  await page.locator('.session-card').last().locator(':scope > summary').click(); await page.locator('.raw-history > summary').last().click(); await expect(page.locator('.event')).toHaveCount(1);
   await h.ingest([event('resplit-ui', 'output', '09:05:00', 'first', { text: '늦게 도착한 첫 응답' })]);
   await expect(page.locator('.session-card')).toHaveCount(2);
   const original = page.locator(`[data-session-id="${firstId}"]`);
@@ -146,6 +141,7 @@ test('switching work items while a history request is delayed ignores the old re
 
 test('unresolved output is fetched only after opening its raw group and each record remains collapsed until selected', async ({ page }) => {
   await h.ingest([event('orphan-ui', 'output', '09:05:00', 'late', { text: '<img src=x onerror=alert(1)> 연결 전 원문' })]);
+  await h.ingest([event('orphan-ui', 'input', '09:10:00', 'actual-user', { text: '실제 사용자 요청' })]);
   const requests = []; page.on('request', req => { if (req.url().includes('/history?')) requests.push(req.url()); });
   await open(page);
   const group = page.locator('[data-raw-history-key="unlinked"]');

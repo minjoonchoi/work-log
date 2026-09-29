@@ -153,13 +153,13 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
         </div>
         <div id="instruction-preview" class="instruction-preview" role="tabpanel" aria-labelledby="instruction-preview-tab">${markdown(task.instruction)}</div>
         <div id="instruction-source" role="tabpanel" aria-labelledby="instruction-edit-tab" hidden><textarea id="task-instruction" maxlength="12000" spellcheck="false" aria-describedby="instruction-help">${esc(task.instruction)}</textarea></div>
-        <p id="instruction-help" class="help">제목, 목록, 강조, 코드 블록을 미리 볼 수 있습니다. HTML·링크·이미지는 텍스트로 표시합니다. 원문을 편집한 뒤 저장하면 새 작업부터 적용됩니다.</p>
+        <p id="instruction-help" class="help">Markdown으로 편집하세요. 저장한 지시문은 새 작업부터 적용됩니다.</p>
       </section>
-      <label for="task-backend">기본 backend</label><select id="task-backend"><option value="codex" ${task.backend === 'codex' ? 'selected' : ''}>Codex</option><option value="claude" ${task.backend === 'claude' ? 'selected' : ''}>Claude</option></select>
+      <label for="task-backend">기본 실행 도구</label><select id="task-backend"><option value="codex" ${task.backend === 'codex' ? 'selected' : ''}>Codex</option><option value="claude" ${task.backend === 'claude' ? 'selected' : ''}>Claude</option></select>
       <div class="backend-settings">
         ${['codex', 'claude'].map(engine => backendEditor(engine, task.backends[engine])).join('')}
       </div>
-      <p class="help">모델과 effort는 지원되는 조합만 선택할 수 있습니다. effort의 ‘자동 선택’은 유형의 단계별 기본값을 우선 사용하고, 선택한 모델이 그 값을 지원하지 않을 때만 모델 기본값을 사용합니다. effort 미지원 모델에는 값을 적용하지 않습니다. 두 backend의 설정은 각각 유지됩니다.</p>`;
+      <p class="help">모델에 맞는 effort만 선택할 수 있습니다. 자동 선택을 권장하며, Codex·Claude 설정은 각각 저장됩니다.</p>`;
   const metadata = task => `<section class="custom-task-metadata" aria-label="사용자 작업 정보">
       <label for="custom-task-label">작업 이름</label><input id="custom-task-label" value="${esc(task.label || '')}" maxlength="120" required>
       <label for="custom-task-description">작업 목적</label><textarea id="custom-task-description" maxlength="2000" required>${esc(task.description || '')}</textarea>
@@ -249,11 +249,11 @@ export function executionSettingsUI({ api, esc, modal, toast }) {
     const form = restore ? { ...task, ...restore.values, backends: Object.fromEntries(['codex', 'claude'].map(engine => [engine, { ...task.backends[engine], ...restore.values.backends[engine] }])) } : task;
     const formRevision = restore?.values.revision ?? snapshot.revision;
     const template = custom && snapshot.tasks.find(value => value.id === task.template_id);
-    modal(`<h2>작업 실행 설정</h2><p>새로 시작하는 작업에 적용할 지시문과 backend 설정입니다. 진행 중인 작업의 고정 설정은 바뀌지 않습니다.</p>
+    modal(`<h2>작업 실행 설정</h2><p>작업별 지시문과 모델을 설정합니다. 변경 내용은 새 작업부터 적용됩니다.</p>
       ${errorMarkup}
       <section id="execution-management-panel" aria-label="자동 작성 설정">
       <div class="execution-settings-layout"><div class="execution-settings-navigation">
-      <p class="execution-group-description">세션 요약, 업무 제목·설명, 업무 요약과 Jira 결과 댓글의 작성 방식을 설정합니다.</p>
+      <p class="execution-group-description">변경할 작성 작업을 선택하세요.</p>
       <div class="execution-task-toolbar"><label for="execution-task">작업 유형</label></div>
       <div class="execution-task-picker">
         <label for="execution-task-search">작업 유형 검색</label>

@@ -2,26 +2,26 @@ export function automationSettingsUI({ api, esc, modal, toast }) {
   const $ = selector => document.querySelector(selector);
   async function showSettings() {
     const settings = await api('/automation/settings');
-    modal(`<h2>자동 작성 설정</h2><p>새 업무의 제목·설명은 첫 프롬프트에서 바로 채우며 모델을 호출하지 않습니다. 아래 기준을 충족하면 수집된 대화와 세션 요약으로 구조화해 갱신합니다. 이 컴퓨터의 모든 업무에 적용합니다.</p>
+    modal(`<h2>자동 작성 설정</h2><p>대화가 쌓이면 업무 제목·설명을 자동 갱신합니다. 이 컴퓨터의 모든 업무에 적용됩니다.</p>
       <form id="automation-settings-form">
         <div id="automation-settings-error" class="error" role="alert" hidden></div>
         <section class="automation-setting"><h3>세션 자동 요약</h3>
           <label><input id="session-summary-enabled" type="checkbox" ${settings.session_summary_enabled ? 'checked' : ''}> 세션 자동 요약 사용</label>
-          <p class="help">20분 이상 활동이 없는 종료 세션을 주기적으로 확인해 최대 5개씩 요약합니다. 끄면 새 자동 요약과 대기 중인 자동 요약을 멈춥니다. 실행 서비스에 이미 접수된 요약은 완료하며 수동 요약은 계속 사용할 수 있습니다.</p></section>
+          <p class="help">20분 이상 활동이 없는 세션을 최대 5개씩 요약합니다. 끄면 대기 중인 자동 요약을 멈춥니다. 이미 시작한 요약과 수동 요약은 유지됩니다.</p></section>
         <section class="automation-setting" aria-labelledby="initial-output-heading">
           <h3 id="initial-output-heading">첫 구조화 갱신</h3>
           <label for="initial-output-count">에이전트 응답 수</label>
           <div class="threshold-input"><input id="initial-output-count" name="initial_output_count" type="number" min="1" max="1000" step="1" required value="${esc(settings.initial_output_count)}" aria-describedby="initial-output-help"><span>회</span></div>
-          <p class="help" id="initial-output-help">업무에 연결된 사용자 에이전트 세션의 응답을 합산합니다. 내부 워커 출력과 중복 수집은 제외합니다.</p>
+          <p class="help" id="initial-output-help">설정한 응답 수에 도달하면 제목·설명을 처음 갱신합니다. 내부 작업과 중복 기록은 제외합니다.</p>
         </section>
         <section class="automation-setting" aria-labelledby="summary-interval-heading">
           <h3 id="summary-interval-heading">이후 구조화 갱신</h3>
           <label for="summary-interval">요약된 종료 세션 수</label>
           <div class="threshold-input"><input id="summary-interval" name="summary_interval" type="number" min="1" max="1000" step="1" required value="${esc(settings.summary_interval)}" aria-describedby="summary-interval-help"><span>개마다</span></div>
-          <p class="help" id="summary-interval-help">5개로 설정하면 종료 세션의 요약이 5개, 10개, 15개 쌓일 때 갱신합니다. 같은 세션의 재요약은 추가로 세지 않습니다.</p>
+          <p class="help" id="summary-interval-help">예: 5개로 설정하면 세션 요약이 5개 쌓일 때마다 갱신합니다. 재요약은 제외합니다.</p>
         </section>
-        <p class="help">1~1,000까지 설정할 수 있습니다. 저장한 기준은 다음 자동 작성부터 적용합니다. 이미 지난 기준은 최신 이력으로 한 번만 처리하고, 진행 중인 작성은 중복 실행하지 않습니다.</p>
-        <p class="help">직접 편집한 제목·설명은 자동으로 덮어쓰지 않습니다. 업무 상세의 ‘다시 작성’은 언제든 사용할 수 있습니다.</p>
+        <p class="help">1~1,000까지 입력할 수 있습니다. 저장 후 다음 자동 작성부터 적용됩니다.</p>
+        <p class="help">직접 편집한 제목·설명은 유지합니다. 필요하면 업무 상세에서 ‘다시 작성’을 누르세요.</p>
         <div class="dialog-actions"><button type="button" data-close>닫기</button><button type="button" id="reset-automation-settings" class="secondary">기본값 입력</button><button type="submit" id="save-automation-settings" class="primary">저장</button></div>
       </form>`);
     const form = $('#automation-settings-form');

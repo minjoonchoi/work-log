@@ -155,7 +155,7 @@ test('live session updates preserve the timed calendar scroll instead of jumping
 
 test('live updates retain focus on the correct date of a cross-midnight event and on a growing month overflow button', async ({ page }) => {
   await page.clock.setFixedTime(local('19T13:07:00'));
-  await h.ingest(pair('focus-midnight', '2026-09-17T23:50:00+09:00', '2026-09-18T00:10:00+09:00', 'overnight', { text: '자정을 넘는 설계 검토' }));
+  await h.ingest(pair('focus-midnight', '2026-09-17T23:50:00+09:00', '2026-09-18T00:09:00+09:00', 'overnight', { text: '자정을 넘는 설계 검토' }));
   await open(page); await button(page, 'week').click();
   const firstDate = page.locator('.time-day[data-date="2026-09-17"] .calendar-event');
   const secondDate = page.locator('.time-day[data-date="2026-09-18"] .calendar-event');

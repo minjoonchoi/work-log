@@ -18,7 +18,7 @@ const secretPath = '/api/integrations/atlassian/client-secret';
 const clientSettings = { client_id: 'fixture-client', client_secret: 'fixture-secret' };
 const showSettings = async page => {
   await page.getByRole('button', { name: '연결 설정', exact: true }).click();
-  await page.getByRole('button', { name: 'Atlassian 설정', exact: true }).click();
+  await page.getByRole('tab', { name: 'Atlassian 연결', exact: true }).click();
 };
 const clientField = page => page.getByLabel('Client ID', { exact: true });
 const secretField = page => page.getByLabel('Client Secret', { exact: true });
@@ -269,6 +269,6 @@ test('OAuth and network tabs keep drafts across keyboard navigation and hide unr
   await expect(oauth).toBeFocused(); await expect(clientField(page)).toHaveValue('draft-client');
   await expect(secretField(page)).toHaveValue('draft-secret'); await expect(secretField(page)).toHaveAttribute('type', 'password');
   await network.click(); await expect(caField(page)).toHaveValue('~/Certificates/draft.pem');
-  await dialog.getByRole('button', { name: '연결 설정으로 돌아가기', exact: true }).click();
+  await dialog.getByRole('tab', { name: '에이전트 연결', exact: true }).click();
   expect((await h.manager('/integrations/atlassian')).config.client_id).toBe(clientSettings.client_id);
 });
