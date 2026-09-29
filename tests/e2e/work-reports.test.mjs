@@ -20,7 +20,7 @@ test('local start date selects sessions once across midnight, merged sources sta
   await h.ingest([
     ...pair('selected-midnight', '2026-09-17T14:55:00Z', '2026-09-17T15:05:00Z', 'cross', { work_item_id: 'report-a', text: '자정을 넘긴 작업' }),
     ...pair('selected-peer', '2026-09-17T15:10:00Z', '2026-09-17T15:20:00Z', 'peer', { work_item_id: 'report-b', engine: 'claude', text: '동료와 검토' }),
-    ...pair('starts-before-selection', '2026-09-16T14:55:00Z', '2026-09-17T02:00:00Z', 'old', { work_item_id: 'excluded-overlap' }),
+    ...pair('starts-before-selection', '2026-09-16T14:55:00Z', '2026-09-16T15:05:00Z', 'old', { work_item_id: 'excluded-overlap' }),
     ...pair('hidden-report-source', '2026-09-17T04:00:00Z', '2026-09-17T04:10:00Z', 'hidden', { work_item_id: 'hidden-report-source' }),
     ...pair('worker-report-source', '2026-09-17T05:00:00Z', '2026-09-17T05:10:00Z', 'worker', { role: 'worker', work_item_id: 'report-a', text: '내부 작업은 요약에 넣지 않는다' })
   ]);
@@ -51,7 +51,7 @@ test('local start date selects sessions once across midnight, merged sources sta
   assert.equal(row.body, undefined); assert.equal(row.sessions, undefined); assert.equal(row.snapshot, undefined);
   const run = await h.runtime(`/runs/${result.report.run_id}`);
   assert.equal(run.task, 'work.report.create'); assert.equal(run.internal, true);
-  assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']); assert.equal(run.artifact.validation_scope, 'format');
+  assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']); assert.equal(run.artifact.validation_scope, 'response');
   assert.equal((await h.manager('/sessions')).filter(session => session.work_item_id === 'report-a').length, 2);
   await h.stop('manager');
   const legacy = new DatabaseSync(path.join(h.dir, 'memory.sqlite'));
@@ -104,16 +104,16 @@ test('queued and submitted report parts recover manager restarts without duplica
   assert.equal((await create(h, 'report-runtime-unavailable')).id, first.id); assert.equal((await h.runtime('/runs')).length, 2);
 });
 
-test('format and provenance failures stay failed without model retries, while a new operation can generate a new report', async t => {
+test('format variations are stored once and source associations come from the frozen request', async t => {
   const h = await setup(t); await seed(h);
   const scenarios = ['report-invalid', 'report-missing-source', 'report-unknown-source', 'report-duplicate-source',
     'report-body-source-leak', 'report-body-evidence-section'];
   for (const scenario of scenarios) {
     await h.stop('manager'); h.env.HARNESS_TEST_REPORT_FIXTURE = JSON.stringify({ scenario }); await h.start('manager');
     const report = await create(h, `failure-${scenario}`), result = await finished(h, report);
-    assert.equal(result.report.state, 'failed'); assert.equal(result.report.body, null);
-    const run = await h.runtime(`/runs/${result.report.run_id}`); assert.equal(run.status, 'failed');
-    assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']); assert.equal(run.artifact, null);
+    assert.equal(result.report.state, 'completed'); assert.ok(result.report.body);
+    const run = await h.runtime(`/runs/${result.report.run_id}`); assert.equal(run.status, 'completed');
+    assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']); assert.ok(run.artifact);
   }
   await h.stop('manager'); h.env.HARNESS_TEST_REPORT_FIXTURE = '{}'; await h.start('manager');
   const retried = await create(h, 'new-operation-after-report-failure'); assert.equal((await finished(h, retried)).report.state, 'completed');
@@ -165,7 +165,7 @@ test('annual work reports with more than 500 sessions reduce validated parts wit
 });
 
 test('oversized source admission leaves no partial report and a failed hierarchy stops only its own queued parts', async t => {
-  const h = await setup(t, { scenario: 'report-unknown-source' });
+  const h = await setup(t, { scenario: 'invalid' });
   await h.ingest(pair('oversized-report-input', '2026-09-18T01:00:00Z', '2026-09-18T01:01:00Z', 'one',
     { work_item_id: 'oversized-report-input', text: 'a'.repeat(70000) }));
   await assert.rejects(create(h, 'reject-oversized-report', { dates: ['2026-09-18'] }), error => error.status === 400 && /120KiB/.test(error.message));
@@ -173,7 +173,7 @@ test('oversized source admission leaves no partial report and a failed hierarchy
   const events = Array.from({ length: 401 }, (_, index) => pair(`failure-part-${index}`, '2026-09-17T01:00:00Z', '2026-09-17T01:01:00Z', 'one',
     { work_item_id: 'failing-hierarchy', text: '부분 작성 실패를 검증할 원문' })).flat();
   for (let index = 0; index < events.length; index += 500) await h.ingest(events.slice(index, index + 500));
-  const userRun = await h.run({ fixture: { delayMs: 1000 } });
+  const userRun = await h.run({ task: 'session.summarize', internal: true, input: { title: '별도 작업', events: [{ kind: 'input', event_at: '2026-09-17T00:00:00Z', text: '별도 기록' }] }, fixture: { delayMs: 1000 } });
   const report = await create(h, 'failing-hierarchical-report');
   const result = await eventually(() => h.manager(`/reports/${report.id}`), value => value.report.state === 'failed'
     && value.parts.every(part => !['pending', 'running'].includes(part.state)), 30000);
@@ -209,7 +209,7 @@ test('completed historical reports remain unchanged while retired pending and ru
   const completed = await create(h, 'completed-historical-report');
   const accepted = await finished(h, completed); assert.equal(accepted.report.state, 'completed');
   await h.stop('manager'); h.env.HARNESS_TEST_REPORT_FIXTURE = JSON.stringify({ delayMs: 3000 }); await h.start('manager');
-  const userRun = await h.run({ fixture: { delayMs: 1000 } });
+  const userRun = await h.run({ task: 'session.summarize', internal: true, input: { title: '별도 작업', events: [{ kind: 'input', event_at: '2026-09-17T00:00:00Z', text: '별도 기록' }] }, fixture: { delayMs: 1000 } });
   const running = await create(h, 'retired-running-report'), normal = await create(h, 'preserved-normal-report');
   const [runningDetail] = await eventually(async () => Promise.all([running, normal].map(report => h.manager(`/reports/${report.id}`))),
     rows => rows.every(value => value.report.state === 'running'), 15000);

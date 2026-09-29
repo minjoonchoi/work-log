@@ -139,5 +139,30 @@
         }
       }
     }
+  },
+  "create-response": {
+    "mode": "artifact",
+    "review_required": false,
+    "validation_required": false,
+    "initial": "produce",
+    "max_steps": 2,
+    "nodes": {
+      "produce": {
+        "task": "produce",
+        "on": {
+          "done": "render",
+          "blocked": "$blocked",
+          "failed": "$failed"
+        }
+      },
+      "render": {
+        "task": "render",
+        "on": {
+          "done": "$completed",
+          "blocked": "$blocked",
+          "failed": "$failed"
+        }
+      }
+    }
   }
 }

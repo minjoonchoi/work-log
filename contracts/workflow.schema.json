@@ -9,6 +9,7 @@
   ],
   "properties": {
     "review_required": { "type": "boolean" },
+    "validation_required": { "type": "boolean" },
     "mode": {
       "enum": [
         "artifact",

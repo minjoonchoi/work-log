@@ -121,7 +121,7 @@ test('failed summaries follow merged work and stay visible alongside agent activ
   const sid = (await h.manager('/items/summary-source')).sessions[0].id;
   await rewriteSession(h, sid, 'failed-before-merge'); assert.equal((await finished(h, 'failed-before-merge')).state, 'failed');
   await h.manager('/merge', { method: 'POST', body: { ids: ['summary-source', 'summary-target'], target: 'summary-target', operation_id: 'merge-failed-summary' } });
-  await h.ingest([event('summary-target', 'input', '09:10:00', 'next', { work_item_id: 'summary-target' })]);
+  await h.ingest([event('summary-target', 'input', new Date(Date.now() - 1000).toISOString(), 'next', { work_item_id: 'summary-target' })]);
   let overview = await h.manager('/quick');
   assert.equal(overview.counts.total, 1); assert.equal(overview.counts.current, 1); assert.equal(overview.counts.notifications, 1);
   assert.equal(overview.notifications[0].work_item_id, 'summary-target');
@@ -132,7 +132,7 @@ test('failed summaries follow merged work and stay visible alongside agent activ
   assert.equal(overview.counts.notifications, 0, 'a fresh request replaces the old failure');
   assert.equal(overview.current[0].activity, 'agent_response_pending', 'internal rewrite progress does not replace native activity');
   assert.equal((await finished(h, 'retry-after-merge')).state, 'completed');
-  await h.ingest([event('summary-target', 'output', '09:12:00', 'next', { work_item_id: 'summary-target' })]);
+  await h.ingest([event('summary-target', 'output', new Date().toISOString(), 'next', { work_item_id: 'summary-target' })]);
   overview = await h.manager('/quick'); assert.equal(overview.counts.current, 0); assert.equal(overview.counts.notifications, 0);
   assert.equal(overview.counts.recent, 1);
 });
@@ -248,7 +248,7 @@ test('on-demand summaries wait for closure; later rewrites PUT the same Jira wor
   assert.equal(f.state.issues[0].fields.summary, item.title); // Creating a ticket is the only authorized metadata write.
 });
 
-test('text.rewrite rejects unknown formats/fields and enforces the session five-line description gate', async t => {
+test('text.rewrite rejects unknown formats/fields and accepts session output without style gates', async t => {
   const h = await setup(t);
   const input = { format: 'session-summary', sessions: [{ id: 'session-1', engine: 'codex', start_at: '2026-09-17T09:00:00Z', end_at: '2026-09-17T09:05:00Z', summary: null,
     events: [{ kind: 'input', event_at: '2026-09-17T09:00:00Z', text: '요구 정리 요청' }] }] };
@@ -256,16 +256,16 @@ test('text.rewrite rejects unknown formats/fields and enforces the session five-
     await assert.rejects(h.run({ task: 'text.rewrite', input: invalid }), /위반/);
   }
   const run = await h.run({ task: 'text.rewrite', input, internal: true, fixture: { scenario: 'rewrite-six-lines' } });
-  const failed = await h.finish(run); assert.notEqual(failed.status, 'completed'); assert.ok(failed.round <= 2);
+  const failed = await h.finish(run); assert.equal(failed.status, 'completed'); assert.equal(failed.attempts.length, 1);
   const good = await h.finish(await h.run({ task: 'text.rewrite', input, internal: true })); assert.equal(good.status, 'completed');
   const description = JSON.parse(fs.readFileSync(good.artifact.file)).description.split('\n');
   assert.ok(description.length <= 5 && description.every(line => line.startsWith('- ')));
   for (const attempt of good.attempts) assert.match(fs.readFileSync(path.join(attempt.directory, 'prompt.txt'), 'utf8'), /최대 5개 bullet 항목/);
   const emptyBullet = await h.finish(await h.run({ task: 'text.rewrite', input, internal: true, fixture: { scenario: 'rewrite-empty-bullet' } }));
-  assert.notEqual(emptyBullet.status, 'completed');
-  // New runs reject plain paragraphs; stored legacy summaries are covered by the UI scenario.
+  assert.equal(emptyBullet.status, 'completed');
+  // Generation guidance does not become a rejection gate.
   const legacy = await h.finish(await h.run({ task: 'text.rewrite', input, internal: true, fixture: { scenario: 'rewrite-legacy-paragraph' } }));
-  assert.equal(legacy.status, 'failed'); assert.equal(legacy.artifact, null);
+  assert.equal(legacy.status, 'completed'); assert.ok(legacy.artifact);
 });
 
 test('metadata default requests five Jira wiki sections and keeps missing results explicitly unconfirmed', async t => {

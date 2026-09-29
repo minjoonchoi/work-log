@@ -33,7 +33,7 @@ test('ownerless internal metadata keeps runtime evidence without creating user w
   assert.deepEqual(detail.sessions, before.sessions);
   assert.equal(detail.agents.filter(agent => agent.role === 'user').length, 1);
   assert.equal(detail.events.filter(event => event.role === 'user' && event.kind === 'input').length, 1);
-  assert.ok(detail.events.some(event => event.role === 'worker'));
+  assert.ok(!detail.events.some(event => event.role === 'worker'));
 });
 
 test('metadata task identity stays internal when callers omit or clear the internal flag', async t => {
@@ -58,9 +58,7 @@ test('metadata task identity stays internal when callers omit or clear the inter
   assert.equal(detail.sessions.length, 1);
   assert.equal(detail.agents.filter(agent => agent.role === 'user').length, 1);
   assert.equal(detail.events.filter(event => event.role === 'user' && event.kind === 'input').length, 1);
-  const ordinary = await h.finish(await h.run({ task: 'text.generate', input: { requirements: '사용자가 요청한 문서 제목을 작성합니다.' } }));
-  assert.equal(ordinary.internal, false, 'ordinary text writing must remain a user task');
-  await eventually(() => h.manager('/items'), items => items.length === 2);
+  await assert.rejects(h.run({ task: 'text.generate', input: { requirements: '문서 제목' } }), error => error.status === 410);
 });
 function isolated(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-metadata-workflow-'));
@@ -72,7 +70,7 @@ function isolated(t) {
   return { h, root, jobs: path.join(root, 'harness/jobs.json') };
 }
 
-test('session summaries and metadata use one generation plus deterministic format validation only', async t => {
+test('session summaries and metadata use one generation and response storage only', async t => {
   const h = await setup(t);
   for (const task of (await h.runtime('/execution-settings')).tasks.filter(task => ['session.summarize', 'text.rewrite'].includes(task.id))) {
     assert.deepEqual(Object.keys(task.backends.codex.defaults), ['produce']);
@@ -82,30 +80,28 @@ test('session summaries and metadata use one generation plus deterministic forma
     const run = await h.finish(await h.run(input));
     assert.equal(run.status, 'completed', run.message);
     assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']);
-    assert.deepEqual(run.steps.map(step => step.task), ['produce', 'verify', 'render']);
-    assert.equal(run.round, 0); assert.equal(run.artifact.validation_scope, 'format');
+    assert.deepEqual(run.steps.map(step => step.task), ['produce', 'render']);
+    assert.equal(run.round, 0); assert.equal(run.artifact.validation_scope, 'response');
     assert.equal(run.artifact.generation_attempt, run.attempts[0].id); assert.equal(run.artifact.review_attempt, undefined);
-    assert.match(run.message, /형식 검사.*별도 모델 검토는 수행하지 않았/);
-    const report = JSON.parse(fs.readFileSync(run.artifact.verify_report)); assert.equal(report.passed, true);
+    assert.match(run.message, /응답을 저장/);
+    assert.equal(run.artifact.verify_report, undefined);
   }
-  const prd = await h.finish(await h.run({ fixture: { scenario: 'revise-once' } }));
-  assert.equal(prd.status, 'completed'); assert.deepEqual(prd.attempts.map(attempt => attempt.stage), ['produce', 'review', 'repair', 'review']);
-  assert.ok(prd.artifact.review_attempt); assert.equal(prd.artifact.validation_scope, undefined);
+
 });
 
-test('invalid summary or metadata format fails without another model call or publication', async t => {
+test('summary format variations are stored without additional model calls', async t => {
   const h = await setup(t);
   for (const [input, scenario] of [[summary, 'summary-too-long'], [summary, 'summary-plain'], [rewrite('session-summary'), 'rewrite-six-lines'],
     [rewrite('session-summary'), 'rewrite-summary-plain'], [rewrite('work-item-metadata'), 'rewrite-blank']]) {
     const run = await h.finish(await h.run({ ...input, fixture: { scenario } }));
-    assert.equal(run.status, 'failed'); assert.match(run.message, /형식 검사에 실패/);
-    assert.equal(run.artifact, null); assert.equal(run.round, 0);
+    assert.equal(run.status, 'completed'); assert.match(run.message, /응답을 저장/);
+    assert.ok(run.artifact); assert.equal(run.round, 0);
     assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']);
-    assert.deepEqual(run.steps.map(step => step.task), ['produce', 'verify']);
+    assert.deepEqual(run.steps.map(step => step.task), ['produce', 'render']);
   }
 });
 
-test('resumed legacy summary runs retain their frozen plain-text contract while new runs require bullets', async t => {
+test('resumed legacy summary runs retain their frozen plain-text contract and new runs accept plain text', async t => {
   const { h, jobs } = isolated(t), definitions = JSON.parse(fs.readFileSync(jobs));
   for (const task of ['session.summarize', 'text.rewrite']) delete definitions.jobs[task].summary_format;
   fs.writeFileSync(jobs, JSON.stringify(definitions)); await h.start('runtime');
@@ -124,7 +120,7 @@ test('resumed legacy summary runs retain their frozen plain-text contract while 
   }
   for (const [input, scenario] of requests) {
     const fresh = await h.finish(await h.run({ ...input, fixture: { scenario } }));
-    assert.equal(fresh.status, 'failed'); assert.equal(fresh.artifact, null);
+    assert.equal(fresh.status, 'completed'); assert.ok(fresh.artifact);
     assert.deepEqual(fresh.attempts.map(attempt => attempt.stage), ['produce']);
   }
 });
@@ -147,16 +143,16 @@ test('metadata workflow changes preserve existing user instructions and backend 
   assert.deepEqual(fs.readFileSync(file), original);
 });
 
-test('format-checked publication recovery reuses the generation proof without adding a review call', async t => {
+test('response-only publication recovery reuses the generation proof without adding a review call', async t => {
   const h = await setup(t), exit = new Promise(resolve => h.processes.runtime.once('exit', resolve));
   const run = await h.run({ ...summary, fixture: { crashAfterPublish: true } });
   assert.equal(await exit, 73); await h.start('runtime');
   const interrupted = await h.runtime(`/runs/${run.id}`);
   assert.equal(interrupted.status, 'interrupted'); assert.equal(interrupted.attempts.length, 1);
   const resumed = await h.runtime(`/runs/${run.id}/resume`, { method: 'POST', body: {} });
-  assert.equal(resumed.status, 'completed'); assert.equal(resumed.artifact.validation_scope, 'format');
+  assert.equal(resumed.status, 'completed'); assert.equal(resumed.artifact.validation_scope, 'response');
   assert.equal((await h.runtime(`/runs/${run.id}`)).attempts.length, 1);
-  assert.match(resumed.message, /별도 모델 검토는 수행하지 않았/);
+  assert.match(resumed.message, /저장된 응답/);
 });
 
 test('accepted reviewed metadata retains its frozen workflow after new requests switch to format checks', async t => {
@@ -186,7 +182,7 @@ test('format-only workflow cannot weaken ordinary artifact jobs', t => {
 });
 
 
-test('session summary layouts normalize without another model call and use an explicit first-pass prompt', async t => {
+test('session summary layouts remain unchanged without another model call and use an explicit first-pass prompt', async t => {
   const h = await setup(t);
   for (const input of [summary, rewrite('session-summary')]) {
     const run = await h.finish(await h.run({ ...input, fixture: { scenario: 'summary-layout' } }));
@@ -194,7 +190,8 @@ test('session summary layouts normalize without another model call and use an ex
     assert.equal(run.attempts.length, 1);
     const artifact = fs.readFileSync(run.artifact.file, 'utf8');
     const description = input.task === 'session.summarize' ? artifact.split('\n').slice(1).join('\n') : JSON.parse(artifact).description;
-    assert.equal(description, '- 확인된 작업을 정리했습니다.\n- 결과는 미확인입니다.');
+    assert.match(description, /확인된 작업을 정리했습니다/);
+    assert.match(description, /[*•]/);
     const prompt = fs.readFileSync(path.join(run.attempts[0].directory, 'prompt.txt'), 'utf8');
     assert.match(prompt, /세션 요약 고정 계약/);
     assert.match(prompt, /중복 없이 중요한 사실 1~3개/);

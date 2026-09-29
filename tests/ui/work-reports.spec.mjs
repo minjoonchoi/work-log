@@ -47,7 +47,7 @@ async function createLocal(page, date = '2026-09-17') {
 }
 
 test('week/month selection survives live refresh and navigation, and cross-midnight sources are captured once by local start date', async ({ page }) => {
-  await h.ingest([...pair('report-midnight', '2026-09-17T23:50:00+09:00', '2026-09-18T00:10:00+09:00', 'first', { text: '자정을 넘겨 계약 확인' }),
+  await h.ingest([...pair('report-midnight', '2026-09-17T23:55:00+09:00', '2026-09-18T00:10:00+09:00', 'first', { text: '자정을 넘겨 계약 확인' }),
     ...sample('report-next', '2026-09-18', '다음 날 구현 확인')]);
   const originals = await h.manager('/sessions');
   await open(page); await calendar(page, '2026-09-17', 'week');
@@ -139,7 +139,7 @@ test('an empty selected date gives a useful error and a failed generated report 
   await page.locator('#confirm-create-report').click(); await expect(page.locator('#report-create-error')).toBeVisible();
   expect(await h.manager('/reports')).toEqual([]);
   await page.getByRole('dialog').getByRole('button', { name: '취소', exact: true }).click();
-  await h.stop('manager'); h.env.HARNESS_TEST_REPORT_FIXTURE = JSON.stringify({ scenario: 'report-invalid' }); await h.start('manager');
+  await h.stop('manager'); h.env.HARNESS_TEST_REPORT_FIXTURE = JSON.stringify({ scenario: 'invalid' }); await h.start('manager');
   await h.ingest(sample('report-fail', '2026-09-17')); await open(page); await calendar(page); await pick(page, '2026-09-17').check(); await submitSelection(page);
   const failed = await eventually(() => h.manager('/reports'), rows => rows[0]?.state === 'failed', 20000);
   await expect(page.locator('#report-detail .report-state')).toContainText('작성 실패'); await expect(page.locator('#publish-report')).toHaveCount(0);

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { assert, request, digest } from './shared.mjs';
-import { parseWorkReport } from './work-report.mjs';
+import { parseWorkReport } from './stored-writing.mjs';
 
 export function reportsCoordinator({ dir, reports, notify, fixture = false }) {
   let busy = false;

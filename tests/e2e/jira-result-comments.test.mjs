@@ -79,10 +79,10 @@ test('non-Done transitions and externally linked Done issues do not generate res
 });
 
 test('failed generation leaves Jira Done and explicit retry uses a new run with the original snapshot', async t => {
-  const { h, f, issue, transition } = await setup(t, { scenario: 'result-summary-invalid' });
+  const { h, f, issue, transition } = await setup(t, { scenario: 'invalid' });
   await transition(); const failed = await waitState(h, 'failed'), before = journal(h)[0];
   assert.equal(issue.fields.status.statusCategory.key, 'done'); assert.equal(comments(f).length, 0);
-  assert.ok(failed.run_id); assert.match(failed.message, /형식/);
+  assert.ok(failed.run_id); assert.ok(failed.message);
   await h.stop('manager'); h.env.HARNESS_RESULT_FIXTURE = '{}'; await h.start('manager');
   const pending = await retry(h); assert.equal(pending.state, 'pending');
   assert.equal((await retry(h)).operation_id, pending.operation_id);
@@ -261,4 +261,15 @@ for (const action of ['delete-restore', 'merge', 'reopen', 'wrong-link']) test(`
   const result = await waitState(h, 'failed');
   assert.match(result.message, /삭제|목록 상태|병합|완료 상태|연결이 변경/); assert.equal(comments(f).length, 0);
   await assert.rejects(retry(h), error => error.status === 409);
+});
+
+test('multi-paragraph completion text is saved and published without a quality gate or second generation', async t => {
+  const { h, f, transition } = await setup(t, { scenario: 'result-summary-invalid' });
+  await transition();
+  const result = await waitState(h, 'posted');
+  assert.match(result.text, /두 번째 문단/);
+  assert.equal(comments(f).length, 1);
+  const run = await h.runtime(`/runs/${result.run_id}`);
+  assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']);
+  assert.deepEqual(run.steps.map(step => step.task), ['produce', 'render']);
 });

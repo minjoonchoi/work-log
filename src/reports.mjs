@@ -1,7 +1,7 @@
 import { assert, transaction, json, digest, stableId, now } from './shared.mjs';
 import { loadCatalog } from './catalog.mjs';
 import { validateSchema } from './schema.mjs';
-import { parseWorkReport } from './work-report.mjs';
+import { parseWorkReport } from './stored-writing.mjs';
 
 const MAX_INPUT_BYTES = 120 * 1024, MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024, MAX_PARTS = 10000;
 const active = state => ['pending', 'running'].includes(state);

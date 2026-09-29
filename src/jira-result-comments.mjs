@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, assert, digest, json, now, request } from './shared.mjs';
 import { validateSchema, canonicalJson } from './schema.mjs';
-import { parseResultSummary } from './result-summary.mjs';
+import { parseResultSummary } from './stored-writing.mjs';
 import { plainTextADF } from './jira-adf.mjs';
 
 const inputSchema = JSON.parse(fs.readFileSync(path.join(ROOT, 'contracts/inputs/result-summary.schema.json'), 'utf8'));

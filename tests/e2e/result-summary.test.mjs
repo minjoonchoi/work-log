@@ -10,7 +10,7 @@ const input = { title: '초대 권한 수정', description: 'h2. 목표\n일반 
     { kind: 'output', event_at: '2026-09-21T01:05:00Z', text: '비관리자 초대를 거부하도록 수정했고 회귀 테스트 3개가 통과했습니다. 배포는 수행하지 않았습니다.' }]
 }] };
 
-test('completion result uses one headless generation, format validation and configured backend settings', async t => {
+test('completion result uses one headless generation, response storage and configured backend settings', async t => {
   const h = await new Harness().start('runtime'); t.after(() => h.close());
   const task = (await h.runtime('/execution-settings')).tasks.find(task => task.id === 'work-item.result.summarize');
   assert.equal(task.backend, 'codex'); assert.deepEqual(Object.keys(task.backends.codex.defaults), ['produce']);
@@ -18,7 +18,7 @@ test('completion result uses one headless generation, format validation and conf
   const run = await h.finish(await h.run({ task: task.id, input, internal: true }));
   assert.equal(run.status, 'completed', run.message);
   assert.deepEqual(run.attempts.map(attempt => attempt.stage), ['produce']);
-  assert.equal(run.artifact.validation_scope, 'format');
+  assert.equal(run.artifact.validation_scope, 'response');
   const value = parseResultSummary(fs.readFileSync(run.artifact.file, 'utf8'));
   assert.match(value.text, /비관리자.*회귀 테스트 3개.*배포는 수행하지 않았/);
   assert.doesNotMatch(value.text, /[\r\n]/);
@@ -27,19 +27,19 @@ test('completion result uses one headless generation, format validation and conf
   assert.match(prompt, /Jira 상태 변경·댓글 게시/);
 });
 
-test('empty history remains unconfirmed and malformed result never receives a second model call', async t => {
+test('empty history remains unconfirmed and paragraph/list results are stored without another model call', async t => {
   const h = await new Harness().start('runtime'); t.after(() => h.close());
   const run = await h.finish(await h.run({ task: 'work-item.result.summarize', input: { ...input, sessions: [] }, internal: true }));
   assert.equal(run.status, 'completed', run.message);
   assert.match(parseResultSummary(fs.readFileSync(run.artifact.file, 'utf8')).text, /결과는 미확인/);
   for (const scenario of ['result-summary-invalid', 'result-summary-list']) {
     const failed = await h.finish(await h.run({ task: 'work-item.result.summarize', input, internal: true, fixture: { scenario } }));
-    assert.equal(failed.status, 'failed'); assert.equal(failed.artifact, null);
-    assert.equal(failed.attempts.length, 1); assert.match(failed.message, /형식 검사/);
+    assert.equal(failed.status, 'completed'); assert.ok(failed.artifact);
+    assert.equal(failed.attempts.length, 1); assert.match(failed.message, /응답을 저장/);
   }
 });
 
-test('completion contract rejects additional fields and paragraph separators rather than flattening them silently', () => {
+test('legacy completion contract rejects additional fields and paragraph separators rather than flattening them silently', () => {
   for (const value of [{ text: '결과', title: '제목' }, { text: '  ' }, { text: '결과\n' }, { text: '첫 결과\u2028다음 결과' },
     { text: 'h2. 결과' }, { text: '1. 결과' }, { text: 'x'.repeat(1501) }]) {
     assert.throws(() => parseResultSummary(JSON.stringify(value)));

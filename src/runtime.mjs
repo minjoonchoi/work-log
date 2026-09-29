@@ -304,7 +304,7 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
         validateSchema(directResponseSchema, returned.result, '직접 응답');
         const content = directContent(returned.result);
         if (content !== null) {
-          atomic(path.join(cwd, job.file), normalizeSummaryArtifact(content, job, request.input));
+          atomic(path.join(cwd, job.file), definition.workflow.validation_required === false ? content : normalizeSummaryArtifact(content, job, request.input));
           returned = { ...returned, result: { status: 'done', result: { file: job.file } } };
         }
       }
@@ -368,12 +368,13 @@ async function perform(row) {
               : { status: 'revise', result: { issues: report.checks.filter(c => !c.passed).map(c => ({ rule: c.rule, detail: json(c) })) } };
         } else if (task === 'render') {
           const reviewed = workflow.review_required !== false;
-          const validationScope = job.kind === 'document' ? 'artifact' : 'format';
-          assert(candidate && candidate.verified === candidate.content_digest && (!reviewed || candidate.review?.digest === candidate.content_digest), '필수 검증·검토 근거 없이 전달할 수 없습니다.');
+          const responseOnly = workflow.validation_required === false;
+          const validationScope = responseOnly ? 'response' : job.kind === 'document' ? 'artifact' : 'format';
+          assert(candidate && (responseOnly || candidate.verified === candidate.content_digest) && (!reviewed || candidate.review?.digest === candidate.content_digest), '필수 검증·검토 근거 없이 전달할 수 없습니다.');
           publishArtifact(row, request, candidate, reviewed ? { review_attempt: candidate.review.attempt }
             : { generation_attempt: candidate.generation_attempt, validation_scope: validationScope });
           outcome = { status: 'done', result: { message: reviewed ? `검증과 검토를 통과했습니다: ${job.file}`
-            : `${validationScope === 'artifact' ? '기본 산출물' : '형식'} 검사를 통과했습니다. 별도 모델 검토는 수행하지 않았습니다: ${job.file}` } };
+            : responseOnly ? `응답을 저장했습니다: ${job.file}` : `${validationScope === 'artifact' ? '기본 산출물' : '형식'} 검사를 통과했습니다. 별도 모델 검토는 수행하지 않았습니다: ${job.file}` } };
         } else throw new Error('지원하지 않는 작업 처리기입니다.');
       } catch (e) { outcome = { status: 'failed', result: { message: e.message } }; }
       if (!stillCurrent(runId, epoch)) {
@@ -496,19 +497,20 @@ function resume(runId) {
       const intent = JSON.parse(fs.readFileSync(path.join(dir, 'runs', runId, 'publication-intent.json'), 'utf8'));
       const definition = JSON.parse(row.definition);
       const proof = db.prepare('SELECT * FROM attempts WHERE id=? AND run_id=? AND epoch=?').get(intent.review_attempt || intent.render_attempt || intent.generation_attempt, runId, row.epoch);
-      const verified = JSON.parse(fs.readFileSync(intent.verify_report, 'utf8'));
+      const responseOnly = definition.workflow.validation_required === false;
+      const verified = responseOnly ? null : JSON.parse(fs.readFileSync(intent.verify_report, 'utf8'));
       assert(intent.definition_digest === row.definition_digest && intent.epoch === row.epoch && proof?.status === 'returned', '게시 근거 불일치');
       if (definition.workflow?.mode === 'report') {
         assert(proof.stage === 'render' && validateResult(JSON.parse(proof.result).result, 'render', definition.job).status === 'done', '보고서 생성 근거 불일치');
         assert(digest(renderEvidenceReport(definition.evidence_sources, definition.evidence_captured_at)) === intent.content_digest, '고정한 근거와 보고서가 다릅니다.');
         for (const source of definition.evidence_sources) checkEvidenceIntegrity(source.data);
       } else if (definition.workflow.review_required === false) {
-        assert(intent.validation_scope === (definition.job.kind === 'document' ? 'artifact' : 'format') && proof.id === intent.generation_attempt && proof.stage === 'produce'
-          && validateResult(JSON.parse(proof.result).result, 'produce', definition.job).status === 'done', '형식 검사 산출물의 생성 근거 불일치');
+        assert(intent.validation_scope === (responseOnly ? 'response' : definition.job.kind === 'document' ? 'artifact' : 'format') && proof.id === intent.generation_attempt && proof.stage === 'produce'
+          && validateResult(JSON.parse(proof.result).result, 'produce', definition.job).status === 'done', '저장된 산출물의 생성 근거 불일치');
       } else {
         assert(proof.stage === 'review' && validateResult(JSON.parse(proof.result).result, 'review', definition.job).status === 'done', '검토 미통과');
       }
-      assert(verified.passed && verified.subject_digest === intent.content_digest, '검증 근거 불일치');
+      assert(responseOnly || (verified.passed && verified.subject_digest === intent.content_digest), '검증 근거 불일치');
       const expected = path.join(dir, 'runs', runId, 'artifacts', definition.job.file);
       assert(intent.file === expected && artifact(path.dirname(expected), definition.job.file).content_digest === intent.content_digest, '게시 파일 불일치');
       publicationVerified = true;
@@ -520,7 +522,7 @@ function resume(runId) {
       update(runId, { artifact: json(intent) });
       db.prepare("UPDATE workflow_steps SET status='completed',ended_at=?,outcome=?,next_node='$completed',reason='publication_reconciled' WHERE run_id=? AND epoch=? AND task='render' AND status='interrupted'")
         .run(now(), json({ status: 'done', result: { recovered: true, subject_digest: intent.content_digest } }), runId, row.epoch);
-      terminal(runId, 'completed', definition.workflow.review_required === false
+      terminal(runId, 'completed', responseOnly ? '저장된 응답을 대조해 완료를 복구했습니다.' : definition.workflow.review_required === false
         ? `중단 전 ${definition.job.kind === 'document' ? '기본 산출물' : '형식'} 검사·게시된 산출물을 대조해 완료를 복구했습니다. 별도 모델 검토는 수행하지 않았습니다.`
         : '중단 전 검증·게시된 산출물을 대조해 완료를 복구했습니다.', row.epoch);
       return view(get(runId));

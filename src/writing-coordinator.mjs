@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { assert, request, digest, stableId } from './shared.mjs';
-import { parseTextRewrite } from './text-rewrite.mjs';
-import { parseSessionSummary } from './session-summary.mjs';
+import { parseTextRewrite, parseSessionSummary } from './stored-writing.mjs';
 
 export function writingCoordinator({ dir, writings, notify, automatic = true, automaticMetadata = true, fixture = false }) {
   let busy = false;

@@ -145,12 +145,12 @@ test('failed session rewrite keeps the last accepted summary and offers a fresh 
   const button = session.locator('[data-rewrite-summary]');
   await button.click(); await expect(session.locator('.summary-text')).toBeVisible({ timeout: 15000 });
   const accepted = await session.locator('.summary-text').innerText();
-  await h.stop('manager'); h.env.HARNESS_TEST_WRITING_FIXTURE = JSON.stringify({ scenario: 'rewrite-six-lines' }); await h.start('manager');
+  await h.stop('manager'); h.env.HARNESS_TEST_WRITING_FIXTURE = JSON.stringify({ scenario: 'invalid' }); await h.start('manager');
   await open(page); await session.locator(':scope > summary').click(); await button.click();
   await expect(session.locator('.writing-status')).toContainText('작성 실패', { timeout: 15000 });
   await expect(session.locator('.summary-text')).toHaveText(accepted, { useInnerText: true });
   await expect(button).toBeEnabled();
-  await h.ingest([event('concurrent-ui', 'input', '09:10:00', 'next', { work_item_id: item.id, text: '다른 에이전트에서 동일 업무를 계속합니다.' })]);
+  await h.ingest([event('concurrent-ui', 'input', new Date().toISOString(), 'next', { work_item_id: item.id, text: '다른 에이전트에서 동일 업무를 계속합니다.' })]);
   await page.getByRole('button', { name: '알림', exact: true }).click();
   await expect(page.locator('.notification-row')).toHaveCount(1);
   await expect(page.locator('.notification-row')).toContainText('요약');

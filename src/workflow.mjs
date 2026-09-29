@@ -8,9 +8,11 @@ const kinds = {
 export function validateWorkflow(workflow, taskTypes) {
   assert(workflow && kinds[workflow.mode] && workflow.nodes && workflow.nodes[workflow.initial], 'workflow 시작 노드가 없습니다.');
   const checked = workflow.review_required === false;
-  if (checked) assert(workflow.mode === 'artifact' && workflow.max_steps === 3
-    && Object.values(workflow.nodes).map(node => node.task).sort().join(',') === 'produce,render,verify',
-  '형식 검사 workflow는 한 번의 생성·검증·전달만 허용합니다.');
+  const responseOnly = workflow.validation_required === false;
+  if (responseOnly) assert(checked, '응답 저장 workflow는 검토를 추가할 수 없습니다.');
+  if (checked) assert(workflow.mode === 'artifact' && workflow.max_steps === (responseOnly ? 2 : 3)
+    && Object.values(workflow.nodes).map(node => node.task).sort().join(',') === (responseOnly ? 'produce,render' : 'produce,render,verify'),
+  '작성 workflow는 한 번의 생성과 지정된 저장 절차만 허용합니다.');
   assert(Number.isSafeInteger(workflow.max_steps) && workflow.max_steps > 0 && workflow.max_steps <= 100, 'workflow 실행 단계 한도가 필요합니다.');
   for (const [id, node] of Object.entries(workflow.nodes)) {
     assert(kinds[workflow.mode][node.task] && taskTypes[node.task]?.executor === kinds[workflow.mode][node.task], `workflow ${id}의 작업 실행기가 잘못되었습니다.`);
@@ -42,12 +44,12 @@ export function validateWorkflow(workflow, taskTypes) {
   const visit = id => { if (reachable.has(id)) return; reachable.add(id); if (!terminal.has(id)) Object.values(workflow.nodes[id].on).forEach(visit); };
   visit(workflow.initial);
   assert(reachable.has('$completed') && Object.keys(workflow.nodes).every(id => reachable.has(id)), 'workflow에 완료 경로가 없거나 도달할 수 없는 노드가 있습니다.');
-  // Independent review is the default; the explicit metadata workflow keeps a single generation and format gate.
+  // Review is the legacy default; explicit writing workflows use one generation.
   if (workflow.mode === 'artifact') {
     assert(['produce', 'plan'].includes(workflow.nodes[workflow.initial].task), '산출물 workflow는 생성 또는 계획에서 시작해야 합니다.');
     for (const node of Object.values(workflow.nodes)) {
       const next = workflow.nodes[node.on.done]?.task;
-      if (['produce', 'plan', 'repair'].includes(node.task)) assert(next === 'verify', '생성·수정 후 필수 검증을 건너뛸 수 없습니다.');
+      if (['produce', 'plan', 'repair'].includes(node.task)) assert(next === (responseOnly ? 'render' : 'verify'), '생성·수정 후 지정된 저장 또는 검증 단계가 필요합니다.');
       if (node.task === 'verify') assert(next === (checked ? 'render' : 'review'), checked ? '형식 검사 후 전달 단계가 필요합니다.' : '검증 후 독립 검토를 건너뛸 수 없습니다.');
       if (node.task === 'review') assert(next === 'render', '검토 후 전달 단계가 필요합니다.');
       if (node.task === 'render') assert(node.on.done === '$completed', '전달 후 완료로 연결해야 합니다.');
