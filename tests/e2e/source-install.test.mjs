@@ -281,17 +281,17 @@ function services(f) {
   return { state, registered, calls, launchctl };
 }
 
-test('reinstall restarts only its three owned services and refuses no-activate or failed stop without swapping files', t => {
+test('reinstall restarts only its single owned app registration and refuses no-activate or failed stop without swapping files', t => {
   const f = setup(t); f.existing(); const service = services(f), before = inventory(f.loc.app);
   assert.throws(() => f.install({ launchctl: service.launchctl }), /종료 확인/);
   assert.deepEqual(inventory(f.loc.app), before); assert.equal(service.calls.length, 0);
   service.state.refuseStop = true;
   assert.throws(() => f.install({ activate: true, launchctl: service.launchctl }), /fixture stop failure/);
-  assert.deepEqual(inventory(f.loc.app), before); assert.equal(service.registered.size, 3);
+  assert.deepEqual(inventory(f.loc.app), before); assert.equal(service.registered.size, 1);
   service.state.refuseStop = false;
   fs.writeFileSync(path.join(f.sourceApp, 'Contents/MacOS/WorkLog'), 'v2');
   assert.equal(f.install({ activate: true, launchctl: service.launchctl }).status, 'reinstalled');
-  assert.equal(service.registered.size, 3); assert.equal(fs.readFileSync(path.join(f.loc.app, 'Contents/MacOS/WorkLog'), 'utf8'), 'v2');
+  assert.equal(service.registered.size, 1); assert.equal(fs.readFileSync(path.join(f.loc.app, 'Contents/MacOS/WorkLog'), 'utf8'), 'v2');
 });
 
 test('new service start failure restores previous files and services; failed rollback restart remains recoverable', t => {
@@ -299,13 +299,13 @@ test('new service start failure restores previous files and services; failed rol
   fs.writeFileSync(path.join(f.sourceApp, 'Contents/MacOS/WorkLog'), 'v2');
   service.state.failStarts = 1;
   assert.throws(() => f.install({ activate: true, launchctl: service.launchctl }), /이전 설치 파일을 복원/);
-  assert.deepEqual(inventory(f.loc.app), before); assert.equal(service.registered.size, 3);
+  assert.deepEqual(inventory(f.loc.app), before); assert.equal(service.registered.size, 1);
   service.state.failStarts = 2;
   assert.throws(() => f.install({ activate: true, launchctl: service.launchctl }), /복구 기록과 백업/);
   assert.deepEqual(inventory(f.loc.app), before);
   assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).replacement.phase, 'restored');
   assert.equal(f.install({ activate: true, launchctl: service.launchctl }).status, 'reinstalled');
-  assert.equal(service.registered.size, 3); assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).replacement, undefined);
+  assert.equal(service.registered.size, 1); assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).replacement, undefined);
 });
 
 test('failure after service shutdown and before journaling restarts the unchanged installation', t => {
@@ -318,7 +318,7 @@ test('failure after service shutdown and before journaling restarts the unchange
   };
   try { assert.throws(() => f.install({ activate: true, launchctl: service.launchctl }), /journal write failed/); }
   finally { fs.renameSync = original; }
-  assert.equal(service.registered.size, 3); assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).state, 'installed');
+  assert.equal(service.registered.size, 1); assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).state, 'installed');
 });
 
 for (const boundary of ['backup-app', 'replace-app', 'backup-runtime', 'replace-runtime', 'cleanup', 'rollback-cleanup'])
@@ -360,3 +360,38 @@ for (const boundary of ['backup-app', 'replace-app', 'backup-runtime', 'replace-
     for (const folder of [path.dirname(f.loc.app), path.join(f.loc.data, 'versions')])
       assert.ok(fs.readdirSync(folder).every(name => !name.startsWith('.worklog-')));
   });
+
+
+test('the sole app registration preserves the installer CLI search path for automatic writing', t => {
+  const f = setup(t);
+  const plan = prepareInstall({ output: path.join(f.dir, 'path-plan'), homeDir: f.homeDir, sourceApp: f.sourceApp });
+  assert.equal(plan.files.length, 1);
+  const file = path.join(f.dir, 'path.plist'); fs.writeFileSync(file, plan.files[0].content);
+  const result = spawnSync('/usr/libexec/PlistBuddy', ['-c', 'Print :EnvironmentVariables:PATH', file], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const entries = result.stdout.trim().split(path.delimiter);
+  assert.ok(entries.includes(path.dirname(process.execPath)));
+  for (const entry of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) assert.ok(entries.includes(entry));
+});
+
+test('successful install cleans older WorkLog output bundles but preserves screenshots, other apps and symlink targets', t => {
+  const c = setup(t), output = path.join(c.projectRoot, 'output');
+  const app = path.join(output, 'old-build/WorkLog.app'); c.duplicate(app);
+  fs.writeFileSync(path.join(app, 'Contents/Info.plist'), '<plist><dict><key>CFBundleIdentifier</key><string>local.worklog.harness</string></dict></plist>');
+  fs.writeFileSync(path.join(app, 'Contents/Resources/harness/package.json'), JSON.stringify({ name: 'work-log', version: 'old' }));
+  fs.writeFileSync(path.join(output, 'screenshot.png'), 'keep');
+  const foreign = path.join(output, 'Other.app'); c.duplicate(foreign);
+  fs.symlinkSync(c.sourceApp, path.join(output, 'WorkLog.app'));
+  const result = c.install();
+  assert.equal(present(c.loc.app), true); assert.equal(present(app), false);
+  assert.ok(result.build_cleanup.removed.includes(app));
+  assert.equal(fs.readFileSync(path.join(output, 'screenshot.png'), 'utf8'), 'keep');
+  assert.equal(present(foreign), true); assert.equal(present(c.sourceApp), true);
+  assert.equal(fs.lstatSync(path.join(output, 'WorkLog.app')).isSymbolicLink(), true);
+});
+
+test('failed installation leaves output build bundles untouched', t => {
+  const c = setup(t), app = path.join(c.projectRoot, 'output/old/WorkLog.app'); c.duplicate(app);
+  assert.throws(() => c.install({ build() { throw new Error('build failed'); } }), /build failed/);
+  assert.equal(present(app), true);
+});

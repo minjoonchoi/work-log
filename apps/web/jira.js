@@ -1,49 +1,14 @@
-import { descriptionHTML } from './description.js';
-
 export function jiraUI({ api, esc, modal, toast, refresh, absoluteTime, openExternal, showSettings, createIssue }) {
-  const $ = s => document.querySelector(s), selections = new Map(), pending = new Set(), errors = new Map(), commentRetries = new Map();
+  const $ = s => document.querySelector(s), pending = new Set(), errors = new Map();
   const icon = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 7a6.5 6.5 0 0 0-11-2L3 7m0-4v4h4M4 13a6.5 6.5 0 0 0 11 2l2-2m0 4v-4h-4"/></svg>';
   const statusHTML = status => `<span class="jira-status ${status?.category === 'indeterminate' ? 'is-progress' : ''}">${esc(status?.name || '상태 조회 중')}</span>`;
-  const commentStates = { waiting_transition: '상태 변경 확인 대기', pending: '작성 대기', running: '작성 중', ready: '게시 대기', sending: '게시 중', posted: '게시됨', failed: '실패', unknown: '게시 결과 확인 필요' };
-  function resultCommentHTML(link, issue, busy) {
-    const result = link.result_comment;
-    if (!result) return '';
-    const retry = commentRetries.get(link.operation_id);
-    if (retry && retry.source !== result.operation_id) commentRetries.delete(link.operation_id);
-    return `<section class="jira-result-comment" aria-label="${esc(issue.key)} 완료 결과 댓글" aria-live="polite">
-      <div class="jira-result-comment-heading"><h4>완료 결과 댓글</h4><span class="jira-result-comment-state ${esc(result.state)}">${esc(commentStates[result.state] || result.state)}</span></div>
-      ${result.text ? `<p class="jira-result-comment-text">${esc(result.text)}</p>` : ''}
-      ${result.message ? `<p class="jira-result-comment-message" role="status">${esc(result.message)}</p>` : ''}
-      ${['waiting_transition', 'pending', 'running', 'ready', 'sending'].includes(result.state) ? '<p class="help">화면을 이동해도 계속 진행됩니다. 완료되면 Jira 일반 댓글 하나로 게시합니다.</p>' : ''}
-      ${result.state === 'unknown' ? '<p class="help">댓글이 이미 게시되었을 수 있습니다. 게시 결과 확인은 댓글을 다시 전송하지 않습니다.</p>' : ''}
-      ${result.state === 'failed' ? `<button class="writing-action" data-retry-result-comment="${esc(link.operation_id)}" ${busy || !link.view?.data?.can_write || link.view?.error ? 'disabled' : ''}>결과 댓글 다시 시도</button>` : ''}
-      ${result.state === 'unknown' ? `<button class="writing-action" data-reconcile-result-comment="${esc(link.operation_id)}" ${busy ? 'disabled' : ''}>게시 결과 확인</button>` : ''}
-    </section>`;
-  }
   function card(link) {
-    const { operation_id: op, view, change, content_change: contentChange } = link, data = view?.data, issue = data?.issue || link.issue;
-    const busy = pending.has(op) || ['preparing', 'sending'].includes(change?.state) || ['preparing', 'sending'].includes(contentChange?.state);
-    const blocked = busy || !!view?.error || !data || !data.can_write || !!data.transition_message || change?.state === 'unknown';
-    const transitions = data?.transitions || [], version = `${issue.status?.id}:${issue.updated}`;
-    let selected = selections.get(op);
-    if (selected?.version !== version || !transitions.some(t => t.id === selected?.id && !t.required_fields.length)) { selections.delete(op); selected = null; }
-    const message = change?.state === 'unknown' ? change.message : errors.get(op) || view?.error || change?.message || data?.transition_message;
+    const op = link.operation_id, view = link.view, issue = view?.data?.issue || link.issue;
+    const busy = pending.has(op);
     return `<article class="jira-card" data-jira-card="${esc(op)}" aria-label="${esc(issue.key)} Jira 이슈">
       <div class="jira-card-heading"><a class="jira-link" href="${esc(issue.url)}" target="_blank" rel="noopener noreferrer" data-jira-url="${esc(issue.url)}" aria-label="${esc(issue.key)} Jira에서 열기">${esc(issue.key)} <span aria-hidden="true">↗</span></a>
-        ${statusHTML(issue.status)}<button class="jira-refresh writing-action" data-refresh-jira="${esc(op)}" aria-label="${esc(issue.key)} 상태 새로고침" title="Jira 상태 새로고침" ${busy ? 'disabled' : ''} aria-busy="${busy}">${icon}</button></div>
-      <p class="jira-issue-title">${esc(issue.title || '이슈 정보를 불러오는 중입니다.')}</p>
-      <button class="writing-action jira-content-button" data-update-jira-content="${esc(op)}" aria-label="${esc(issue.key)} 제목·설명 반영"
-        ${busy || !data?.can_write || view?.error || contentChange?.state === 'unknown' ? 'disabled' : ''}>제목·설명 반영</button>
-      ${contentChange?.message ? `<p class="jira-message jira-content-message" role="status">${esc(contentChange.message)}</p>` : ''}
-      <div class="jira-transition"><select id="jira-transition-${esc(op)}" data-jira-transition="${esc(op)}" aria-label="${esc(issue.key)} 변경할 상태" ${blocked || !transitions.some(t => !t.required_fields.length) ? 'disabled' : ''}>
-        <option value="">변경할 상태 선택</option>${transitions.map(t => `<option value="${esc(t.id)}" ${t.required_fields.length ? 'disabled' : ''} ${selected?.id === t.id ? 'selected' : ''}>${esc(t.to.name)} · ${esc(t.name)}${t.required_fields.length ? ' (추가 입력 필요)' : ''}</option>`).join('')}</select>
-        <button class="writing-action writing-action-accent" data-change-jira="${esc(op)}" aria-label="${esc(issue.key)} 상태 변경" ${blocked || !selected ? 'disabled' : ''} aria-busy="${busy}">${busy ? '확인 중…' : '상태 변경'}</button></div>
-      <p class="help jira-done-notice" data-jira-done-notice="${esc(op)}" ${transitions.find(transition => transition.id === selected?.id)?.to.category === 'done' ? '' : 'hidden'}>완료 상태로 변경하면 이 업무의 세션을 요약한 한 문단의 결과 댓글을 Jira에 자동 게시합니다.</p>
-      ${message ? `<p class="jira-message" role="status">${esc(message)}</p>` : ''}
-      ${!blocked && !transitions.length ? '<p class="help">변경 가능한 상태가 없습니다. Jira 워크플로와 전환 권한을 확인하세요.</p>' : ''}
-      ${transitions.some(t => t.required_fields.length) ? '<p class="help jira-required-note">추가 입력이 필요한 전환은 Jira에서 변경할 수 있습니다.</p>' : ''}
-      ${resultCommentHTML(link, issue, busy)}
-      <p class="jira-observed">${view?.observed_at ? `${view.error ? '마지막 확인' : '상태 확인'} · ${esc(absoluteTime(view.observed_at))}${view.error ? ' · 최신 상태 미확인' : ''}` : 'Jira에서 현재 상태를 확인하고 있습니다.'}</p>
+      ${statusHTML(issue.status)}<button class="jira-refresh writing-action" data-sync-jira="${esc(op)}" aria-label="${esc(issue.key)} 업무 로그 Sync" ${busy ? 'disabled' : ''} aria-busy="${busy}">${icon} ${busy ? '동기화 중…' : 'Sync'}</button></div>
+      ${errors.get(op) ? `<p class="jira-message" role="status">${esc(errors.get(op))}</p>` : ''}
     </article>`;
   }
   function html(data) {
@@ -56,7 +21,7 @@ export function jiraUI({ api, esc, modal, toast, refresh, absoluteTime, openExte
       : `<p class="sync-message">${esc(l.message || '티켓 생성 중')}${l.state === 'unknown' ? ` <button class="secondary" data-resolve-jira="${esc(l.operation_id)}">생성 결과 확인</button>` : ''}</p>`).join('');
     return `<section class="detail-section jira-section"><h3>Jira 이슈</h3>${cards}
       ${!blocked ? `<div class="jira-connect"><p>로컬 업무로 사용할 수 있습니다. Jira에서도 추적하려면 이슈를 만들거나 연결하세요.</p><div class="jira-connect-actions" role="group" aria-label="Jira 이슈 연결">
-        <button id="create-jira" class="writing-action writing-action-accent">＋ 새 이슈 만들기</button><button id="link-jira" class="writing-action">기존 이슈 연결</button></div></div>` : '<p class="help jira-sync-note">종료된 세션마다 업무 로그 하나를 연결합니다. 재요약하면 기존 로그를 갱신합니다.</p>'}
+        <button id="create-jira" class="writing-action writing-action-accent">＋ 새 이슈 만들기</button><button id="link-jira" class="writing-action">기존 이슈 연결</button></div></div>` : '<p class="help jira-sync-note">Sync로 요약 완료 세션의 시작 시간·소요 시간·요약을 업무 로그에 등록합니다.</p>'}
       ${(data.worklog_alerts || []).map(w => `<p class="sync-message" role="status">${esc(w.message)} · ${esc(w.session_id)}</p>`).join('')}</section>`;
   }
   async function existing(data) {
@@ -136,12 +101,6 @@ export function jiraUI({ api, esc, modal, toast, refresh, absoluteTime, openExte
       if (button) button.onclick = async () => { try { await fn(data); } catch (e) { toast(e.message); } };
     }
     panel.querySelectorAll('[data-jira-url]').forEach(a => a.onclick = e => { e.preventDefault(); openExternal(a.dataset.jiraUrl); });
-    panel.querySelectorAll('[data-jira-transition]').forEach(select => select.onchange = () => {
-      const op = select.dataset.jiraTransition, link = data.jira_links.find(l => l.operation_id === op), issue = link.view.data.issue;
-      selections.set(op, { id: select.value, version: `${issue.status.id}:${issue.updated}` });
-      panel.querySelector(`[data-change-jira="${op}"]`).disabled = !select.value;
-      panel.querySelector(`[data-jira-done-notice="${op}"]`).hidden = link.view.data.transitions.find(transition => transition.id === select.value)?.to.category !== 'done';
-    });
     async function action(op, fn) {
       if (pending.has(op)) return;
       pending.add(op); errors.delete(op);
@@ -149,50 +108,11 @@ export function jiraUI({ api, esc, modal, toast, refresh, absoluteTime, openExte
       try { await fn(); } catch (e) { errors.set(op, e.message); }
       finally { pending.delete(op); await refresh(data.item.id); }
     }
-    panel.querySelectorAll('[data-refresh-jira]').forEach(b => b.onclick = () => action(b.dataset.refreshJira, () => api(`/jira-links/${b.dataset.refreshJira}/refresh`, { method: 'POST', body: {} })));
-    panel.querySelectorAll('[data-retry-result-comment]').forEach(button => button.onclick = () => {
-      const op = button.dataset.retryResultComment, result = data.jira_links.find(link => link.operation_id === op)?.result_comment;
-      if (result?.state !== 'failed' || pending.has(op)) return;
-      let retry = commentRetries.get(op);
-      if (!retry || retry.source !== result.operation_id) { retry = { source: result.operation_id, operation_id: crypto.randomUUID() }; commentRetries.set(op, retry); }
-      return action(op, async () => {
-        await api(`/jira-links/${op}/result-comment/retry`, { method: 'POST', body: { operation_id: retry.operation_id } });
-        commentRetries.delete(op);
-      });
-    });
-    panel.querySelectorAll('[data-reconcile-result-comment]').forEach(button => button.onclick = () => action(button.dataset.reconcileResultComment,
-      () => api(`/jira-links/${button.dataset.reconcileResultComment}/result-comment/reconcile`, { method: 'POST', body: {} })));
-    panel.querySelectorAll('[data-update-jira-content]').forEach(button => button.onclick = () => {
-      const op = button.dataset.updateJiraContent, issue = data.jira_links.find(link => link.operation_id === op)?.view?.data?.issue;
-      if (!issue || pending.has(op)) return;
-      const operationId = crypto.randomUUID();
-      modal(`<h2>Jira 제목·설명 반영</h2><p>${esc(issue.key)}의 제목·설명을 현재 work item 내용으로 변경합니다.</p>
-        <div id="dialog-error" class="error" role="alert" hidden></div>
-        <section class="jira-content-preview"><h3>${esc(data.item.title)}</h3><div class="work-item-description">${descriptionHTML(data.item.description, esc)}</div></section>
-        <div class="dialog-actions"><button data-close>취소</button><button id="confirm-jira-content" class="primary">Jira에 반영</button></div>`);
-      const dialog = $('#modal'), confirm = $('#confirm-jira-content'), error = $('#dialog-error');
-      confirm.onclick = async () => {
-        confirm.disabled = true; pending.add(op); error.hidden = true;
-        try {
-          const result = await api(`/jira-links/${op}/content`, { method: 'POST', body: {
-            operation_id: operationId, version: data.item.version, expected_updated: issue.updated
-          } });
-          if (['applied', 'observed'].includes(result.state)) { dialog.close(); toast('Jira에 제목·설명을 반영했습니다.'); }
-          else { error.textContent = result.message || '반영 상태를 새로고침하여 확인하세요.'; error.hidden = false; }
-        } catch (failure) { error.textContent = failure.message; error.hidden = false; }
-        finally { pending.delete(op); await refresh(data.item.id); }
-      };
-    });
-    panel.querySelectorAll('[data-change-jira]').forEach(b => b.onclick = () => {
-      const op = b.dataset.changeJira, selected = selections.get(op), issue = data.jira_links.find(l => l.operation_id === op).view.data.issue;
-      if (!selected?.id || pending.has(op)) return;
-      return action(op, async () => {
-        selections.delete(op);
-        const result = await api(`/jira-links/${op}/transition`, { method: 'POST', body: { operation_id: crypto.randomUUID(), transition_id: selected.id,
-          expected_status_id: issue.status.id, expected_updated: issue.updated } });
-        if (result.state === 'applied') toast('Jira에 상태 변경을 반영했습니다.');
-      });
-    });
+    panel.querySelectorAll('[data-sync-jira]').forEach(button => button.onclick = () => action(button.dataset.syncJira, async () => {
+      const result = await api(`/jira-links/${button.dataset.syncJira}/worklogs/sync`, { method: 'POST', body: {} });
+      toast(result.queued ? `${result.queued}개 세션의 업무 로그 동기화를 요청했습니다.` : result.message);
+    }));
   }
+
   return { html, bind };
 }

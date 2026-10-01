@@ -76,6 +76,36 @@ test('install and reinstall own only app/services until each agent is explicitly
   assert.equal(fs.readFileSync(path.join(f.homeDir, '.codex/AGENTS.md'), 'utf8'), 'User owned instructions\n');
 });
 
+test('reinstall migrates three legacy registrations to the app alone while preserving user data', t => {
+  const f = setup(t);
+  const association = '<key>AssociatedBundleIdentifiers</key><string>local.worklog.harness</string>';
+  assert.deepEqual(f.plan.files.map(file => file.label), ['local.worklog.gui']);
+  const legacy = ['runtime', 'manager'].map(role => ({
+    label: `local.worklog.${role}`, target: path.join(f.homeDir, `Library/LaunchAgents/local.worklog.${role}.plist`),
+    argv: [path.join(f.plan.runtimeRoot, 'node'), path.join(f.plan.runtimeRoot, 'harness/bin/harness.mjs'), 'serve', role],
+    content: `legacy ${role} fixture`
+  }));
+  f.plan.files = [...legacy, ...f.plan.files];
+  f.install(); f.connect();
+  const before = JSON.parse(fs.readFileSync(f.loc.manifest));
+  const data = path.join(f.loc.data, 'user-note.txt'); fs.writeFileSync(data, 'keep my history');
+  const config = fs.readFileSync(f.loc.configs.codex, 'utf8');
+  const plan = prepareInstall({ output: path.join(f.dir, 'upgrade'), homeDir: f.homeDir, sourceApp: f.sourceApp });
+  const failedActivation = (_cmd, args) => ({ status: 1, stderr: args[0] === 'print' ? 'Could not find service' : 'fixture activation failed' });
+  assert.throws(() => applyInstall(plan, { activate: true, reinstall: true, launchctl: failedActivation }), /fixture activation failed/);
+  assert.equal(JSON.parse(fs.readFileSync(f.loc.manifest)).files.length, 3, 'failed migration restores the legacy receipt');
+  for (const file of legacy) assert.equal(fs.readFileSync(file.target, 'utf8'), file.content);
+  assert.equal(applyInstall(plan, { activate: false, reinstall: true }).status, 'reinstalled');
+  const after = JSON.parse(fs.readFileSync(f.loc.manifest));
+  assert.deepEqual(after.files.map(f => [f.label, f.argv]), before.files.filter(f => f.label === 'local.worklog.gui').map(f => [f.label, f.argv]));
+  for (const file of legacy) assert.equal(fs.existsSync(file.target), false);
+  for (const file of after.files) assert.ok(fs.readFileSync(file.path, 'utf8').includes(association));
+  assert.equal(fs.readFileSync(data, 'utf8'), 'keep my history');
+  assert.equal(fs.readFileSync(f.loc.configs.codex, 'utf8'), config);
+  assert.deepEqual(after.links, before.links);
+  assert.equal(f.uninstall().status, 'uninstalled', 'updated ownership receipts remain removable');
+});
+
 test('malformed or redirected agent configuration never blocks app install, reinstall or uninstall', t => {
   const f = setup(t), outside = path.join(f.dir, 'outside-config');
   fs.writeFileSync(f.loc.configs.claude, '{malformed'); fs.writeFileSync(outside, 'user settings');

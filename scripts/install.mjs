@@ -29,17 +29,10 @@ export function prepareInstall({ output, homeDir = os.homedir(), sourceApp }) {
   const version = previous?.version || `0.3.1-${digest(fs.readFileSync(path.join(ROOT, 'harness/jobs.json'))).slice(0, 12)}`;
   const runtimeRoot = path.join(loc.data, 'versions', version), node = path.join(runtimeRoot, 'node'), harness = path.join(runtimeRoot, 'harness');
   const files = [];
-  for (const role of ['runtime', 'manager']) {
-    const label = `local.worklog.${role}`, target = path.join(loc.home, 'Library/LaunchAgents', `${label}.plist`);
-    const argv = [node, path.join(harness, 'bin/harness.mjs'), 'serve', role];
-    files.push({ target, label, argv, content: plist({ Label: label, ProgramArguments: argv,
-      RunAtLoad: true, KeepAlive: role === 'runtime' ? { SuccessfulExit: false } : true, ProcessType: 'Background',
-      EnvironmentVariables: { HARNESS_DATA_DIR: loc.data, PATH: `${runtimeRoot}:${process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'}` },
-      StandardOutPath: path.join(loc.data, `${role}.log`), StandardErrorPath: path.join(loc.data, `${role}.log`) }) });
-  }
   const argv = [path.join(loc.app, 'Contents/MacOS/WorkLog'), '--background'];
-  files.push({ target: loc.agents[2].path, label: 'local.worklog.gui', argv, content: plist({ Label: 'local.worklog.gui',
-    ProgramArguments: argv, RunAtLoad: true, KeepAlive: false, EnvironmentVariables: { HARNESS_DATA_DIR: loc.data } }) });
+  files.push({ target: loc.agents[2].path, label: 'local.worklog.gui', argv, content: plist({ Label: 'local.worklog.gui', AssociatedBundleIdentifiers: 'local.worklog.harness',
+    ProgramArguments: argv, RunAtLoad: true, KeepAlive: false, EnvironmentVariables: { HARNESS_DATA_DIR: loc.data,
+      PATH: [path.join(loc.app, 'Contents/MacOS'), path.dirname(process.execPath), process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'].join(path.delimiter) } }) });
   const hooks = {}, links = [];
   const plan = { installationId, homeDir: loc.home, version, sourceApp: path.resolve(sourceApp), targetApp: loc.app,
     dataDir: loc.data, runtimeRoot, files, hooks, links, skills, manifest: loc.manifest,

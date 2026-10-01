@@ -13,6 +13,7 @@ test('native GUI recovers failed pages and termination callbacks, preserves back
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   let ready = false, navigationFailures = 0;
   const successfulNavigations = { '/': 0, '/quick': 0 };
+  const stylesheetRequests = { '/main.css': 0, '/quick.css': 0 };
   const server = http.createServer((req, res) => {
     if (!ready) { navigationFailures += req.url === '/' || req.url === '/quick' ? 1 : 0; req.socket.destroy(); return; }
     if (req.url === '/api/quick') {
@@ -20,9 +21,14 @@ test('native GUI recovers failed pages and termination callbacks, preserves back
       res.end(JSON.stringify({ counts: { current: 0, attention: 0, waiting: 0 }, health: { runtime_connected: true } }));
       return;
     }
+    if (req.url in stylesheetRequests) {
+      stylesheetRequests[req.url]++;
+      res.writeHead(stylesheetRequests[req.url] === 1 ? 503 : 200, { 'content-type': 'text/css', 'cache-control': 'no-store' });
+      res.end(stylesheetRequests[req.url] === 1 ? '' : 'body { display: flex; }'); return;
+    }
     if (req.url in successfulNavigations) successfulNavigations[req.url]++;
     res.setHeader('content-type', 'text/html');
-    res.end('<!doctype html><html><body>native connection recovered</body></html>');
+    res.end(`<!doctype html><html><head><link rel="stylesheet" href="${req.url === '/quick' ? '/quick.css' : '/main.css'}"></head><body>native connection recovered</body></html>`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
@@ -94,7 +100,7 @@ application.run()
   assert.equal(result.firstQuick, 'native connection recovered');
   assert.equal(result.main, 'native connection recovered');
   assert.equal(result.quick, 'native connection recovered');
-  assert.deepEqual(successfulNavigations, { '/': 2, '/quick': 2 }, 'healthy polling preserves loaded pages');
+  assert.deepEqual(successfulNavigations, { '/': 3, '/quick': 3 }, 'failed stylesheets and terminated views recover; healthy polling preserves loaded pages');
   const launched = await run([]);
   assert.equal(launched.initialLaunchOpenedWindow, true, 'ordinary app launch opens the main window instead of toggling the menu-bar popover');
   assert.equal(launched.reopenedWindow, true);
@@ -103,7 +109,7 @@ application.run()
 test('native WebViews load the real manager pages, injected authentication, modules and work item data', { skip: process.platform !== 'darwin', timeout: 20000 }, async t => {
   const h = await new Harness().start('manager');
   t.after(() => h.close());
-  await h.ingest([event('native-real-ui', 'input', '10:00:00', 'turn-1', { text: '네이티브 연결 확인 업무', work_item_id: 'native-ui-item' })]);
+  await h.ingest([event('native-real-ui', 'input', new Date().toISOString(), 'turn-1', { text: '네이티브 연결 확인 업무', work_item_id: 'native-ui-item' })]);
   const main = fs.readFileSync(path.join(ROOT, 'apps/macos/main.swift'), 'utf8').split('let application = NSApplication.shared')[0];
   const source = path.join(h.dir, 'main.swift'), executable = path.join(h.dir, 'native-test');
   fs.writeFileSync(source, main + `
@@ -113,7 +119,7 @@ delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinis
 delegate.loadMain()
 let refresh = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in delegate.refreshConnection(); delegate.setQuickVisible(true) }
 Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { _ in
-    delegate.webView!.evaluateJavaScript("JSON.stringify({ title: document.title, items: document.querySelector('#item-count')?.textContent, body: document.body.innerText, error: document.querySelector('#error')?.textContent, icons: Array.from(document.querySelectorAll('.sidebar button svg')).map(icon => icon.getBBox().width > 0 && icon.getBoundingClientRect().width > 0) })") { main, error in
+    delegate.webView!.evaluateJavaScript("JSON.stringify({ layout: getComputedStyle(document.body).display, title: document.title, items: document.querySelector('#item-count')?.textContent, body: document.body.innerText, error: document.querySelector('#error')?.textContent, icons: Array.from(document.querySelectorAll('.sidebar button svg')).map(icon => icon.getBBox().width > 0 && icon.getBoundingClientRect().width > 0) })") { main, error in
         delegate.quickWebView!.evaluateJavaScript("JSON.stringify({ count: document.querySelector('#current-count')?.textContent, body: document.body.innerText, icons: Array.from(document.querySelectorAll('button svg')).map(icon => icon.getBBox().width > 0 && icon.getBoundingClientRect().width > 0) })") { quick, error in
             let result: [String: Any] = ["main": main as? String ?? "", "quick": quick as? String ?? "", "mainReady": delegate.mainReady, "statusIconVisible": (delegate.statusItem.button?.image?.size.width ?? 0) > 0]
             print(String(data: try! JSONSerialization.data(withJSONObject: result), encoding: .utf8)!)
@@ -133,6 +139,7 @@ application.run()
   assert.equal(await new Promise(resolve => child.once('exit', resolve)), 0, stderr);
   const result = JSON.parse(stdout.trim()), page = JSON.parse(result.main), quick = JSON.parse(result.quick);
   assert.equal(result.mainReady, true, 'the real module completes its authenticated initial load and notifies the native host');
+  assert.equal(page.layout, 'flex', 'the native WebView loads the main stylesheet');
   assert.equal(page.title, 'WorkLog'); assert.equal(page.items, '1'); assert.equal(page.error, '');
   assert.match(page.body, /네이티브 연결 확인 업무/);
   assert.equal(quick.count, '1'); assert.match(quick.body, /네이티브 연결 확인 업무/);

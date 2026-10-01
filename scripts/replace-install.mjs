@@ -89,7 +89,7 @@ export function recoverReplacement(loc, receipt, { activate, launchctl, stopTime
   // A crash can occur between replacing a plist and recording activation.
   const stopping = structuredClone(receipt);
   for (const [i, file] of stopping.files.entries()) {
-    const old = previous.files[i];
+    const old = previous.files.find(entry => entry.label === file.label) || file;
     safePath(loc.home, file.path);
     assert(matches(file.path, { ...file, kind: 'file' }) || matches(old.path, { ...old, kind: 'file' }),
       `서비스 설정이 변경되어 복구하지 않았습니다: ${file.path}`);
@@ -112,6 +112,9 @@ export function recoverReplacement(loc, receipt, { activate, launchctl, stopTime
       fs.renameSync(entry.backup, entry.target);
     }
     removeExact(loc, receipt.trees[i], entry.stage);
+  }
+  for (const file of receipt.files.filter(file => !previous.files.some(old => old.label === file.label))) {
+    if (stat(file.path)) { assert(matches(file.path, { ...file, kind: 'file' }), '변경된 서비스 설정을 보존합니다.'); fs.unlinkSync(file.path); }
   }
   for (const file of previous.files) atomic(file.path, file.content);
   const resume = previous.files.filter(file => ['registered', 'starting'].includes(file.activation));
@@ -156,6 +159,10 @@ export function replaceInstall(loc, previous, plan, staged, { activate, launchct
       exactTree(loc, previous.trees[i], entry.target);
       fs.renameSync(entry.target, entry.backup);
       fs.renameSync(entry.stage, entry.target);
+    }
+    for (const old of previous.files.filter(old => !receipt.files.some(file => file.label === old.label))) {
+      assert(matches(old.path, { ...old, kind: 'file' }), '변경된 서비스 설정을 보존합니다.');
+      fs.unlinkSync(old.path);
     }
     for (const file of receipt.files) atomic(file.path, file.content);
     if (activate) { onProgress('WorkLog 서비스와 메뉴 막대 앱을 다시 시작합니다.'); startServices(loc, receipt, launchctl); }

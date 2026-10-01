@@ -20,15 +20,15 @@ const open = async page => {
 test('GUI persists automatic writing thresholds and the collected second response creates visible structured metadata', async ({ page }) => {
   await open(page);
   await expect(page.getByLabel('에이전트 응답 수')).toHaveValue('5');
-  await expect(page.getByLabel('요약된 종료 세션 수')).toHaveValue('5');
+  await expect(page.getByLabel('요약 완료 세션 수')).toHaveValue('5');
   await page.getByLabel('에이전트 응답 수').fill('2');
-  await page.getByLabel('요약된 종료 세션 수').fill('3');
+  await page.getByLabel('요약 완료 세션 수').fill('3');
   await page.getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.locator('#toast')).toHaveText('자동 작성 기준을 저장했습니다.');
-  expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 2, summary_interval: 3, session_summary_enabled: true });
+  expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 2, summary_interval: 3, session_summary_enabled: true, session_summary_idle_minutes: 15, work_summary_enabled: true });
   await h.stop('manager'); await h.start('manager'); await open(page);
   await expect(page.getByLabel('에이전트 응답 수')).toHaveValue('2');
-  await expect(page.getByLabel('요약된 종료 세션 수')).toHaveValue('3');
+  await expect(page.getByLabel('요약 완료 세션 수')).toHaveValue('3');
   await page.getByRole('button', { name: '닫기', exact: true }).click();
   await h.ingest(pair('automatic-ui', '09:00:00', '09:01:00', 'first', { source: 'system_hook', text: '권한 관리 범위를 정리했습니다.' }));
   const item = (await h.manager('/items'))[0];
@@ -50,16 +50,16 @@ test('automatic writing settings reject invalid counts and restore defaults only
   for (const value of ['0', '1.5', '1001', '']) {
     await input.fill(value); await page.getByRole('button', { name: '저장', exact: true }).click();
     expect(await input.evaluate(node => node.validity.valid)).toBe(false);
-    expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 5, summary_interval: 5, session_summary_enabled: true });
+    expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 5, summary_interval: 5, session_summary_enabled: true, session_summary_idle_minutes: 15, work_summary_enabled: true });
   }
-  await input.fill('8'); await page.getByLabel('요약된 종료 세션 수').fill('12');
+  await input.fill('8'); await page.getByLabel('요약 완료 세션 수').fill('12');
   await page.getByRole('button', { name: '저장', exact: true }).click();
-  await expect.poll(() => h.manager('/automation/settings')).toEqual({ initial_output_count: 8, summary_interval: 12, session_summary_enabled: true });
+  await expect.poll(() => h.manager('/automation/settings')).toEqual({ initial_output_count: 8, summary_interval: 12, session_summary_enabled: true, session_summary_idle_minutes: 15, work_summary_enabled: true });
   await page.getByRole('button', { name: '기본값 입력', exact: true }).click();
-  await expect(input).toHaveValue('5'); await expect(page.getByLabel('요약된 종료 세션 수')).toHaveValue('5');
-  expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 8, summary_interval: 12, session_summary_enabled: true });
+  await expect(input).toHaveValue('5'); await expect(page.getByLabel('요약 완료 세션 수')).toHaveValue('5');
+  expect(await h.manager('/automation/settings')).toEqual({ initial_output_count: 8, summary_interval: 12, session_summary_enabled: true, session_summary_idle_minutes: 15, work_summary_enabled: true });
   await page.getByRole('button', { name: '저장', exact: true }).click();
-  await expect.poll(() => h.manager('/automation/settings')).toEqual({ initial_output_count: 5, summary_interval: 5, session_summary_enabled: true });
+  await expect.poll(() => h.manager('/automation/settings')).toEqual({ initial_output_count: 5, summary_interval: 5, session_summary_enabled: true, session_summary_idle_minutes: 15, work_summary_enabled: true });
   await page.screenshot({ path: 'output/playwright/automation-settings.png', fullPage: true });
 });
 
@@ -73,4 +73,37 @@ test('session automation toggle persists without a queue menu', async ({ page })
   await expect(page.getByRole('button', { name: '대기열', exact: true })).toHaveCount(0);
   await open(page);
   await expect(page.getByLabel('세션 자동 요약 사용')).not.toBeChecked();
+});
+
+test('idle summary minutes persist across restart and reset to fifteen', async ({ page }) => {
+  await open(page);
+  const minutes = page.getByLabel('비활동 후 요약 대기 시간');
+  await expect(minutes).toHaveValue('15');
+  await minutes.fill('7');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect.poll(async () => (await h.manager('/automation/settings')).session_summary_idle_minutes).toBe(7);
+  await h.stop('manager'); await h.start('manager'); await open(page);
+  await expect(minutes).toHaveValue('7');
+  await page.getByRole('button', { name: '기본값 입력' }).click();
+  await expect(minutes).toHaveValue('15');
+  expect((await h.manager('/automation/settings')).session_summary_idle_minutes).toBe(7);
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect.poll(async () => (await h.manager('/automation/settings')).session_summary_idle_minutes).toBe(15);
+});
+
+test('work summary checkbox persists separately and resets to enabled', async ({ page }) => {
+  await open(page);
+  await expect(page.getByLabel('업무 자동 요약 사용')).toBeChecked();
+  await page.getByLabel('업무 자동 요약 사용').uncheck();
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect.poll(async () => (await h.manager('/automation/settings')).work_summary_enabled).toBe(false);
+  expect((await h.manager('/automation/settings')).session_summary_enabled).toBe(true);
+  await page.getByRole('button', { name: '닫기', exact: true }).click();
+  await open(page);
+  await expect(page.getByLabel('업무 자동 요약 사용')).not.toBeChecked();
+  await page.getByRole('button', { name: '기본값 입력' }).click();
+  await expect(page.getByLabel('업무 자동 요약 사용')).toBeChecked();
+  expect((await h.manager('/automation/settings')).work_summary_enabled).toBe(false);
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect.poll(async () => (await h.manager('/automation/settings')).work_summary_enabled).toBe(true);
 });

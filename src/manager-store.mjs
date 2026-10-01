@@ -1,3 +1,5 @@
+import { workStatistics } from './work-statistics.mjs';
+import { sessionResume } from './session-resume.mjs';
 import path from 'node:path';
 import { database, transaction, validateEvent, stableId, id, now, json, assert, digest } from './shared.mjs';
 import { currentHookEvent, receivedTurn, resolveHookTurns } from './hook-events.mjs';
@@ -12,6 +14,9 @@ CREATE TABLE IF NOT EXISTS work_items (
 );
 CREATE TABLE IF NOT EXISTS item_initial_metadata (
  work_item_id TEXT PRIMARY KEY REFERENCES work_items(id), event_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS summary_window_boundaries (
+ session_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, completed_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS agent_sessions (
  id TEXT PRIMARY KEY, engine TEXT NOT NULL, source_id TEXT NOT NULL, work_item_id TEXT NOT NULL,
@@ -181,7 +186,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
       origin: input ? { engine, agent_session_id: session_id, turn_id: input.turn_id } : null };
   }
   const projectionLinks = agentId => new Map(all(`SELECT e.id,e.kind,l.session_id,l.resolution,json_extract(e.payload,'$.turn_id') AS turn_id
-    FROM events e JOIN event_links l ON l.event_id=e.id WHERE e.agent_id=? AND e.kind IN ('input','output')`, agentId).map(r => [r.id, r]));
+    FROM events e JOIN event_links l ON l.event_id=e.id WHERE e.agent_id=? AND e.kind IN ('input','output','progress')`, agentId).map(r => [r.id, r]));
   function changedInputTurns(previous, current) {
     const changed = new Set();
     for (const [uid, record] of [...previous, ...current]) {
@@ -223,6 +228,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
       const key = JSON.parse(row.payload).turn_id; counts.set(key, (counts.get(key) || 0) + 1);
     }
     const turns = new Map(), windows = new Map();
+    const summaryBoundaries = new Map(all('SELECT session_id,completed_at FROM summary_window_boundaries WHERE agent_id=?', agentId).map(row => [row.session_id, row.completed_at]));
     let current;
     const activityKinds = new Set(['input', 'output', 'tool.started', 'tool.finished', 'turn.interrupted', 'turn.failed']);
     for (const row of rows) {
@@ -231,7 +237,9 @@ export function managerStore(dir, { clock = Date.now } = {}) {
       // Session windows describe observed time, independently of turn matching.
       // Lifecycle notifications alone cannot start or extend an activity window.
       if (activityKinds.has(e.kind) && (current || e.kind === 'input')) {
-        if (!current || Date.parse(e.event_at) - Date.parse(windows.get(current).end) >= 1200000) {
+        if (!current || Date.parse(e.event_at) - Date.parse(windows.get(current).end) >= 1200000
+          || (e.kind === 'input' && summaryBoundaries.has(current)
+            && Date.parse(e.event_at) >= Date.parse(summaryBoundaries.get(current)))) {
           const owner = e.work_item_id || (current ? windows.get(current).owner : agent.work_item_id);
           ensureItem(owner, e.event_at);
           current = stableId('session-', row.id);
@@ -260,6 +268,10 @@ export function managerStore(dir, { clock = Date.now } = {}) {
         // Completion relates to the original turn, but its record belongs to
         // the time window where it was observed, even after a long silent gap.
         windows.get(turns.get(e.turn_id)).pending.delete(e.turn_id);
+      } else if (e.kind === 'progress' && turns.has(e.turn_id)) {
+        sid = turns.get(e.turn_id); resolution = 'matched';
+        const window = windows.get(sid);
+        if (e.event_at > window.end) window.end = e.event_at;
       } else if (turns.has(e.turn_id)) { resolution = 'matched'; }
       // Unmatched output stays unresolved at turn level but is still visible
       // in its temporal session; never invent an input/output pairing.
@@ -553,7 +565,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
     const rows = items().map(w => ({ id: w.id, title: w.title, state: w.state, last_activity: w.last_activity, activity: w.activity, activities: w.activities }));
     const current = rows.filter(w => ['running', 'queued', 'agent_response_pending'].includes(w.activity));
     const recent = rows.filter(w => w.activity === 'recent');
-    return { counts: { current: current.length, recent: recent.length, total: rows.length },
+    return { statistics: workStatistics(rows, sessionList()), counts: { current: current.length, recent: recent.length, total: rows.length },
       current: current.slice(0, 5), recent: recent.slice(0, 5) };
   }
   const decodeEvent = e => ({ ...JSON.parse(e.payload), uid: e.id, sequence: e.seq, session_id: e.session_id,
@@ -566,7 +578,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
       assert(session && canonical(session.work_item_id) === resolved, '세션을 찾을 수 없습니다.', 404);
       assert(session.active, '세션 경계가 변경되었습니다. 이력을 다시 불러오세요.', 409);
       const revision = one('SELECT revision FROM history_revisions WHERE agent_id=?', session.agent_id)?.revision || 0;
-      return { clause: "e.agent_id=? AND l.session_id=? AND e.kind IN ('input','output')", args: [session.agent_id, sessionId],
+      return { clause: "e.agent_id=? AND l.session_id=? AND e.kind IN ('input','output','progress')", args: [session.agent_id, sessionId],
         revision: digest(json([resolved, sessionId, revision])) };
     }
     const agents = all("SELECT a.id,a.work_item_id,COALESCE(h.revision,0) AS revision FROM agent_sessions a LEFT JOIN history_revisions h ON h.agent_id=a.id WHERE a.role='user' ORDER BY a.id")
@@ -616,13 +628,23 @@ export function managerStore(dir, { clock = Date.now } = {}) {
     const session = one('SELECT work_item_id FROM work_item_sessions WHERE id=?', sessionId);
     if (session) assertVisible(session.work_item_id);
     return all(`SELECT e.*,l.session_id,l.resolution ${historyFrom} WHERE l.session_id=?
-      AND json_extract(e.payload,'$.role')='user' AND e.kind IN ('input','output','turn.failed','turn.interrupted')
+      AND json_extract(e.payload,'$.role')='user' AND e.kind IN ('input','output','progress','turn.failed','turn.interrupted')
       ORDER BY e.event_at,e.seq`, sessionId).map(decodeEvent);
   }
   function detail(itemId, { summary = false } = {}) {
     const resolved = canonical(itemId), item = items().find(i => i.id === resolved);
     assert(item, '업무를 찾을 수 없습니다.', 404);
-    const sessions = sessionList(resolved), sids = new Set(sessions.map(s => s.id));
+    const resumeByAgent = new Map();
+    const sessions = sessionList(resolved).map(session => {
+      if (!resumeByAgent.has(session.agent_id)) {
+        const row = one(`SELECT payload FROM events WHERE agent_id=?
+          AND kind='input' AND json_extract(payload,'$.source')='system_hook'
+          AND json_extract(payload,'$.role')='user'
+          ORDER BY event_at DESC,seq DESC LIMIT 1`, session.agent_id);
+        resumeByAgent.set(session.agent_id, sessionResume(session, row ? JSON.parse(row.payload) : null));
+      }
+      return { ...session, resume: resumeByAgent.get(session.agent_id) };
+    }), sids = new Set(sessions.map(s => s.id));
     const agents = all('SELECT * FROM agent_sessions').filter(a => canonical(a.work_item_id) === resolved);
     const agentIds = new Set(agents.map(a => a.id));
     const events = summary ? [] : all('SELECT e.*,l.session_id,l.resolution FROM events e LEFT JOIN event_links l ON l.event_id=e.id ORDER BY event_at,seq')

@@ -1,3 +1,4 @@
+import { transcriptProgress } from './transcript-progress.mjs';
 import { retiredWorkMessage } from './product-scope.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -115,12 +116,17 @@ function collectSpool(context) {
   return changed;
 }
 
+const progress = transcriptProgress(store);
+let progressCheckedAt = 0;
 async function collect() {
   if (collecting || stopping) return; collecting = true;
   const wasConnected = runtimeConnected, previousError = lastError;
   let changed = false;
   try {
     changed = collectSpool();
+    if (Date.now() - progressCheckedAt >= 1000) {
+      progressCheckedAt = Date.now(); changed = progress.collect() > 0 || changed;
+    }
     try {
       const batch = await request(dir, 'runtime', `/events?after=${store.cursor('runtime')}`, { signal: AbortSignal.timeout(1500) });
       changed = store.ingestMany(batch.events, { source: 'runtime', value: batch.cursor }).inserted > 0 || changed; runtimeConnected = true;
@@ -336,6 +342,8 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
     }
     m = p.match(/^\/api\/items\/([^/]+)\/jira\/link$/);
     if (m && req.method === 'POST') return jira.link(m[1], await body(req));
+    m = p.match(/^\/api\/jira-links\/([^/]+)\/worklogs\/sync$/);
+    if (m && req.method === 'POST') return coordinator.sync(m[1]);
     m = p.match(/^\/api\/jira-links\/([^/]+)\/refresh$/);
     if (m && req.method === 'POST') return jira.refresh(m[1], true);
     m = p.match(/^\/api\/jira-links\/([^/]+)\/transition$/);

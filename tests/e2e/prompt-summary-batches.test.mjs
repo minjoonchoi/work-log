@@ -82,7 +82,7 @@ test('a changed failed source becomes eligible again without a new prompt trigge
 });
 
 test('a last session idle after an observed output is summarized without closing the session or completing the item', async t => {
-  const h = await setup(t, 0, {}, { events: pair('idle-current', ago(23), ago(21), 'last-output', { source: 'system_hook' }) });
+  const h = await setup(t, 0, {}, { events: pair('idle-current', ago(18), ago(16), 'last-output', { source: 'system_hook' }) });
   await completed(h, 1);
   const detail = await h.manager(`/items/${(await h.manager('/items'))[0].id}`);
   assert.equal(detail.sessions.length, 1); assert.equal(detail.sessions[0].closed, false);
@@ -139,4 +139,18 @@ test('missing Stop becomes unknown after inactivity, is summarized once, and nev
   assert.equal(JSON.parse(row.snapshot).summary_trigger.reason, 'missing_output');
   await h.stop('manager'); await h.start('manager'); await pause(1200);
   assert.equal(snapshot(h).requests.length, 1);
+});
+
+test('SessionEnd drains the entire item backlog in batches and restart does not repeat accepted summaries', async t => {
+  const source = { source: 'system_hook', work_item_id: 'exit-batch-item' };
+  const events = Array.from({ length: 8 }, (_, i) => pair(`exit-agent-${i}`, ago(3), ago(2), `turn-${i}`, source)).flat();
+  events.push(event('exit-agent-0', 'session.ended', ago(1), null, source));
+  const h = await setup(t, 0, {}, { events });
+  await completed(h, 8);
+  const rows = snapshot(h).requests;
+  assert.equal(rows.length, 8);
+  assert.ok(rows.every(row => JSON.parse(row.snapshot).summary_trigger.reason === 'session_end'));
+  await h.stop('manager'); await h.start('manager');
+  await pause(1200);
+  assert.equal(snapshot(h).requests.length, 8);
 });

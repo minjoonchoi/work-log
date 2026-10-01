@@ -78,7 +78,8 @@ export function writingCoordinator({ dir, writings, notify, automatic = true, au
       const available = Math.max(0, 5 - pending.filter(row => row.state === 'running' && automaticSummary(row)).length - writings.cancellingSummaryCount());
       // Cap legacy queued batches as well as newly admitted periodic batches.
       await parallel(pending.filter(row => row.state === 'pending' && automaticSummary(row) && writings.automationSettings().session_summary_enabled).slice(0, available));
-      for (const row of pending.filter(row => row.state === 'pending' && !automaticSummary(row))) await processRow(row);
+      for (const row of pending.filter(row => row.state === 'pending' && !automaticSummary(row)
+        && (row.source !== 'automatic' || row.format !== 'work-item-metadata' || writings.automationSettings().work_summary_enabled))) await processRow(row);
     } finally { busy = false; }
   }
   return { tick };

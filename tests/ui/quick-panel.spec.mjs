@@ -110,14 +110,31 @@ test('empty, interrupted-runtime and long untrusted titles remain readable in th
     ...pair('done', '08:10:00', '08:20:00', 't1', { text: '주간 진행 보고 정리' }),
     ...pair('blocked', '08:30:00', '08:40:00', 't1', { text: '엔티티 관계 설계', work_item_id: 'blocked' }),
     event('blocked', 'run.updated', '08:40:00', 't1', { work_item_id: 'blocked', run: { id: 'blocked-run', status: 'blocked' } })]);
-  await expect(page.locator('[data-item=preview]')).toContainText('실행 상태 미확인');
+  await expect(page.locator('#quick-groups [data-item=preview]')).toContainText('실행 상태 미확인');
   fs.mkdirSync('output/screenshots', { recursive: true });
   await page.screenshot({ path: 'output/screenshots/menu-bar-quick-panel.png' });
   const item = (await h.manager('/items')).find(i => i.id === 'preview');
   await h.manager('/items/preview', { method: 'PATCH', body: { version: item.version, title: '<img src=x onerror=alert(1)> ' + '긴 제목 '.repeat(30), description: '' } });
-  await expect(page.locator('[data-item=preview]')).toContainText('<img');
+  await expect(page.locator('#quick-groups [data-item=preview]')).toContainText('<img');
   await expect(page.locator('.quick-item img')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  const title = page.locator('[data-item=preview] .quick-item-title');
+  const title = page.locator('#quick-groups [data-item=preview] .quick-item-title');
   expect(await title.evaluate(el => el.clientHeight <= parseFloat(getComputedStyle(el).lineHeight) * 2 + 1)).toBe(true);
+});
+
+test('today and week statistics show tracked work, daily bars and exact item navigation', async ({ page }) => {
+  const end = new Date(), start = new Date(end.getTime() - 60000);
+  await h.ingest(pair('statistics', start.toISOString(), end.toISOString(), 'stats-turn', { text: '통계에서 확인할 업무', work_item_id: 'statistics-item' }));
+  await openQuick(page);
+  const stats = page.locator('#quick-statistics');
+  await expect(stats).toContainText('관측 시간');
+  await expect(stats).toContainText('오늘 진행한 업무');
+  await expect(stats.locator('[data-item="statistics-item"]')).toBeVisible();
+  await stats.getByRole('button', { name: '이번 주', exact: true }).click();
+  await expect(stats).toContainText('이번 주 진행한 업무');
+  await expect(stats.locator('.quick-day')).toHaveCount(7);
+  await expect(stats.getByRole('button', { name: '이번 주', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await stats.locator('[data-item="statistics-item"]').click();
+  expect(await page.evaluate(() => window.nativeRoutes.at(-1))).toEqual({ view: 'items', item_id: 'statistics-item' });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

@@ -705,3 +705,10 @@ input[type=checkbox], input[type=radio] { flex: none; padding: 0; margin: 0; }
 .skeleton-meta { width: 25%; }
 @keyframes skeleton-pulse { to { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) { .skeleton-line { animation: none; } }
+
+.item-resume { margin-block: var(--space-3); }
+.item-resume label { display: block; margin-bottom: var(--space-2); }
+.item-resume textarea { display: block; width: 100%; box-sizing: border-box; font-family: monospace; resize: vertical; margin-bottom: var(--space-2); }
+
+.item-resume > summary { cursor: pointer; color: var(--text-secondary); }
+.item-resume[open] > summary { margin-bottom: var(--space-3); }

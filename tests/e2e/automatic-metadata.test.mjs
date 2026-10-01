@@ -37,7 +37,7 @@ async function closedAccepted(h, item, count) {
 
 test('the fifth real user Stop creates one format-checked automatic metadata run; hook replay, workers and restart do not repeat it', async t => {
   const h = await setup(t);
-  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 5, summary_interval: 5, session_summary_enabled: true });
+  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 5, summary_interval: 5, session_summary_enabled: true, session_summary_idle_minutes: 15, work_summary_enabled: true });
   h.hook('codex', { hook_event_name: 'SessionStart', session_id: 'automatic-hook', event_id: 'initial-session-start' });
   await eventually(() => h.manager('/health'), value => value.events === 1);
   assert.deepEqual(await h.manager('/items'), []);
@@ -64,23 +64,23 @@ test('the fifth real user Stop creates one format-checked automatic metadata run
   assert.equal((await h.manager('/items')).length, 1);
 });
 
-test('automatic metadata refreshes at five and ten accepted closed sessions, not repeated summaries or an open summary', async t => {
+test('automatic metadata refreshes at five and ten accepted sessions including automatic idle summaries without double counting', async t => {
   const h = await setup(t), agent = 'automatic-cadence';
   await h.ingest(Array.from({ length: 5 }, (_, index) => turn(agent, index * 2, `initial-${index}`)).flat());
   const item = (await h.manager('/items'))[0]; await applied(h, item, 1);
   await h.ingest([30, 60, 90, 120].flatMap((minute, index) => turn(agent, minute, `closed-${index}`)));
-  let current = await closedAccepted(h, item, 4); await stableCount(h, 1);
+  let current = await closedAccepted(h, item, 4); current = await applied(h, item, 2);
   await summarize(h, current.sessions[0].id, 'repeat-counted-closed-summary');
   assert.equal((await finished(h, 'repeat-counted-closed-summary')).state, 'completed');
   await summarize(h, current.sessions.at(-1).id, 'summarize-open-not-counted');
   assert.equal((await finished(h, 'summarize-open-not-counted')).state, 'completed');
-  await stableCount(h, 1);
+  await stableCount(h, 2);
   await h.ingest(turn(agent, 150, 'fifth-closed'));
   await closedAccepted(h, item, 5); current = await applied(h, item, 2);
   const second = await h.runtime(`/runs/${current.metadata_rewrite.run_id}`);
-  assert.equal(second.request.input.sessions.filter(session => session.summary).length, 5);
+  assert.equal(second.request.input.sessions.filter(session => session.summary).length, 4);
   await h.ingest([180, 210, 240, 270].flatMap((minute, index) => turn(agent, minute, `next-${index}`)));
-  await closedAccepted(h, item, 9); await stableCount(h, 2);
+  await closedAccepted(h, item, 9); await applied(h, item, 3);
   await h.ingest(turn(agent, 300, 'tenth-closed'));
   await closedAccepted(h, item, 10); await applied(h, item, 3);
   await h.stop('manager'); await h.start('manager'); await stableCount(h, 3);
@@ -114,7 +114,7 @@ test('automation settings validate, persist and coalesce an already fulfilled lo
   for (const body of [{}, { initial_output_count: 0 }, { summary_interval: 1001 }, { initial_output_count: 1.5 }, { summary_interval: '3' }, { unknown: 5 }]) {
     await assert.rejects(h.manager('/automation/settings', patch(body)));
   }
-  assert.deepEqual(await h.manager('/automation/settings', patch({ initial_output_count: 1000, summary_interval: 1000, session_summary_enabled: true })), { initial_output_count: 1000, summary_interval: 1000, session_summary_enabled: true });
+  assert.deepEqual(await h.manager('/automation/settings', patch({ initial_output_count: 1000, summary_interval: 1000, session_summary_enabled: true })), { initial_output_count: 1000, summary_interval: 1000, session_summary_enabled: true, session_summary_idle_minutes: 15, work_summary_enabled: true });
   await h.ingest([0, 30, 60, 90, 120, 150, 180].flatMap((minute, index) => turn('settings-cadence', minute, `window-${index}`)));
   const item = (await h.manager('/items'))[0];
   // Periodic batches drain the backlog without needing the next prompt.
@@ -125,7 +125,7 @@ test('automation settings validate, persist and coalesce an already fulfilled lo
   await summarize(h, before.sessions.at(-1).id, 'open-summary-before-automatic');
   assert.equal((await finished(h, 'open-summary-before-automatic')).state, 'completed');
   await h.stop('manager'); await h.start('manager');
-  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 1000, summary_interval: 1000, session_summary_enabled: true });
+  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 1000, summary_interval: 1000, session_summary_enabled: true, session_summary_idle_minutes: 15, work_summary_enabled: true });
   await h.manager('/automation/settings', patch({ initial_output_count: 3, summary_interval: 5, session_summary_enabled: true }));
   const value = await applied(h, item, 1); assert.equal(value.metadata_rewrite.source, 'automatic');
   const initial = await h.runtime(`/runs/${value.metadata_rewrite.run_id}`);
@@ -136,7 +136,7 @@ test('automation settings validate, persist and coalesce an already fulfilled lo
   await h.ingest(turn('settings-cadence', 210, 'new-counted-window'));
   await closedAccepted(h, item, 7); await applied(h, item, 2);
   await h.stop('manager'); await h.start('manager'); await stableCount(h, 2);
-  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 3, summary_interval: 1, session_summary_enabled: true });
+  assert.deepEqual(await h.manager('/automation/settings'), { initial_output_count: 3, summary_interval: 1, session_summary_enabled: true, session_summary_idle_minutes: 15, work_summary_enabled: true });
 });
 
 test('closed summaries cannot bypass the initial output threshold; explicit metadata generation starts the later summary cadence', async t => {

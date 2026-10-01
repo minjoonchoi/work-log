@@ -34,6 +34,14 @@ export function alive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 export function lockService(dir, role) {
+  // The native app owns these children. A crash/bootout must not leave orphan services.
+  const parent = Number(process.env.HARNESS_PARENT_PID);
+  if (Number.isSafeInteger(parent) && parent > 1) {
+    const monitor = setInterval(() => {
+      if (process.ppid !== parent || !alive(parent)) { clearInterval(monitor); process.kill(process.pid, 'SIGTERM'); }
+    }, 500);
+    monitor.unref();
+  }
   initRoot(dir);
   const file = path.join(dir, `${role}.lock`);
   const value = { pid: process.pid, nonce: id() };
@@ -156,7 +164,7 @@ export function validateEvent(raw) {
   assert(raw && typeof raw === 'object', '이벤트가 필요합니다.');
   for (const key of ['id', 'engine', 'agent_session_id', 'kind', 'event_at']) assert(typeof raw[key] === 'string' && raw[key].length > 0, `이벤트 ${key}가 필요합니다.`);
   assert(Number.isFinite(Date.parse(raw.event_at)), '이벤트 시각이 잘못되었습니다.');
-  assert(['input', 'output', 'session.started', 'session.ended', 'turn.interrupted', 'turn.failed', 'tool.started', 'tool.finished', 'run.updated'].includes(raw.kind), '지원하지 않는 이벤트입니다.');
+  assert(['input', 'output', 'progress', 'session.started', 'session.ended', 'turn.interrupted', 'turn.failed', 'tool.started', 'tool.finished', 'run.updated'].includes(raw.kind), '지원하지 않는 이벤트입니다.');
   if (raw.kind === 'input') assert(typeof raw.turn_id === 'string' && raw.turn_id.length, '입력 연결용 turn_id가 필요합니다.');
   assert(!raw.role || ['user', 'worker', 'metadata'].includes(raw.role), '잘못된 세션 역할입니다.');
   return { ...raw, event_at: new Date(raw.event_at).toISOString(), observed_at: raw.observed_at || now(), role: raw.role || 'user', text: raw.text == null ? null : redact(raw.text) };

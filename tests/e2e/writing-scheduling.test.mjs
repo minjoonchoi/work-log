@@ -224,8 +224,8 @@ test('five stale automatic summaries hold admission slots until cancellation is 
   assert.equal(c.store.db.prepare('SELECT COUNT(*) AS n FROM writing_requests').get().n, 10);
 });
 
-test('idle eligibility starts at exactly twenty minutes and an unchanged timer reuses source evidence', t => {
-  let time = Date.parse('2026-09-17T09:24:59.999Z');
+test('idle eligibility starts at exactly fifteen minutes and an unchanged timer reuses source evidence', t => {
+  let time = Date.parse('2026-09-17T09:19:59.999Z');
   const c = setup(t, { clock: () => time });
   c.store.ingestMany(pair('idle-boundary', '09:00:00', '09:05:00'));
   let reads = 0;
@@ -241,4 +241,141 @@ test('idle eligibility starts at exactly twenty minutes and an unchanged timer r
   c.store.ingestMany([event('idle-boundary', 'input', '09:06:00', 'late-turn')]);
   assert.equal(c.writings.isCurrent(request), false);
   assert.ok(reads > afterFirst, 'late input must invalidate cached source evidence');
+});
+
+test('SessionEnd queues all eligible unsummarized history of its item without waiting for idle time', t => {
+  const c = setup(t, { clock: () => Date.parse('2026-09-17T09:07:00Z') });
+  const source = { source: 'system_hook', work_item_id: 'ended-item' };
+  c.store.ingestMany([
+    ...pair('exit-owner', '09:00:00', '09:05:00', 'one', source),
+    ...pair('same-item', '09:01:00', '09:04:00', 'two', source),
+    event('still-active', 'input', '09:03:00', 'pending', source),
+    ...pair('other-item', '09:00:00', '09:05:00', 'other', { source: 'system_hook', work_item_id: 'other-item' })
+  ]);
+  assert.equal(c.writings.scheduleAutomatic({ summaries: true }), false);
+  c.store.ingestMany([event('exit-owner', 'session.ended', '09:06:00', null, source)]);
+  assert.equal(c.writings.scheduleAutomatic({ summaries: true }), true);
+  const requests = c.writings.pending();
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every(row => row.snapshot.work_item_id === 'ended-item' && row.snapshot.summary_trigger.reason === 'session_end'));
+  assert.equal(c.writings.scheduleAutomatic({ summaries: true }), false, 'polling does not duplicate requests');
+  c.store.ingestMany([event('exit-owner', 'input', '09:07:00', 'resumed', source)]);
+  const owner = requests.find(row => row.snapshot.origin?.agent_session_id === 'exit-owner') || requests.find(row => row.target_id === c.store.sessionList().find(s => s.agent_session_id === 'exit-owner').id);
+  assert.equal(c.writings.isCurrent(owner), false, 'resuming invalidates an old summary');
+});
+
+test('SessionEnd backlog respects automatic-summary disable and the five-slot limit', t => {
+  const c = setup(t, { clock: () => Date.parse('2026-09-17T09:07:00Z') });
+  const source = { source: 'system_hook', work_item_id: 'backlog-item' };
+  c.store.ingestMany(Array.from({ length: 8 }, (_, i) => pair(`exit-backlog-${i}`, '09:00:00', '09:05:00', `turn-${i}`, source)).flat());
+  c.store.ingestMany([event('exit-backlog-0', 'session.ended', '09:06:00', null, source)]);
+  assert.equal(c.writings.scheduleAutomatic({ summaries: false }), false);
+  assert.equal(c.writings.pending().length, 0);
+  assert.equal(c.writings.scheduleAutomatic({ summaries: true }), true);
+  assert.equal(c.writings.pending().length, 5);
+  assert.equal(c.writings.scheduleAutomatic({ summaries: true }), false);
+});
+
+test('configured idle minutes apply at the exact boundary and reject invalid values without changing settings', t => {
+  let time = Date.parse('2026-09-17T09:09:59.999Z');
+  const c = setup(t, { clock: () => time });
+  assert.equal(c.writings.automationSettings().session_summary_idle_minutes, 15);
+  c.writings.saveAutomationSettings({ session_summary_idle_minutes: 5 });
+  for (const value of [0, -1, 1.5, 1001, '5', null]) {
+    assert.throws(() => c.writings.saveAutomationSettings({ session_summary_idle_minutes: value }));
+    assert.equal(c.writings.automationSettings().session_summary_idle_minutes, 5);
+  }
+  c.store.ingestMany(pair('configured-idle', '09:00:00', '09:05:00'));
+  assert.equal(c.writings.scheduleAutomatic({ summaries: true }), false);
+  time++;
+  assert.equal(c.writings.scheduleAutomatic({ summaries: true }), true);
+  assert.equal(c.writings.pending()[0].snapshot.summary_trigger.reason, 'idle');
+});
+
+test('accepted automatic summary starts the next input in a new durable window without an empty session', t => {
+  const c = setup(t, { clock: () => Date.parse('2026-09-17T09:10:00Z') });
+  c.writings.saveAutomationSettings({ session_summary_idle_minutes: 5 });
+  c.store.ingestMany(pair('summary-boundary', '09:00:00', '09:05:00', 'first'));
+  c.writings.scheduleAutomatic({ summaries: true });
+  const request = c.writings.pending()[0];
+  assert.equal(c.writings.finish(request, 'completed', { text: '완료된 첫 구간 요약' }).state, 'completed');
+  const original = c.store.sessionList()[0];
+  assert.equal(c.store.sessionList().length, 1, 'completion alone does not create an empty window');
+  const reopened = managerStore(c.dir);
+  try {
+    reopened.ingestMany(pair('summary-boundary', '09:11:00', '09:12:00', 'second'));
+    const sessions = reopened.sessionList();
+    assert.equal(sessions.length, 2, 'six minute activity gap still starts a new window after summary');
+    assert.equal(sessions[0].id, original.id);
+    assert.equal(sessions[0].end_at, '2026-09-17T09:05:00.000Z');
+    assert.equal(sessions[1].start_at, '2026-09-17T09:11:00.000Z');
+    assert.equal(sessions[0].work_item_id, sessions[1].work_item_id);
+    assert.equal(c.integrations.summary(original.id).text, '완료된 첫 구간 요약');
+    reopened.ingestMany(pair('summary-boundary', '09:02:00', '09:03:00', 'late'));
+    assert.deepEqual(reopened.sessionList().map(s => s.id), sessions.map(s => s.id), 'late history does not move the durable boundary');
+  } finally { reopened.db.close(); }
+});
+
+for (const mode of ['failed', 'manual', 'superseded']) test(`${mode} summary does not establish a new session boundary`, t => {
+  const c = setup(t, { clock: () => Date.parse('2026-09-17T09:10:00Z') });
+  c.writings.saveAutomationSettings({ session_summary_idle_minutes: 5 });
+  c.store.ingestMany(pair(`boundary-${mode}`, '09:00:00', '09:05:00', 'first'));
+  if (mode === 'manual') c.writings.enqueue('session-summary', c.store.sessionList()[0].id, { operation_id: 'manual-boundary' });
+  else c.writings.scheduleAutomatic({ summaries: true });
+  const request = c.writings.pending()[0];
+  if (mode === 'superseded') c.store.ingestMany([event(`boundary-${mode}`, 'input', '09:06:00', 'changed')]);
+  c.writings.finish(request, mode === 'failed' ? 'failed' : 'completed', { text: '테스트 요약' });
+  assert.equal(c.store.db.prepare('SELECT COUNT(*) AS n FROM summary_window_boundaries').get().n, 0);
+  c.store.ingestMany(pair(`boundary-${mode}`, '09:11:00', '09:12:00', 'second'));
+  assert.equal(c.store.sessionList().length, 1);
+});
+
+
+test('an automatic idle summary retries previously failed item metadata at interval one before another input', t => {
+  const c = setup(t, { clock: () => Date.parse('2026-09-17T09:10:00Z') });
+  c.writings.saveAutomationSettings({ initial_output_count: 1, summary_interval: 1, session_summary_idle_minutes: 5 });
+  c.store.ingestMany(pair('idle-metadata-recovery', '09:00:00', '09:05:00', 'first', { source: 'system_hook' }));
+  c.writings.scheduleAutomatic({ summaries: false, metadata: true });
+  const initial = c.writings.pending()[0];
+  assert.equal(initial.format, 'work-item-metadata');
+  c.writings.finish(initial, 'failed', null, '실행 실패: spawn codex ENOENT');
+  c.writings.scheduleAutomatic({ summaries: true });
+  const summary = c.writings.pending()[0];
+  assert.equal(summary.format, 'session-summary');
+  c.writings.finish(summary, 'completed', { text: '완료한 작업' });
+  assert.equal(c.integrations.closedSessions().length, 0);
+  assert.equal(c.writings.scheduleAutomatic({ summaries: false, metadata: true }), true);
+  const retry = c.writings.pending()[0];
+  assert.equal(retry.format, 'work-item-metadata');
+  assert.equal(retry.snapshot.automatic.covered.summary_count, 1);
+  c.writings.finish(retry, 'completed', { title: '갱신된 제목', description: '갱신된 설명' });
+  const detail = c.writings.decorate(c.store.detail(retry.target_id));
+  assert.equal(detail.item.title, '갱신된 제목');
+  assert.equal(detail.item.description, '갱신된 설명');
+  assert.equal(detail.metadata_rewrite.state, 'completed');
+  assert.equal(detail.metadata_rewrite.message, null);
+  assert.equal(c.writings.scheduleAutomatic({ summaries: false, metadata: true }), false);
+  c.store.ingestMany(pair('idle-metadata-recovery', '09:11:00', '09:12:00', 'second', { source: 'system_hook' }));
+  assert.equal(c.writings.scheduleAutomatic({ summaries: false, metadata: true }), false, 'closing the counted window must not count it twice');
+});
+
+test('work summary toggle blocks admission and pending submission, resumes once, and permits manual writing', async t => {
+  const c = setup(t), mock = await runtime(t, c.dir);
+  c.writings.saveAutomationSettings({ initial_output_count: 1, work_summary_enabled: false });
+  c.store.ingestMany(pair('work-toggle', '09:00:00', '09:05:00', 'first', { source: 'system_hook' }));
+  assert.equal(c.writings.scheduleAutomatic({ summaries: false, metadata: true }), false);
+  assert.equal(c.writings.pending().length, 0);
+  c.writings.saveAutomationSettings({ work_summary_enabled: true });
+  assert.equal(c.writings.scheduleAutomatic({ summaries: false, metadata: true }), true);
+  c.writings.saveAutomationSettings({ work_summary_enabled: false });
+  await writer(c).tick(); assert.equal(mock.submissions.length, 0);
+  assert.equal(writingStore(c.store, c.integrations).automationSettings().work_summary_enabled, false);
+  assert.throws(() => c.writings.saveAutomationSettings({ work_summary_enabled: 1 }));
+  c.writings.saveAutomationSettings({ work_summary_enabled: true });
+  await writer(c).tick(); assert.equal(mock.submissions.length, 1);
+  c.writings.saveAutomationSettings({ work_summary_enabled: false });
+  const request = c.writings.pending()[0];
+  assert.equal(c.writings.finish(request, 'completed', { title: '완료', description: '이미 시작한 작업' }).state, 'completed');
+  enqueue(c, c.store.items()[0], 'manual-while-disabled');
+  await writer(c).tick(); assert.equal(mock.submissions.length, 2);
 });

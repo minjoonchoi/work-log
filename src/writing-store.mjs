@@ -25,6 +25,12 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
   if (!db.prepare('PRAGMA table_info(metadata_automation_settings)').all().some(column => column.name === 'session_summary_enabled')) {
     db.exec('ALTER TABLE metadata_automation_settings ADD COLUMN session_summary_enabled INTEGER NOT NULL DEFAULT 1');
   }
+  if (!db.prepare('PRAGMA table_info(metadata_automation_settings)').all().some(column => column.name === 'session_summary_idle_minutes')) {
+    db.exec('ALTER TABLE metadata_automation_settings ADD COLUMN session_summary_idle_minutes INTEGER NOT NULL DEFAULT 15');
+  }
+  if (!db.prepare('PRAGMA table_info(metadata_automation_settings)').all().some(column => column.name === 'work_summary_enabled')) {
+    db.exec('ALTER TABLE metadata_automation_settings ADD COLUMN work_summary_enabled INTEGER NOT NULL DEFAULT 1');
+  }
   // Keep legacy prompt receipts as history. Scheduling now scans unfinished
   // summaries on the manager's timer; prompt arrival is not an admission token.
   const decode = row => row && ({ ...row, snapshot: JSON.parse(row.snapshot) });
@@ -32,14 +38,14 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
   const latest = (format, target) => decode(db.prepare('SELECT * FROM writing_requests WHERE format=? AND target_id=? ORDER BY seq DESC LIMIT 1').get(format, target));
   const active = row => row && ['pending', 'running'].includes(row.state);
   const userSession = session => db.prepare("SELECT 1 FROM agent_sessions WHERE id=? AND role='user'").get(session.agent_id);
-  const automationSettings = () => { const row = db.prepare('SELECT initial_output_count,summary_interval,session_summary_enabled FROM metadata_automation_settings WHERE singleton=1').get(); return { ...row, session_summary_enabled: !!row.session_summary_enabled }; };
+  const automationSettings = () => { const row = db.prepare('SELECT initial_output_count,summary_interval,session_summary_enabled,session_summary_idle_minutes,work_summary_enabled FROM metadata_automation_settings WHERE singleton=1').get(); return { ...row, session_summary_enabled: !!row.session_summary_enabled, work_summary_enabled: !!row.work_summary_enabled }; };
   function saveAutomationSettings(input) {
     assert(input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).length > 0
-      && Object.keys(input).every(key => key === 'session_summary_enabled' ? typeof input[key] === 'boolean' : ['initial_output_count', 'summary_interval'].includes(key)
+      && Object.keys(input).every(key => ['session_summary_enabled', 'work_summary_enabled'].includes(key) ? typeof input[key] === 'boolean' : ['initial_output_count', 'summary_interval', 'session_summary_idle_minutes'].includes(key)
         && Number.isInteger(input[key]) && input[key] >= 1 && input[key] <= 1000), '자동 작성 기준은 1~1000 사이의 정수여야 합니다.');
     const settings = { ...automationSettings(), ...input };
-    db.prepare('UPDATE metadata_automation_settings SET initial_output_count=?,summary_interval=?,session_summary_enabled=? WHERE singleton=1')
-      .run(settings.initial_output_count, settings.summary_interval, Number(settings.session_summary_enabled));
+    db.prepare('UPDATE metadata_automation_settings SET initial_output_count=?,summary_interval=?,session_summary_enabled=?,session_summary_idle_minutes=?,work_summary_enabled=? WHERE singleton=1')
+      .run(settings.initial_output_count, settings.summary_interval, Number(settings.session_summary_enabled), settings.session_summary_idle_minutes, Number(settings.work_summary_enabled));
     return settings;
   }
   function milestones(target, closed = integrations.closedSessions()) {
@@ -53,7 +59,17 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
       // The original window owner, not the agent's initial item, decides ownership after an explicit split.
       if (store.canonical(row.work_item_id) === target && typeof event.text === 'string' && event.text.trim() && event.turn_id) turns.add(`${row.agent_id}:${event.turn_id}`);
     }
-    const accepted = closed.filter(session => userSession(session) && store.canonical(session.work_item_id) === target && (() => {
+    // An accepted automatic idle/SessionEnd summary is a completed unit of work,
+    // even before another input creates the next window. Keep manual open
+    // summaries out of the cadence and reject summaries of changed history.
+    const closedIds = new Set(closed.map(session => session.id));
+    const automaticallySummarized = new Set(db.prepare(`SELECT DISTINCT r.target_id FROM writing_requests r
+      JOIN session_summaries s ON s.session_id=r.target_id AND s.accepted_digest=json_extract(r.snapshot,'$.source_digest')
+      WHERE r.format='session-summary' AND r.source='automatic' AND r.state='completed'`).all().map(row => row.target_id));
+    const candidates = [...closed, ...integrations.sessionSnapshots(store.sessionList().filter(session =>
+      store.canonical(session.work_item_id) === target && !closedIds.has(session.id)
+      && automaticallySummarized.has(session.id) && !store.isDeleted(session.work_item_id)))];
+    const accepted = candidates.filter(session => userSession(session) && store.canonical(session.work_item_id) === target && (() => {
       const summary = integrations.summary(session.id);
       return summary?.state === 'completed' && summary.text?.trim() && summary.accepted_digest === session.source_digest;
     })());
@@ -158,6 +174,13 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
       db.prepare('UPDATE work_items SET title=?,description=?,manual=1,version=version+1 WHERE id=? AND version=?')
         .run(result.title, result.description, row.snapshot.work_item_id, row.snapshot.base_version);
     }
+    if (state === 'completed' && current.source === 'automatic' && current.format === 'session-summary') {
+      // Record only accepted completions. Failed, manual and superseded summaries
+      // must not split history; the next real input creates the new window.
+      db.prepare(`INSERT OR IGNORE INTO summary_window_boundaries(session_id,agent_id,completed_at)
+        SELECT id,agent_id,? FROM work_item_sessions WHERE id=? AND active=1`)
+        .run(new Date(clock()).toISOString(), current.target_id);
+    }
     if (state === 'superseded') db.prepare('INSERT OR IGNORE INTO writing_cancellations(run_id) VALUES(?)').run(current.run_id || stableId('run-', current.run_key));
     db.prepare('UPDATE writing_requests SET state=?,result=?,message=?,updated_at=? WHERE operation_id=?')
       .run(state, result ? json(result) : null, message, now(), row.operation_id);
@@ -193,19 +216,42 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
   }
   function summaryCandidates(closed) {
     const closedIds = new Set(closed.map(session => session.id)), observed = clock();
+    const idleSummaryMs = automationSettings().session_summary_idle_minutes * 60000;
     const running = db.prepare('SELECT work_item_id,payload FROM run_views').all()
       .map(row => ({ ...JSON.parse(row.payload), work_item_id: store.canonical(row.work_item_id) }))
       .filter(run => !run.internal && ['pending', 'running'].includes(run.status));
+    // Persisted end events keep the backlog eligible across timer ticks/restarts.
+    // Only history observed by the end time is covered, never later resumed work.
+    const endedItems = new Map(), endedAgents = new Map();
+    for (const row of db.prepare(`SELECT e.agent_id,e.event_at,COALESCE((
+      SELECT s.work_item_id FROM work_item_sessions s WHERE s.agent_id=e.agent_id AND s.active=1
+      AND s.start_at<=e.event_at ORDER BY s.start_at DESC,s.id DESC LIMIT 1),a.work_item_id) AS work_item_id FROM events e
+      JOIN agent_sessions a ON a.id=e.agent_id WHERE e.kind='session.ended'
+      AND a.role='user' AND a.engine IN ('claude','codex')
+      AND json_extract(e.payload,'$.source')='system_hook'`).all()) {
+      const owner = store.canonical(row.work_item_id), at = Date.parse(row.event_at);
+      endedItems.set(owner, Math.max(endedItems.get(owner) || 0, at));
+      endedAgents.set(row.agent_id, Math.max(endedAgents.get(row.agent_id) || 0, at));
+    }
+    const ended = integrations.sessionSnapshots(store.sessionList().filter(session => userSession(session)
+      && !closedIds.has(session.id)
+      && Date.parse(session.last_observed_at || session.end_at) <= (endedItems.get(session.work_item_id) || 0)
+      && (!session.pending || Date.parse(session.last_observed_at || session.end_at) <= (endedAgents.get(session.agent_id) || 0))
+      && !running.some(run => run.origin
+        ? run.origin.engine === session.engine && run.origin.agent_session_id === session.agent_session_id
+        : run.work_item_id === session.work_item_id)));
+    const endedIds = new Set(ended.map(session => session.id));
     const idle = integrations.sessionSnapshots(store.sessionList().filter(session => userSession(session)
-      && !closedIds.has(session.id) && (!session.pending || session.stale_pending) && observed - Date.parse(session.last_observed_at || session.end_at) >= 1200000
+      && !closedIds.has(session.id) && !endedIds.has(session.id) && (!session.pending || session.stale_pending) && observed - Date.parse(session.last_observed_at || session.end_at) >= idleSummaryMs
       && !running.some(run => run.origin
         ? run.origin.engine === session.engine && run.origin.agent_session_id === session.agent_session_id
         : run.work_item_id === session.work_item_id)))
       // An interrupted/failed turn is not an observed final response. Likewise,
       // a missing Stop is summarized only as incomplete history, never as completion.
       .filter(session => session.stale_pending || (session.source.events.at(-1)?.kind === 'output'
-        && observed - Date.parse(session.ended) >= 1200000));
+        && observed - Date.parse(session.ended) >= idleSummaryMs));
     return [...closed.filter(userSession).map(session => ({ session, reason: 'closed' })),
+      ...ended.map(session => ({ session, reason: 'session_end' })),
       ...idle.map(session => ({ session, reason: session.stale_pending ? 'missing_output' : 'idle' }))];
   }
   const cancellingSummaryCount = () => {
@@ -257,6 +303,7 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
   }
   function scheduleAutomatic({ summaries = true, metadata = false } = {}) {
     summaries = summaries && automationSettings().session_summary_enabled;
+    metadata = metadata && automationSettings().work_summary_enabled;
     if (!summaries && !metadata) return false;
     let changed = false;
     const closed = integrations.closedSessions();

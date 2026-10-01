@@ -1,3 +1,4 @@
+import { atlassianFailure } from './atlassian-errors.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
@@ -251,9 +252,8 @@ export class AtlassianClient {
       response = await send(token);
     }
     if (!response.ok) {
-      await response.body?.cancel();
-      const messages = { 400: 'Jira 필수 필드와 프로젝트 설정을 확인하세요.', 401: 'Atlassian OAuth를 다시 연결하세요.', 403: 'Atlassian 사이트·프로젝트 접근 권한을 확인하세요.', 404: '요청한 Atlassian 항목을 찾을 수 없습니다.', 429: 'Atlassian 호출 한도에 도달했습니다. 잠시 후 다시 시도하세요.' };
-      throw error(messages[response.status] || 'Atlassian API 요청이 실패했습니다.', response.status, response.status >= 500 ? 'unconfirmed' : 'rejected');
+      const message = await atlassianFailure(response, { token, method, apiPath });
+      throw error(message, response.status, response.status >= 500 ? 'unconfirmed' : 'rejected');
     }
     if (response.status === 204) return null;
     try { return await response.json(); } catch { throw error('Atlassian API 응답 형식을 확인하지 못했습니다.', 502, 'unconfirmed'); }

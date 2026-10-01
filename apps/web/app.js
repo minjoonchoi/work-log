@@ -57,6 +57,21 @@ async function api(url, options = {}) {
 function error(e) { $('#error').textContent = e.message; $('#error').hidden = false; }
 function safe(fn) { return async (...args) => { try { return await fn(...args); } catch (e) { error(e); } }; }
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; setTimeout(() => $('#toast').hidden = true, 4000); }
+// All app modals share this native dialog. Require both press and release
+// outside its bounds so dragging from a field never dismisses the dialog.
+const sharedDialog = $('#modal');
+let backdropPressed = false;
+const outsideDialog = event => {
+  const rect = sharedDialog.getBoundingClientRect();
+  return event.target === sharedDialog && (event.clientX < rect.left || event.clientX > rect.right
+    || event.clientY < rect.top || event.clientY > rect.bottom);
+};
+sharedDialog.addEventListener('pointerdown', event => { backdropPressed = outsideDialog(event); });
+sharedDialog.addEventListener('click', event => {
+  if (backdropPressed && outsideDialog(event)) sharedDialog.close();
+  backdropPressed = false;
+});
+sharedDialog.addEventListener('close', () => { backdropPressed = false; });
 function modal(html) {
   window.dispatchEvent(new Event('worklog:modal-open'));
   const dialog = $('#modal'), content = $('#modal-content'); content.innerHTML = html;
@@ -304,7 +319,7 @@ async function openNotification(notice) {
   if (target) { target.tabIndex = -1; target.scrollIntoView({ block: 'center' }); target.focus({ preventScroll: true }); }
 }
 function eventHTML(e) {
-  const names = { input: '프롬프트 입력', output: '응답 출력', 'turn.failed': '실패', 'turn.interrupted': '중단', 'session.started': '에이전트 시작', 'session.ended': '에이전트 종료', 'tool.started': '도구 시작', 'tool.finished': '도구 종료' };
+  const names = { input: '프롬프트 입력', output: '응답 출력', progress: '진행 메시지', 'turn.failed': '실패', 'turn.interrupted': '중단', 'session.started': '에이전트 시작', 'session.ended': '에이전트 종료', 'tool.started': '도구 시작', 'tool.finished': '도구 종료' };
   const source = e.source === 'system_hook' ? (e.hook_event_name || (e.kind === 'input' ? 'UserPromptSubmit' : 'Stop'))
     : e.source === 'runtime' || e.engine === 'harness' ? '하네스 기록' : '수집 기록';
   return `<details class="event" data-event-id="${esc(e.uid)}" data-kind="${esc(e.kind)}"><summary><span class="event-header"><span class="event-label-title">${names[e.kind] || esc(e.kind)}${e.resolution === 'unresolved' ? ' · 연결 미확인' : ''}</span><time datetime="${esc(e.event_at)}" title="${esc(absoluteTime(e.event_at))}">${eventTime(e.event_at)}</time><span class="event-source" title="${esc(`레코드: ${e.uid}\n수집 시각: ${absoluteTime(e.ingested_at)}`)}">${esc(source)}</span></span></summary><pre>${esc(e.text ?? (e.kind === 'output' ? '응답 본문이 제공되지 않았습니다.' : e.kind === 'input' ? '입력 본문이 제공되지 않았습니다.' : ''))}</pre></details>`;
@@ -374,14 +389,23 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
     const r = e.getBoundingClientRect(); return r.bottom > bounds.top && r.top < bounds.bottom;
   }) : null;
   const anchorId = anchor?.dataset.eventId, anchorTop = anchor?.getBoundingClientRect().top;
+  const resumeExpanded = refresh && state.detail?.item.id === data.item.id && panel.querySelector('.item-resume')?.open;
+  const previousResume = refresh && state.detail?.item.id === data.item.id ? panel.querySelector('#item-resume-choice')?.value : null;
   state.detail = data;
   history.configure(data);
   const { item } = data, runs = data.runs.filter(r => !r.internal);
   const sessions = [...data.sessions].reverse();
+  const resumeChoices = [...new Map(sessions.filter(s => s.resume).map(s => [`${s.engine}:${s.resume.session_id}`, s])).values()];
+  const resumeKey = s => `${s.engine}:${s.resume.session_id}`;
+  const selectedResume = resumeChoices.find(s => resumeKey(s) === previousResume) || resumeChoices[0];
   const unlinkedRuns = runs.filter(r => !r.session_id);
   $('#detail').hidden = false;
   $('#detail').innerHTML = `<div class="detail-top"><div class="detail-identity"><span class="eyebrow">WORK ITEM</span>${badge(item.activity === 'recent' ? item.state : item.activity)}</div><button class="close" id="close-detail" aria-label="상세 닫기">×</button></div>
     ${writing.metadataHTML(data)}
+    <details class="item-resume" ${resumeExpanded ? 'open' : ''}><summary>터미널에서 대화 재개</summary>
+      ${selectedResume ? `${resumeChoices.length > 1 ? `<label for="item-resume-choice">재개할 대화</label><select id="item-resume-choice">${resumeChoices.map(s => `<option value="${esc(resumeKey(s))}" ${s === selectedResume ? 'selected' : ''}>${esc(s.engine === 'codex' ? 'Codex' : 'Claude')} · ${esc(s.resume.cwd)} · ${esc(s.resume.session_id)}</option>`).join('')}</select>` : ''}
+        <label for="item-resume-command">재개 명령</label><textarea id="item-resume-command" readonly rows="2" spellcheck="false">${esc(selectedResume.resume.command)}</textarea><button class="secondary" id="copy-item-resume">재개 명령 복사</button><p class="help">이 업무에 연결된 원본 대화를 재개합니다. 해당 CLI와 로컬 대화 기록이 필요합니다.</p>` : '<p class="help">재개 명령을 만들 원본 세션 ID 또는 작업 경로가 없습니다.</p>'}
+    </details>
     ${itemTags.detailHTML(item)}
     ${item.activities?.length > 1 ? `<p class="help">함께 기록된 상태: ${item.activities.slice(1).map(a => esc(statusLabels[a])).join(' · ')}</p>` : ''}
     ${item.aliases.length ? `<p>병합된 업무 ${item.aliases.length}개 · 원본 세션 유지</p>` : ''}
@@ -391,6 +415,7 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
       const pendingLabel = results.some(r => r.status === 'running') ? '작업 실행 중' : results.some(r => r.status === 'pending') ? '실행 대기' : s.stale_pending ? '응답 종료 미확인' : s.pending ? '작업 중' : '';
       return `<details class="session-card" data-session-id="${esc(s.id)}" ${s.id === sessionId ? 'open' : ''}><summary><span class="session-time">${dateLabel(s.start_at)} ${time(s.start_at)} → ${time(s.end_at)}${pendingLabel ? ` · ${pendingLabel}` : ''}${results.length ? `<span class="session-result-count">작업 ${results.length}</span>` : ''}</span>${writing.sessionHeadingHTML(s)}</summary>
         <small class="session-source" title="${esc(s.agent_session_id)}">${esc(s.engine === 'codex' ? 'Codex' : s.engine === 'claude' ? 'Claude' : '하네스')} 대화</small>
+
         ${writing.sessionHTML(s)}${integrations.sessionHTML(s, data)}
         ${results.length ? `<details class="session-results" data-results-session="${esc(s.id)}"><summary>연결된 작업 ${results.length}개</summary>${results.map(runHTML).join('')}</details>` : ''}
         ${history.html(s.id)}</details>`;
@@ -409,6 +434,16 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
     ? [...panel.querySelectorAll('[data-raw-history-key]')].find(e => e.dataset.rawHistoryKey === focusHistory)?.querySelector('summary') : focusSession
     ? [...panel.querySelectorAll('[data-session-id]')].find(e => e.dataset.sessionId === focusSession)?.querySelector('summary') : null;
   restoreFocus?.focus({ preventScroll: true });
+  const resumeChoice = panel.querySelector('#item-resume-choice');
+  if (resumeChoice) resumeChoice.onchange = () => {
+    panel.querySelector('#item-resume-command').value = resumeChoices.find(s => resumeKey(s) === resumeChoice.value).resume.command;
+  };
+  const copyResume = panel.querySelector('#copy-item-resume');
+  if (copyResume) copyResume.onclick = async () => {
+    const field = panel.querySelector('#item-resume-command');
+    try { await navigator.clipboard.writeText(field.value); toast('재개 명령을 복사했습니다. 터미널에 붙여넣으세요.'); }
+    catch { field.focus(); field.select(); toast('명령을 선택했습니다. ⌘C 또는 Ctrl+C로 복사하세요.'); }
+  };
   integrations.bindDetail(data);
   writing.bindDetail(data);
   itemTags.bindDetail(item);
@@ -615,6 +650,22 @@ $('#nav-notifications').onclick = safe(() => showView('notifications'));
 $('#refresh-notifications').onclick = safe(() => { invalidateLists(); return load(true); });
 $('#refresh').onclick = safe(() => { invalidateLists(); return load(true); });
 function closeDetail() { detailRequest++; $('#detail').hidden = true; state.detail = null; history.clear(); }
+// Capture before a list item's click handler so opening another item is not
+// immediately dismissed by that same click bubbling back to the document.
+document.addEventListener('click', event => {
+  const panel = $('#detail');
+  if (panel.hidden || document.querySelector('dialog[open]') || panel.contains(event.target)) return;
+  closeDetail();
+}, true);
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing
+    || $('#detail').hidden || document.querySelector('dialog[open]')) return;
+  const itemId = state.detail?.item.id;
+  event.preventDefault();
+  closeDetail();
+  if (itemId) document.querySelector(`.item-row[data-id="${CSS.escape(itemId)}"] .item-open`)?.focus();
+});
+
 function clearSelection() { state.selected.clear(); updateSelection(); document.querySelectorAll('.item-row').forEach(row => { row.classList.remove('selected'); row.querySelector('input').checked = false; }); }
 let searchTimer; $('#search').oninput = () => { clearTimeout(searchTimer); clearSelection(); loadRequest++; searchTimer = setTimeout(() => load(true), 200); };
 $('#jira-filter').onchange = safe(async () => { clearTimeout(searchTimer); clearSelection(); await load(true); });
@@ -635,15 +686,14 @@ function confirmVisibility(action) {
   modal(`<h2>${ids.length}개 업무 ${verb}</h2><p>${restoring ? '선택한 업무와 연결된 세션 이력을 목록과 캘린더에 다시 표시합니다.' : '목록과 캘린더에서 숨기고 휴지통으로 이동합니다. 원본 세션 이력과 Jira 이슈는 보존되며, 진행 중인 사용자 작업은 계속됩니다.'}</p><ul class="operation-items">${selected.map(item => `<li>${esc(item.title)} <small>세션 ${item.session_count}개</small></li>`).join('')}</ul><div id="operation-error" class="error" role="alert" hidden></div><div class="dialog-actions"><button data-close>취소</button><button id="confirm-${action}" class="primary">${verb}</button></div>`);
   const operationId = crypto.randomUUID(), button = $(`#confirm-${action}`);
   button.onclick = async () => {
-    const dialog = $('#modal'), cancel = dialog.querySelector('[data-close]'), preventClose = event => event.preventDefault();
-    dialog.addEventListener('cancel', preventClose); cancel.disabled = true;
+    const dialog = $('#modal'), operationError = $('#operation-error');
     button.disabled = true; $('#operation-error').hidden = true;
     try {
       await api(`/items/${action}`, { method: 'POST', body: { ids, versions, operation_id: operationId } });
       if (state.detail && ids.includes(state.detail.item.id)) closeDetail();
-      clearSelection(); $('#modal').close(); await load(true); toast(`${ids.length}개 업무를 ${verb}했습니다.`);
-    } catch (e) { $('#operation-error').textContent = e.message; $('#operation-error').hidden = false; }
-    finally { button.disabled = false; cancel.disabled = false; dialog.removeEventListener('cancel', preventClose); }
+      clearSelection(); if (button.isConnected) dialog.close(); await load(true); toast(`${ids.length}개 업무를 ${verb}했습니다.`);
+    } catch (e) { if (operationError.isConnected) { operationError.textContent = e.message; operationError.hidden = false; } else toast(e.message); }
+    finally { button.disabled = false; }
   };
 }
 $('#delete-items').onclick = () => confirmVisibility('delete');

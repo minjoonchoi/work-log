@@ -7,7 +7,87 @@ struct ServiceControlPaths {
     let app: URL
 }
 
+// Only the app is registered with launchd. Its Node services are ordinary children.
+final class AppServices {
+    var children: [String: Process] = [:]
+    var stopping = false
+    var generation = 0
+    func start(app: URL, dataRoot: URL) throws {
+        stopping = false; generation += 1
+        for role in ["runtime", "manager"] { try launch(role, app: app, dataRoot: dataRoot) }
+    }
+    func launch(_ role: String, app: URL, dataRoot: URL) throws {
+        if children[role]?.isRunning == true { return }
+        let child = Process()
+        child.executableURL = app.appendingPathComponent("Contents/MacOS/node")
+        child.arguments = [app.appendingPathComponent("Contents/Resources/harness/src/\(role).mjs").path]
+        var env = ProcessInfo.processInfo.environment
+        // Finder launches do not inherit the shell PATH. Reuse the installer’s
+        // recorded CLI search path, also used by the single login registration.
+        let launchAgent = app.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Library/LaunchAgents/local.worklog.gui.plist")
+        if let bytes = try? Data(contentsOf: launchAgent),
+           let plist = (try? PropertyListSerialization.propertyList(from: bytes, format: nil)) as? [String: Any],
+           let variables = plist["EnvironmentVariables"] as? [String: String],
+           let searchPath = variables["PATH"], !searchPath.isEmpty {
+            env["PATH"] = searchPath
+        }
+        env["HARNESS_DATA_DIR"] = dataRoot.path
+        env["HARNESS_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
+        child.environment = env
+        child.standardInput = FileHandle.nullDevice
+        let log = dataRoot.appendingPathComponent("\(role).log")
+        if !FileManager.default.fileExists(atPath: log.path) { FileManager.default.createFile(atPath: log.path, contents: nil) }
+        let output = try FileHandle(forWritingTo: log); output.seekToEndOfFile()
+        child.standardOutput = output; child.standardError = output
+        let launchedGeneration = generation
+        child.terminationHandler = { [weak self] _ in
+            try? output.close()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                guard let self = self, !self.stopping, self.generation == launchedGeneration else { return }
+                try? self.launch(role, app: app, dataRoot: dataRoot)
+            }
+        }
+        children[role] = child
+        try child.run()
+    }
+    func stop(dataRoot: URL, completion: @escaping (String?) -> Void) {
+        // Let accepted work drain before the app exits; launchd must not kill it mid-run.
+        guard children["runtime"]?.isRunning == true else { finish(completion); return }
+        guard let bytes = try? Data(contentsOf: dataRoot.appendingPathComponent("runtime.endpoint.json")),
+              let endpoint = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+              let port = endpoint["port"] as? Int,
+              let token = try? String(contentsOf: dataRoot.appendingPathComponent("token"), encoding: .utf8) else {
+            completion("실행 서비스가 시작 중입니다. 잠시 후 다시 종료하세요."); return
+        }
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/lifecycle/quit")!)
+        request.httpMethod = "POST"; request.httpBody = Data("{}".utf8); request.timeoutInterval = 5
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                guard error == nil, (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    completion("실행 서비스 종료 요청을 확인하지 못했습니다. 다시 시도하세요."); return
+                }
+                self.stopping = true
+                if self.children["manager"]?.isRunning == true { self.children["manager"]?.terminate() }
+                self.waitForExit(completion)
+            }
+        }.resume()
+    }
+    func finish(_ completion: @escaping (String?) -> Void) {
+        stopping = true
+        for child in children.values where child.isRunning { child.terminate() }
+        waitForExit(completion)
+    }
+    func waitForExit(_ completion: @escaping (String?) -> Void) {
+        if children.values.allSatisfy({ !$0.isRunning }) { children.removeAll(); completion(nil); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.waitForExit(completion) }
+    }
+}
+
 final class ServiceControlClient {
+    let appServices = AppServices()
     let resolve: (URL) -> ServiceControlPaths?
     init(resolve: @escaping (URL) -> ServiceControlPaths? = ServiceControlClient.installedPaths) { self.resolve = resolve }
     static func installedPaths(_ dataRoot: URL) -> ServiceControlPaths? {
@@ -22,6 +102,17 @@ final class ServiceControlClient {
     }
     func execute(_ action: String, dataRoot: URL, completion: @escaping (String?) -> Void) {
         guard let paths = resolve(dataRoot) else { completion(nil); return }
+        if let bytes = try? Data(contentsOf: dataRoot.appendingPathComponent("installation.json")),
+           let receipt = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+           let files = receipt["files"] as? [[String: Any]], files.count == 1,
+           files.first?["label"] as? String == "local.worklog.gui" {
+            if action == "stop" { appServices.stop(dataRoot: dataRoot, completion: completion) }
+            else {
+                do { try appServices.start(app: paths.app, dataRoot: dataRoot); completion(nil) }
+                catch { appServices.finish { _ in completion("로컬 서비스를 시작하지 못했습니다: \(error.localizedDescription)") } }
+            }
+            return
+        }
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process(), output = Pipe(), errors = Pipe()
             process.executableURL = paths.node
@@ -362,6 +453,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }
     func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) {
         if view === quickWebView { setQuickVisible(popover.isShown) }
+        // WebKit can finish the document even when a stylesheet request failed.
+        // Retry after service recovery instead of leaving an unstyled page open.
+        view.evaluateJavaScript("Array.from(document.querySelectorAll('link[rel=stylesheet]')).some(link => !link.sheet || link.sheet.cssRules.length === 0)") { [weak self, weak view] value, error in
+            guard let self = self, let view = view, error == nil, value as? Bool == true else { return }
+            self.markNavigationFailure(view)
+        }
     }
     func markNavigationFailure(_ view: WKWebView) {
         if view === quickWebView { quickNeedsReload = true }

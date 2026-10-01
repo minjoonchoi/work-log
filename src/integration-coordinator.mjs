@@ -10,8 +10,10 @@ export function integrationCoordinator({ integrations, client, notify, writings,
     if (busy) return; busy = true;
     try {
       if (!enabled) return;
-      const sessions = integrations.closedSessions();
-      if (integrations.invalidateOpenWorklogs(new Set(sessions.map(s => s.id)))) notify();
+      const closed = integrations.closedSessions(), eligible = integrations.worklogSessions();
+      const closedIds = new Set(closed.map(s => s.id));
+      const sessions = [...closed, ...eligible.filter(s => !closedIds.has(s.id) && integrations.worklog(s.id))];
+      if (integrations.invalidateOpenWorklogs(new Set([...closed, ...eligible].map(s => s.id)))) notify();
       for (const session of sessions) {
         if (!integrations.isSessionCurrent(session)) continue;
         const summary = integrations.summary(session.id);
@@ -50,7 +52,14 @@ export function integrationCoordinator({ integrations, client, notify, writings,
       }
     } finally { busy = false; }
   }
-  return { tick, retry: sid => {
+  return { tick, sync: operation => {
+    const result = integrations.syncWorklogs(operation);
+    for (const session of integrations.worklogSessions()) {
+      const row = integrations.worklog(session.id);
+      if (row?.issue_operation_id === operation) checkedUnknown.delete(row.operation_id);
+    }
+    notify(); return result;
+  }, retry: sid => {
     assert(integrations.isSessionCurrent({ id: sid }), '업무를 찾을 수 없습니다.', 404);
     const row = integrations.worklog(sid); assert(row, '동기화할 업무 로그가 없습니다.', 404);
     checkedUnknown.delete(row.operation_id); integrations.retryWorklog(sid); notify();

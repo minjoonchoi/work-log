@@ -79,6 +79,7 @@ export async function controlServices(action, { homeDir = os.homedir(), appPath,
     assert(path.resolve(appPath || '') === loc.app && path.resolve(dataDir || '') === loc.data, '설치된 WorkLog 앱과 데이터 경로가 일치하지 않습니다.');
     const receipt = readManifest(loc);
     assert(receipt?.state === 'installed', '완료된 WorkLog 설치 기록이 필요합니다.');
+    assert(receipt.files.length !== 1, '서비스는 WorkLog 앱에서 시작하고 종료합니다.');
     if (action === 'stop') {
       const preserved = stopOwnedServices(loc, receipt, { launchctl, roles: ['manager'], timeoutMs });
       if (preserved.length) return { status: 'needs_attention', preserved };

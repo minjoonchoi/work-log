@@ -1,7 +1,20 @@
 const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let active = window.__HARNESS_QUICK_VISIBLE__ !== false, busy = false, queued = false, snapshot = null, revision = '', poll;
-let controller, streamController, streaming = false;
+let controller, streamController, streaming = false, period = 'today';
+const duration = seconds => seconds < 60 ? `${seconds}초` : seconds < 3600 ? `${Math.floor(seconds / 60)}분` : `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분`;
+function renderStatistics(data) {
+  if (!data.statistics) return;
+  const stats = data.statistics, value = stats[period], max = Math.max(1, ...stats.days.map(day => day.seconds));
+  $('#quick-statistics').innerHTML = `<div class="quick-period" role="group" aria-label="통계 기간">${[['today','오늘'],['week','이번 주']].map(([key,label]) => `<button data-period="${key}" aria-pressed="${period === key}">${label}</button>`).join('')}</div>
+    <div class="quick-metrics"><div><strong>${duration(value.seconds)}</strong><span>관측 시간</span></div><div><strong>${value.item_count}개</strong><span>업무</span></div><div><strong>${value.session_count}개</strong><span>세션</span></div></div>
+    ${period === 'week' ? `<div class="quick-days" aria-label="이번 주 일별 관측 시간">${stats.days.map(day => `<div class="quick-day ${day.today ? 'is-today' : ''}" title="${day.date} · ${duration(day.seconds)}"><small>${duration(day.seconds)}</small><div class="quick-bar-track"><span style="height:${day.seconds / max * 100}%"></span></div><span>${day.label}</span></div>`).join('')}</div>` : ''}
+    <p class="quick-stat-note">수집된 활동 구간 기준 · 동시 작업 시간은 한 번만 계산</p>
+    <h2>${period === 'today' ? '오늘 진행한 업무' : '이번 주 진행한 업무'}</h2>
+    ${value.items.length ? value.items.slice(0, 5).map(item => `<button class="quick-item" data-item="${esc(item.id)}"><span class="quick-item-title">${esc(item.title)}</span><span class="quick-item-meta"><span>${item.sessions}개 세션</span><strong>${duration(item.seconds)}</strong></span></button>`).join('') : '<p class="quick-empty">이 기간에 수집된 업무가 없습니다.</p>'}
+    ${value.items.length > 5 ? `<button class="quick-more" data-view="items">업무 목록에서 모두 보기</button>` : ''}`;
+}
+
 const labels = { running: '작업 실행 중', queued: '실행 대기', agent_response_pending: '작업 중', completed: '완료', cancelled: '취소됨', tracked: '이력 수집' };
 const activityLabel = (activity, connected) => ['running', 'queued'].includes(activity) && !connected ? '실행 상태 미확인' : labels[activity];
 const stamp = value => new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
@@ -12,6 +25,7 @@ function navigate(route) {
 }
 document.addEventListener('click', event => {
   const button = event.target.closest('button'); if (!button) return;
+  if (button.dataset.period) { period = button.dataset.period; if (snapshot) renderStatistics(snapshot); return; }
   if (button.dataset.notification) navigate({ view: 'notifications', notification_id: button.dataset.notification });
   else if (button.dataset.item) navigate({ view: 'items', item_id: button.dataset.item });
   else if (button.dataset.view) navigate({ view: button.dataset.view });
@@ -22,8 +36,9 @@ function render(data) {
   $('#quick-health').className = `quick-health ${issue ? '' : 'connected'}`;
   document.body.dataset.stale = 'false';
   $('#current-count').textContent = data.counts.current; $('#notification-count').textContent = data.counts.notifications;
-  const next = JSON.stringify([data.counts, data.current, data.notifications, data.recent, h.runtime_connected]);
+  const next = JSON.stringify([data.counts, data.current, data.notifications, data.recent, data.statistics, h.runtime_connected]);
   if (next === revision) return; revision = next;
+  renderStatistics(data);
   const list = $('.quick-content'), scroll = list.scrollTop;
   const focused = document.activeElement, focus = focused?.dataset.notification ? ['notification', focused.dataset.notification]
     : focused?.dataset.item ? ['item', focused.dataset.item] : null;

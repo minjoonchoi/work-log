@@ -9,8 +9,8 @@ import { buildMac } from './build-mac.mjs';
 import { prepareInstall, applyInstall, checkInstallation } from './install.mjs';
 import { readManifest, locked, safePath, stat, inventory, canonical } from './install-state.mjs';
 
-// Only remove known build copies whose entire contents still match the installed receipt.
-// A caller-supplied app, a modified build, and other applications remain caller-owned.
+// Legacy dist copies must match the installed receipt. Output WorkLog bundles
+// are disposable build products, including older versions. Other output is kept.
 export function cleanBuildCopies({ homeDir, projectRoot = ROOT, sourceApp } = {}) {
   const removed = [], preserved = [];
   const root = path.resolve(projectRoot);
@@ -24,13 +24,33 @@ export function cleanBuildCopies({ homeDir, projectRoot = ROOT, sourceApp } = {}
       safePath(loc.home, loc.app);
       const expected = canonical(receipt.trees[0].entries);
       assert(canonical(inventory(loc.app)) === expected, '설치본 전체 내용이 소유 기록과 다릅니다.');
+      const outputApps = new Set();
+      const outputRoot = path.join(root, 'output');
+      function discover(directory) {
+        safePath(root, directory);
+        if (!stat(directory)?.isDirectory()) return;
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+          if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+          const target = path.join(directory, entry.name);
+          if (entry.name.endsWith('.app')) {
+            if (entry.name === 'WorkLog.app') { candidates.push(target); outputApps.add(target); }
+          } else discover(target);
+        }
+      }
+      discover(outputRoot);
       for (const candidate of candidates) {
         try {
           safePath(root, candidate);
           if (!stat(candidate)) continue;
           assert(fs.realpathSync(candidate) !== protectedSource, '직접 지정한 원본 앱은 보존합니다.');
           assert(path.resolve(candidate) !== loc.app, '설치된 앱은 보존합니다.');
-          assert(canonical(inventory(candidate)) === expected, '설치본과 다른 버전이거나 변경·추가된 파일이 있어 보존합니다.');
+          if (outputApps.has(candidate)) {
+            const plist = path.join(candidate, 'Contents/Info.plist');
+            const manifest = path.join(candidate, 'Contents/Resources/harness/package.json');
+            safePath(root, plist); safePath(root, manifest);
+            assert(/<key>CFBundleIdentifier<\/key>\s*<string>local\.worklog\.harness<\/string>/.test(fs.readFileSync(plist, 'utf8'))
+              && JSON.parse(fs.readFileSync(manifest, 'utf8')).name === 'work-log', 'WorkLog 빌드 앱인지 확인되지 않아 보존합니다.');
+          } else assert(canonical(inventory(candidate)) === expected, '설치본과 다른 버전이거나 변경·추가된 파일이 있어 보존합니다.');
           fs.rmSync(candidate, { recursive: true });
           removed.push(candidate);
         } catch (error) { preserved.push({ path: candidate, reason: error.message }); }
@@ -63,7 +83,7 @@ export function installFromSource({ homeDir = os.homedir(), output, sourceApp, a
     }
     const plan = prepareInstall({ homeDir, output: output || path.join(stage, 'plan'), sourceApp: app });
     const result = applyInstall(plan, { activate, reinstall: true, launchctl, stopTimeoutMs, onProgress });
-    onProgress('설치본과 일치하는 중복 빌드 앱을 정리합니다.');
+    onProgress('output의 WorkLog 빌드 앱과 설치본에 일치하는 dist 앱을 정리합니다.');
     return { ...result, build_cleanup: cleanBuildCopies({ homeDir, projectRoot, sourceApp }) };
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }

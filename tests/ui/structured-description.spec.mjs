@@ -52,28 +52,17 @@ test('Jira wiki descriptions render safely, round-trip editable source, and prev
   await page.screenshot({ path: 'output/screenshots/structured-work-item-description.png', fullPage: true });
 });
 
-test('linked Jira content changes only after explicit preview confirmation and uses structured ADF', async ({ page }) => {
+test('linked Jira card offers only worklog Sync and preserves the ticket and local description', async ({ page }) => {
   await authorize(h); const issue = f.addIssue({ summary: '기존 Jira 제목' }, 'TEAM-42');
   await h.manager(`/items/${item.id}/jira/link`, { method: 'POST', body: {
     version: item.version, operation_id: 'structured-jira-link', cloud_id: 'cloud-test', key: issue.key, issue_id: issue.id
   } });
   await open(page);
-  const update = page.getByRole('button', { name: 'TEAM-42 제목·설명 반영' });
-  await expect(update).toBeEnabled(); expect(writes()).toHaveLength(0);
-  await update.click(); const dialog = page.getByRole('dialog');
-  await expect(dialog.locator('.work-item-description h3')).toHaveText(headings);
-  await dialog.getByRole('button', { name: '취소', exact: true }).click(); expect(writes()).toHaveLength(0);
-  await update.click(); await dialog.getByRole('button', { name: 'Jira에 반영', exact: true }).click();
-  await expect(dialog).not.toBeVisible();
-  await expect(page.locator('.jira-issue-title')).toHaveText('초대 흐름 개선');
-  await expect(page.locator('.jira-content-message')).toContainText('반영했습니다');
-  expect(writes()).toHaveLength(1);
-  expect(issue.fields.description.content.filter(node => node.type === 'heading').map(node => node.content[0].text)).toEqual(headings);
-  expect(issue.fields.description.content.some(node => node.type === 'bulletList')).toBe(true);
-  expect(issue.fields.description.content.filter(node => node.type === 'bulletList')).toHaveLength(5);
+  await expect(page.getByRole('button', { name: 'TEAM-42 업무 로그 Sync' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'TEAM-42 제목·설명 반영' })).toHaveCount(0);
+  await expect(page.locator('.jira-issue-title')).toHaveCount(0);
+  expect(writes()).toHaveLength(0); expect(issue.fields.summary).toBe('기존 Jira 제목');
   expect((await h.manager(`/items/${item.id}`)).item.description).toBe(description);
-  await page.reload(); await page.locator('.item-open').click();
-  await expect(page.locator('.jira-issue-title')).toHaveText('초대 흐름 개선'); expect(writes()).toHaveLength(1);
 });
 
 test('legacy Markdown and plain descriptions keep their rendering and saved edit source', async ({ page }) => {

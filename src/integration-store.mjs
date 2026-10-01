@@ -87,7 +87,7 @@ export function integrationStore(store) {
     return sessions.map(s => {
       assert(!store.isDeleted(s.work_item_id), '업무를 찾을 수 없습니다.', 404);
       if (!revisions.has(s.agent_id)) {
-        const sequence = one("SELECT COALESCE(MAX(seq),0) AS value FROM events WHERE agent_id=? AND kind IN ('input','output','turn.failed','turn.interrupted')", s.agent_id).value;
+        const sequence = one("SELECT COALESCE(MAX(seq),0) AS value FROM events WHERE agent_id=? AND kind IN ('input','output','progress','turn.failed','turn.interrupted')", s.agent_id).value;
         const projection = one('SELECT revision FROM history_revisions WHERE agent_id=?', s.agent_id)?.revision || 0;
         revisions.set(s.agent_id, `${sequence}:${projection}`);
       }
@@ -111,6 +111,23 @@ export function integrationStore(store) {
     });
   }
   const closedSessions = () => sessionSnapshots(closedWindows());
+  // Explicit sync may publish a summarized final window before the next input.
+  const worklogSessions = () => sessionSnapshots(store.sessionList().filter(s => !s.pending && !store.isDeleted(s.work_item_id)));
+  function syncWorklogs(operation) {
+    const link = links().find(l => l.operation_id === operation);
+    assert(link?.state === 'linked' && !store.isDeleted(link.work_item_id), '연결된 Jira 티켓을 찾을 수 없습니다.', 404);
+    let queued = 0, synced = 0, skipped = 0;
+    for (const session of worklogSessions().filter(s => store.canonical(s.work_item_id) === store.canonical(link.work_item_id))) {
+      const summary = one('SELECT * FROM session_summaries WHERE session_id=?', session.id), prior = one('SELECT * FROM jira_worklogs WHERE session_id=?', session.id);
+      if (summary?.state !== 'completed' || !summary.text?.trim() || summary.accepted_digest !== session.source_digest
+        || session.seconds <= 0 || (prior && prior.issue_operation_id !== operation) || prior?.state === 'needs_review') { skipped++; continue; }
+      const row = beginWorklog(session, link, summary.text);
+      if (row.state === 'synced') { synced++; continue; }
+      if (row.state === 'failed') exec("UPDATE jira_worklogs SET state='pending',message=NULL WHERE session_id=?", session.id);
+      queued++;
+    }
+    return { queued, synced, skipped, message: synced ? `${synced}개 세션이 이미 동기화되어 있습니다.` : '동기화할 요약 완료 세션이 없습니다. 요약과 응답 종료·작업 시간을 확인하세요.' };
+  }
   function isSessionCurrent(session) {
     const current = one('SELECT work_item_id,active FROM work_item_sessions WHERE id=?', session.id);
     return !!current?.active && !store.isDeleted(current.work_item_id)
@@ -150,7 +167,7 @@ export function integrationStore(store) {
         summary: one('SELECT state,run_id,text,message,updated_at FROM session_summaries WHERE session_id=?', s.id) || null,
         worklog: one('SELECT state,worklog_id,issue_operation_id,message,payload FROM jira_worklogs WHERE session_id=?', s.id) || null })) };
   }
-  return { links, beginIssue, finishIssue, checkExistingLink, linkExisting, updateLinkedIssue, closedSessions, sessionSnapshots, isSessionCurrent, ensureSummary, finishSummary, beginWorklog, finishWorklog, decorate,
+  return { links, beginIssue, finishIssue, checkExistingLink, linkExisting, updateLinkedIssue, closedSessions, worklogSessions, syncWorklogs, sessionSnapshots, isSessionCurrent, ensureSummary, finishSummary, beginWorklog, finishWorklog, decorate,
     summary: sid => one('SELECT * FROM session_summaries WHERE session_id=?', sid),
     invalidateOpenWorklogs: closedIds => {
       let changed = false;

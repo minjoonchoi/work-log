@@ -84,10 +84,11 @@ export function validateManifest(loc, m) {
     && new Set(m.links.map(l => l.path)).size === m.links.length, '지시문 연결 목록이 잘못되었습니다.');
   assert(m.links.every(l => links.some(expected => l.path === expected.path && l.target === expected.target)), '지시문 연결 경로가 다릅니다.');
   assert(m.links.every(link => link.pending === undefined || typeof link.pending === 'boolean'), '지시문 연결 생성 상태가 잘못되었습니다.');
-  assert(Array.isArray(m.files) && m.files.length === loc.agents.length, '서비스 목록이 잘못되었습니다.');
-  assert(m.files.every((f, i) => f.path === loc.agents[i].path && f.label === loc.agents[i].label
+  const agents = m.files?.length === 1 ? loc.agents.slice(2) : loc.agents;
+  assert(Array.isArray(m.files) && m.files.length === agents.length, '서비스 목록이 잘못되었습니다.');
+  assert(m.files.every((f, i) => f.path === agents[i].path && f.label === agents[i].label
     && digest(f.content) === f.digest && Array.isArray(f.argv)
-    && canonical(f.argv) === canonical(i === 2 ? [path.join(loc.app, 'Contents/MacOS/WorkLog'), '--background']
+    && canonical(f.argv) === canonical(f.label === 'local.worklog.gui' ? [path.join(loc.app, 'Contents/MacOS/WorkLog'), '--background']
       : [path.join(runtime, 'node'), path.join(runtime, 'harness/bin/harness.mjs'), 'serve', ['runtime', 'manager'][i]])), '서비스 소유 정보가 잘못되었습니다.');
   assert(Array.isArray(m.hooks) && (m.format === 2 || m.hooks.length === 2)
     && new Set(m.hooks.map(h => h.engine)).size === m.hooks.length, '훅 소유 정보가 없습니다.');
