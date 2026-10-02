@@ -41,11 +41,18 @@ ${process.env.HARNESS_GUI_DATA_DIR ? `<key>HarnessDataRoot</key><string>${xml(pa
   // Recreate only this build's generated scripts directory; do not ship development fixture launchers.
   fs.rmSync(path.join(bundled, 'scripts'), { recursive: true, force: true });
   fs.mkdirSync(path.join(bundled, 'scripts'), { recursive: true });
-  for (const file of ['install.mjs', 'replace-install.mjs', 'uninstall.mjs', 'install-state.mjs', 'install-output.mjs', 'agent-connections.mjs', 'service-control.mjs']) fs.copyFileSync(path.join(ROOT, 'scripts', file), path.join(bundled, 'scripts', file));
+  for (const file of ['first-launch.mjs', 'install.mjs', 'replace-install.mjs', 'uninstall.mjs', 'remove-connections.mjs', 'install-state.mjs', 'install-output.mjs', 'agent-connections.mjs', 'service-control.mjs']) fs.copyFileSync(path.join(ROOT, 'scripts', file), path.join(bundled, 'scripts', file));
   fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(bundled, 'package.json'));
   fs.copyFileSync(path.join(ROOT, 'package-lock.json'), path.join(bundled, 'package-lock.json'));
   for (const pkg of ['playwright', 'playwright-core', 'undici', 'ajv', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'require-from-string']) fs.cpSync(path.join(ROOT, 'node_modules', pkg), path.join(bundled, 'node_modules', pkg), { recursive: true });
   for (const license of ['LICENSE', 'LICENSE.md']) if (fs.existsSync(path.join(path.dirname(node), '..', license))) fs.copyFileSync(path.join(path.dirname(node), '..', license), path.join(resources, `node-${license}`));
+  const uninstaller = path.join(contents, 'Helpers/WorkLog Uninstaller.app'), uninstallContents = path.join(uninstaller, 'Contents');
+  fs.mkdirSync(path.join(uninstallContents, 'MacOS'), { recursive: true });
+  fs.mkdirSync(path.join(uninstallContents, 'Resources'), { recursive: true });
+  fs.copyFileSync(path.join(resources, 'WorkLog.icns'), path.join(uninstallContents, 'Resources/WorkLog.icns'));
+  atomic(path.join(uninstallContents, 'Info.plist'), '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.worklog.uninstaller</string><key>CFBundleName</key><string>WorkLog 설치 제거</string><key>CFBundleIconFile</key><string>WorkLog.icns</string><key>CFBundleExecutable</key><string>WorkLogUninstaller</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>13.0</string></dict></plist>');
+  run('swiftc', ['-O', '-target', 'arm64-apple-macos13.0', '-framework', 'Cocoa', path.join(ROOT, 'apps/macos/uninstaller.swift'), '-o', path.join(uninstallContents, 'MacOS/WorkLogUninstaller')]);
+  run('codesign', ['--force', '--sign', '-', uninstaller]);
   onProgress('앱에 서명하고 빌드 결과를 확인합니다.');
   run('codesign', ['--force', '--deep', '--sign', '-', app]);
   run('codesign', ['--verify', '--deep', '--strict', app]);

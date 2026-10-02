@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildDMG } from '../../scripts/build-dmg.mjs';
 
-for (const fail of [false, true]) test(`DMG packaging ${fail ? 'preserves previous image on failure' : 'includes installer and isolated app payload'}`, t => {
+for (const fail of [false, true]) test(`DMG packaging ${fail ? 'preserves previous image on failure' : 'includes draggable app, Applications link and Finder layout'}`, t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-dmg-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const app = path.join(dir, 'WorkLog.app'), target = path.join(dir, 'WorkLog-macos-arm64.dmg');
@@ -17,9 +17,10 @@ for (const fail of [false, true]) test(`DMG packaging ${fail ? 'preserves previo
     if (cmd !== 'hdiutil') return;
     if (args[0] === 'create') {
       const volume = args[args.indexOf('-srcfolder') + 1]; staging = path.dirname(volume);
-      const resources = path.join(volume, 'WorkLog 설치.app/Contents/Resources');
-      assert.ok(fs.existsSync(path.join(resources, 'WorkLog.app/Contents/Resources/WorkLog.icns')));
-      assert.ok(fs.existsSync(path.join(volume, '설치 안내.txt')));
+      assert.ok(fs.existsSync(path.join(volume, 'WorkLog.app/Contents/Resources/WorkLog.icns')));
+      assert.equal(fs.readlinkSync(path.join(volume, 'Applications')), '/Applications');
+      for (const file of ['.DS_Store', '.background.png']) assert.ok(fs.statSync(path.join(volume, file)).size > 0);
+      assert.equal(fs.existsSync(path.join(volume, 'WorkLog 설치.app')), false);
       fs.writeFileSync(args.at(-1), 'new image');
     } else if (fail) throw new Error('verification failed');
   };

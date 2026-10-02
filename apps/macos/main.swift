@@ -24,7 +24,7 @@ final class AppServices {
         var env = ProcessInfo.processInfo.environment
         // Finder launches do not inherit the shell PATH. Reuse the installer’s
         // recorded CLI search path, also used by the single login registration.
-        let launchAgent = app.deletingLastPathComponent().deletingLastPathComponent()
+        let launchAgent = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/local.worklog.gui.plist")
         if let bytes = try? Data(contentsOf: launchAgent),
            let plist = (try? PropertyListSerialization.propertyList(from: bytes, format: nil)) as? [String: Any],
@@ -92,9 +92,14 @@ final class ServiceControlClient {
     init(resolve: @escaping (URL) -> ServiceControlPaths? = ServiceControlClient.installedPaths) { self.resolve = resolve }
     static func installedPaths(_ dataRoot: URL) -> ServiceControlPaths? {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let app = home.appendingPathComponent("Applications/WorkLog.app")
+        let app = Bundle.main.bundleURL.standardizedFileURL
+        let allowed = [home.appendingPathComponent("Applications/WorkLog.app").path, "/Applications/WorkLog.app"]
         let data = home.appendingPathComponent("Library/Application Support/WorkLog")
-        guard Bundle.main.bundleURL.standardizedFileURL.path == app.standardizedFileURL.path,
+        guard allowed.contains(app.path),
+              let bytes = try? Data(contentsOf: data.appendingPathComponent("installation.json")),
+              let receipt = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+              ["installed", "needs_attention", "uninstalling", "install_failed"].contains(receipt["state"] as? String ?? ""),
+              let trees = receipt["trees"] as? [[String: Any]], trees.first?["path"] as? String == app.path,
               dataRoot.standardizedFileURL.path == data.standardizedFileURL.path,
               FileManager.default.fileExists(atPath: data.appendingPathComponent("installation.json").path) else { return nil }
         return ServiceControlPaths(node: app.appendingPathComponent("Contents/MacOS/node"),
@@ -106,6 +111,9 @@ final class ServiceControlClient {
            let receipt = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
            let files = receipt["files"] as? [[String: Any]], files.count == 1,
            files.first?["label"] as? String == "local.worklog.gui" {
+            if action == "start", receipt["state"] as? String != "installed" {
+                completion("이전 설치 또는 제거가 완료되지 않았습니다. 메뉴 막대에서 WorkLog 설치 제거를 다시 실행하세요."); return
+            }
             if action == "stop" { appServices.stop(dataRoot: dataRoot, completion: completion) }
             else {
                 do { try appServices.start(app: paths.app, dataRoot: dataRoot); completion(nil) }
@@ -196,6 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if prepareDraggedInstallation() { return }
         NSApp.setActivationPolicy(.accessory)
         let appMenu = NSMenu()
         let appRoot = NSMenuItem(); appMenu.addItem(appRoot)
@@ -242,6 +251,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             item.representedObject = route; item.target = self; utilityMenu.addItem(item)
         }
         utilityMenu.addItem(.separator())
+        let uninstall = NSMenuItem(title: "WorkLog 설치 제거…", action: #selector(uninstallWorkLog), keyEquivalent: "")
+        uninstall.target = self
+        uninstall.isEnabled = serviceControl.resolve(dataRoot) != nil
+        utilityMenu.addItem(uninstall)
         utilityMenu.addItem(withTitle: "WorkLog 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let viewRoot = NSMenuItem(); appMenu.addItem(viewRoot)
         let viewMenu = NSMenu(title: "보기"); viewRoot.submenu = viewMenu
@@ -267,7 +280,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         popover.appearance = NSAppearance(named: .aqua)
         refreshConnection()
         timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in self?.refreshConnection() }
-        if !ProcessInfo.processInfo.arguments.contains("--background") {
+        let firstOpen = dataRoot.appendingPathComponent(".open-after-install")
+        let openAfterInstall = FileManager.default.fileExists(atPath: firstOpen.path)
+        if openAfterInstall { try? FileManager.default.removeItem(at: firstOpen) }
+        if openAfterInstall || !ProcessInfo.processInfo.arguments.contains("--background") {
             DispatchQueue.main.async { [weak self] in self?.openMain(["view": "items"]) }
         }
         servicesStarting = true
@@ -278,6 +294,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             else if let error = error { self.showServiceControlError(error, stopping: false) }
             else { self.refreshConnection() }
         }
+    }
+    // A Finder copy has no receipt yet. Provision the per-user runtime before
+    // the registered app starts; the provisioning process never copies the app.
+    func prepareDraggedInstallation() -> Bool {
+        let app = Bundle.main.bundleURL.standardizedFileURL
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        guard ProcessInfo.processInfo.environment["HARNESS_DATA_DIR"] == nil,
+              Bundle.main.object(forInfoDictionaryKey: "HarnessDataRoot") == nil else { return false }
+        if app.path.hasPrefix("/Volumes/") {
+            let alert = NSAlert(); alert.messageText = "WorkLog를 Applications 폴더로 옮겨주세요"
+            alert.informativeText = "디스크 이미지에서 WorkLog를 Applications로 드래그한 뒤, 옮긴 앱을 실행하세요."
+            alert.runModal(); NSApp.terminate(nil); return true
+        }
+        guard ["/Applications/WorkLog.app", home.appendingPathComponent("Applications/WorkLog.app").path].contains(app.path) else { return false }
+        if serviceControl.resolve(dataRoot) != nil {
+            // Retry an interrupted first registration. Ordinary launches and
+            // partial uninstall recovery keep their existing app UI.
+            guard let bytes = try? Data(contentsOf: dataRoot.appendingPathComponent("installation.json")),
+                  let receipt = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+                  receipt["app_location"] != nil, receipt["state"] as? String == "installed",
+                  let files = receipt["files"] as? [[String: Any]],
+                  ["not_started", "starting"].contains(files.first?["activation"] as? String ?? "") else { return false }
+        }
+        NSApp.setActivationPolicy(.regular)
+        let setupWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 140), styleMask: [.titled], backing: .buffered, defer: false)
+        setupWindow.title = "WorkLog"
+        let label = NSTextField(labelWithString: "처음 실행에 필요한 서비스를 준비하고 있습니다…")
+        label.frame = NSRect(x: 25, y: 60, width: 380, height: 25)
+        setupWindow.contentView?.addSubview(label); setupWindow.center(); setupWindow.makeKeyAndOrderFront(nil)
+        DispatchQueue.global(qos: .userInitiated).async {
+            var failure: String?
+            do {
+                let process = Process(), pipe = Pipe()
+                process.executableURL = app.appendingPathComponent("Contents/MacOS/node")
+                process.arguments = [app.appendingPathComponent("Contents/Resources/harness/scripts/first-launch.mjs").path, app.path]
+                process.standardOutput = pipe; process.standardError = pipe
+                try process.run()
+                let output = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+                if process.terminationStatus != 0 { failure = String(data: output, encoding: .utf8) ?? "서비스 준비에 실패했습니다." }
+            } catch { failure = error.localizedDescription }
+            DispatchQueue.main.async {
+                setupWindow.orderOut(nil)
+                if let failure = failure {
+                    let alert = NSAlert(); alert.messageText = "WorkLog 설치를 완료하지 못했습니다"
+                    alert.informativeText = String(failure.suffix(4000)); alert.runModal()
+                }
+                NSApp.terminate(nil)
+            }
+        }
+        return true
     }
     func showServiceControlError(_ message: String, stopping: Bool) {
         serviceControlError = message
@@ -316,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if statusItem == nil { return .terminateNow }
         if terminationPending { return .terminateLater }
         // Development/preview bundles never control the user's installed services.
         if serviceControl.resolve(dataRoot) == nil { return .terminateNow }
@@ -342,6 +409,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     func setQuickVisible(_ visible: Bool) {
         quickWebView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('harness:quick-visibility',{detail:\(visible ? "true" : "false")}))", completionHandler: nil)
     }
+    @objc func uninstallWorkLog() {
+        guard serviceControl.resolve(dataRoot) != nil else { return }
+        popover.performClose(nil)
+        let fm = FileManager.default
+        let stage = fm.temporaryDirectory.appendingPathComponent("worklog-uninstall-ui-\(UUID().uuidString)")
+        do {
+            try fm.createDirectory(at: stage, withIntermediateDirectories: false)
+            let source = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/WorkLog Uninstaller.app")
+            let target = stage.appendingPathComponent("WorkLog Uninstaller.app")
+            try fm.copyItem(at: source, to: target)
+            let config = NSWorkspace.OpenConfiguration(); config.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(at: target, configuration: config) { _, error in
+                if let error = error {
+                    try? fm.removeItem(at: stage)
+                    DispatchQueue.main.async { let alert = NSAlert(error: error); alert.runModal() }
+                }
+            }
+        } catch {
+            try? fm.removeItem(at: stage)
+            let alert = NSAlert(error: error); alert.runModal()
+        }
+    }
+
     func popoverDidShow(_ notification: Notification) { setQuickVisible(true) }
     func popoverDidClose(_ notification: Notification) { setQuickVisible(false) }
     func openMain(_ route: [String: Any]) {

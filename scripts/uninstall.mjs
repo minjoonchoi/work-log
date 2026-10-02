@@ -1,3 +1,4 @@
+import { removeLocalConnections } from './remove-connections.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -8,7 +9,7 @@ import { assert } from '../src/shared.mjs';
 import { createInstallReporter } from './install-output.mjs';
 import { stopOwnedServices } from './service-control.mjs';
 import { removeAgentConnection } from './agent-connections.mjs';
-import { locations, stat, safePath, locked, readManifest, saveManifest, matches, inventory,
+import { locations, stat, safePath, safeInstallationPath, locked, readManifest, saveManifest, matches, inventory,
   canonical, removeEmptyDirectories } from './install-state.mjs';
 
 export function prepareUninstall({ homeDir = os.homedir() } = {}) {
@@ -25,14 +26,14 @@ export function prepareUninstall({ homeDir = os.homedir() } = {}) {
 function removeTrees(loc, receipt, removed, preserved) {
   for (const tree of receipt.trees) {
     try {
-      safePath(loc.home, tree.path);
+      safeInstallationPath(loc, tree.path);
       if (!stat(tree.path)) continue;
       assert(stat(tree.path).isDirectory(), '설치 디렉터리가 다른 유형으로 바뀌었습니다.');
       const expected = new Map(tree.entries.map(e => [e.relative, e]));
       // A partially copied tree is recoverable, but added/edited files preserve the entire tree.
       for (const current of inventory(tree.path)) assert(canonical(current) === canonical(expected.get(current.relative)), '사용자가 변경하거나 추가한 파일이 있어 디렉터리를 보존했습니다.');
       for (const entry of [...tree.entries].reverse()) {
-        const target = path.join(tree.path, entry.relative); safePath(loc.home, target, { symlink: entry.kind === 'symlink' });
+        const target = path.join(tree.path, entry.relative); safeInstallationPath(loc, target, { symlink: entry.kind === 'symlink' });
         if (!stat(target)) continue;
         assert(matches(target, entry), '제거 도중 내용이 바뀌어 남은 파일을 보존했습니다.');
         if (entry.kind === 'directory') fs.rmdirSync(target); else fs.unlinkSync(target);
@@ -42,7 +43,7 @@ function removeTrees(loc, receipt, removed, preserved) {
   }
 }
 
-export function applyUninstall({ homeDir = os.homedir(), deactivate = true, launchctl = spawnSync, stopTimeoutMs = 10000, onProgress = () => {} } = {}) {
+export function applyUninstall({ homeDir = os.homedir(), deactivate = true, launchctl = spawnSync, stopTimeoutMs = 10000, purgeConnections = false, credentialRunner, onProgress = () => {} } = {}) {
   onProgress('제거할 항목과 설치 소유 기록을 확인합니다.');
   const initial = prepareUninstall({ homeDir });
   if (['not_installed', 'unmanaged', 'uninstalled'].includes(initial.status)) return initial;
@@ -51,14 +52,19 @@ export function applyUninstall({ homeDir = os.homedir(), deactivate = true, laun
     assert(!receipt.replacement, '중단된 재설치가 있습니다. make install로 복구한 뒤 제거하세요.');
     if (receipt.state === 'uninstalled') return { status: 'uninstalled', removed: [] };
     const removed = [], preserved = [];
+    receipt.purge_connections = receipt.purge_connections === true || purgeConnections;
     receipt.state = 'uninstalling'; saveManifest(loc, receipt);
     onProgress('WorkLog 소유 서비스의 종료 상태를 확인합니다.');
     preserved.push(...stopOwnedServices(loc, receipt, { launchctl, deactivate, timeoutMs: stopTimeoutMs }));
     if (!preserved.length) {
       onProgress('WorkLog의 에이전트 연결과 서비스 설정을 제거합니다.');
       for (const engine of ['claude', 'codex']) removeAgentConnection(loc, receipt, engine, removed, preserved);
+      if (receipt.purge_connections && !preserved.length) {
+        onProgress('Atlassian Keychain 자격증명과 로컬 연결 설정을 제거합니다.');
+        removeLocalConnections(loc, receipt, removed, preserved, { credentialRunner });
+      }
       let dependent = preserved.length > 0;
-      for (const f of receipt.files) {
+      for (const f of dependent ? [] : receipt.files) {
         try {
           safePath(loc.home, f.path); if (!stat(f.path)) continue;
           assert(matches(f.path, { ...f, kind: 'file' }), '변경된 서비스 설정을 보존했습니다.');
@@ -75,7 +81,7 @@ export function applyUninstall({ homeDir = os.homedir(), deactivate = true, laun
     receipt.state = preserved.length ? 'needs_attention' : 'uninstalled';
     receipt.uninstall = { at: new Date().toISOString(), removed, preserved }; saveManifest(loc, receipt);
     return { status: receipt.state, installation_id: receipt.id, removed, preserved, data_root: loc.data,
-      note: '업무 DB·산출물·로그·백업·Keychain 토큰은 보존합니다. 기존 사용자 설정은 보존하며 WorkLog가 만든 빈 설정·디렉터리만 정리합니다.' };
+      note: preserved.length ? '일부 항목을 제거하지 못했습니다. preserved의 원인을 확인하고 다시 시도하세요.' : receipt.purge_connections ? 'WorkLog의 로컬 연결 설정과 Keychain 자격증명을 제거했습니다. 업무 기록과 동기화 이력은 보존합니다.' : '업무 DB·산출물·로그·백업·Keychain 토큰은 보존합니다. 기존 사용자 설정은 보존하며 WorkLog가 만든 빈 설정·디렉터리만 정리합니다.' };
   });
 }
 
@@ -85,8 +91,8 @@ const invokedAsProgram = process.argv[1]
 if (invokedAsProgram) {
   const reporter = createInstallReporter({ json: process.argv.includes('--json') });
   try {
-    const { values } = parseArgs({ options: { json: { type: 'boolean' }, apply: { type: 'boolean' }, 'home-dir': { type: 'string' }, 'no-deactivate': { type: 'boolean' } } });
-    const options = { homeDir: values['home-dir'], deactivate: !values['no-deactivate'], onProgress: reporter.progress };
+    const { values } = parseArgs({ options: { json: { type: 'boolean' }, apply: { type: 'boolean' }, 'home-dir': { type: 'string' }, 'no-deactivate': { type: 'boolean' }, 'purge-connections': { type: 'boolean' } } });
+    const options = { homeDir: values['home-dir'], deactivate: !values['no-deactivate'], purgeConnections: values['purge-connections'] === true, onProgress: reporter.progress };
     const result = values.apply ? applyUninstall(options) : prepareUninstall(options);
     reporter.result('uninstall', result); if (['needs_attention', 'unmanaged'].includes(result.status)) process.exitCode = 2;
   } catch (e) { reporter.error('uninstall', e); process.exitCode = 1; }

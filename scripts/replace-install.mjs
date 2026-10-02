@@ -2,12 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { assert, atomic, digest } from '../src/shared.mjs';
-import { canonical, inventory, matches, safePath, saveManifest, stat, validateManifest } from './install-state.mjs';
+import { canonical, inventory, matches, safePath, safeInstallationPath, saveManifest, stat, validateManifest } from './install-state.mjs';
 import { missingService, ownedService, stopOwnedServices } from './service-control.mjs';
 
 const options = { encoding: 'utf8', timeout: 15000 };
 const exactTree = (loc, tree, target = tree.path) => {
-  safePath(loc.home, target);
+  safeInstallationPath(loc, target);
   assert(stat(target)?.isDirectory() && canonical(inventory(target)) === canonical(tree.entries),
     `기존 설치가 변경되었습니다. 수정·추가 파일을 보존합니다: ${target}`);
 };
@@ -129,6 +129,7 @@ export function recoverReplacement(loc, receipt, { activate, launchctl, stopTime
 
 // Caller owns installation.lock; staged payloads are complete before services stop.
 export function replaceInstall(loc, previous, plan, staged, { activate, launchctl, stopTimeoutMs = 10000, onProgress }) {
+  assert(!previous.app_location, '드래그하여 설치한 앱은 설치 제거 후 새 앱으로 교체하세요. 업무 기록은 보존됩니다.');
   intact(loc, previous);
   assert(plan.runtimeRoot === previous.trees[1].path && plan.installationId === previous.id, '재설치 대상이 변경되었습니다. 다시 실행하세요.');
   const receipt = { ...structuredClone(previous), state: 'reinstalling', updated_at: new Date().toISOString(),

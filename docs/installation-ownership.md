@@ -124,3 +124,9 @@ CLI는 완료/이미 제거/미설치에 0, 보존된 충돌·미관리 설치�
 사용자 작업 유형과 지시문·모델 설정은 앱 밖의 `DATA_ROOT/execution-settings.json`, 직무별 설치 상태는 `DATA_ROOT/harness-packages.json`에 보관한다. 이 파일은 설치 소유 항목에 포함하지 않으므로 제거·재설치 후 유지한다. 신규 설치만 빈 패키지 선택으로 초기화하며 이전 데이터의 패키지 설정 누락은 기존 전체 유형 사용으로 해석한다. 기존 실행의 정의와 산출물도 별도로 보존한다. `tests/e2e/install.test.mjs`는 임시 홈에서 실제 패키지 런타임으로 등록·편집 후 제거·재설치하고 설정 원문, 카탈로그, 실행 결과가 유지되는지 확인한다.
 
 GUI의 탐색·설정·캘린더 이동·빠른 패널 아이콘은 정적 inline SVG이며 CSS를 앱과 함께 배포한다. 글꼴 문자, 외부 CDN, JavaScript 초기화에 의존하지 않는다. 메뉴 막대는 번들 PNG를 사용하며 리소스를 읽지 못하면 AppKit 벡터로 대체한다. 지원 범위인 macOS 13 이상 Apple Silicon 앱에서 사용할 리소스이며, 설치 대상 OS·아키텍처를 확대하는 변경은 아니다. GUI 테스트는 외부 요청을 차단하고 글꼴을 바꾼 상태의 1×/2× 배율 및 스크립트 비활성 상태를 확인한다.
+
+### Finder 드래그 설치와 UI 제거
+
+DMG의 `Applications` 바로가기는 `/Applications`를 가리킨다. 첫 실행은 해당 위치의 앱을 복사하지 않고 채택하고, 사용자 홈 안에 런타임·LaunchAgent·소유 기록을 만든다. `app_location`은 `/Applications/WorkLog.app` 또는 해당 사용자의 `~/Applications/WorkLog.app`만 허용한다. 전역 앱 내부 접근은 별도 `safeInstallationPath`로 검사하고, 설정·런타임 경로는 기존 홈 경계를 유지한다. 전역 Applications 디렉터리는 생성·정리 소유 대상에 포함하지 않는다. 사용자 Applications 설치와 위치를 바꾸거나 드래그 설치본을 교체할 때는 기존 UI 제거 후 설치하며 업무 데이터는 보존한다.
+
+제거 UI는 임시 위치로 복사한 별도 도우미 앱에서 실행한다. 기본 제거는 WorkLog 소유 훅·스킬·서비스·앱만 제거한다. 사용자가 `연결 정보도 모두 삭제`를 체크하면 서비스 종료 확인 후 현재 데이터 디렉터리 해시에 대응하는 `local.worklog.atlassian`의 `oauth-*`, `client-*` Keychain 항목 두 개, `integrations/atlassian.json`, 로컬 API 인증 토큰·endpoint 파일, WorkLog 형식의 연결 설정 백업도 제거한다. 다른 CLI의 로그인, 사용자 인증서 원본, 업무 DB와 동기화 이력은 보존한다. Keychain/파일 정리에 실패하면 상세 원인과 재시도 가능한 앱을 남기고, 선택한 정리 의도는 소유 기록에 유지한다. 실패 후 앱 메뉴에서 제거를 다시 실행할 수 있다.

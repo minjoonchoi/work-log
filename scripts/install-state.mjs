@@ -15,6 +15,18 @@ export function locations(homeDir = os.homedir()) {
     configs: { claude: path.join(home, '.claude/settings.json'), codex: path.join(home, '.codex/hooks.json') },
     agents: ['runtime', 'manager', 'gui'].map(role => ({ label: `local.worklog.${role}`, path: path.join(home, `Library/LaunchAgents/local.worklog.${role}.plist`) })) };
 }
+// Finder installations may live in the system Applications folder. Only this
+// exact bundle is admitted; configuration and runtime paths remain home-scoped.
+export function selectAppLocation(loc, app) {
+  assert([path.join(loc.home, 'Applications/WorkLog.app'), '/Applications/WorkLog.app'].includes(app), 'WorkLog를 Applications 폴더로 옮긴 뒤 실행하세요.');
+  loc.app = app;
+}
+export function safeInstallationPath(loc, target, options = {}) {
+  if (loc.app === '/Applications/WorkLog.app' && (target === loc.app || target.startsWith(`${loc.app}/`))) {
+    return safePath('/Applications', target, options);
+  }
+  return safePath(loc.home, target, options);
+}
 export function skillLinks(loc, names, runtime) {
   return names.flatMap(name => ['.claude/skills', '.agents/skills', '.codex/worklog/skills'].map(root =>
     ({ path: path.join(loc.home, root, name), target: path.join(runtime, 'harness/skills', name) })));
@@ -61,6 +73,7 @@ export function readManifest(loc) {
   safePath(loc.home, loc.manifest);
   if (!stat(loc.manifest)) return null;
   const m = JSON.parse(fs.readFileSync(loc.manifest, 'utf8'));
+  if (m.app_location !== undefined) selectAppLocation(loc, m.app_location);
   return validateManifest(loc, m);
 }
 
@@ -98,7 +111,7 @@ export function validateManifest(loc, m) {
       && [hookCommand(loc, runtime, m.id, h.engine), legacyHookCommand(loc, runtime, m.id, h.engine)].includes(entry.hook.command), '훅 소유 식별자가 다릅니다.');
   }
   if (m.format === 2) {
-    const permittedDirs = new Set([loc.app, ...loc.agents.map(f => f.path), ...Object.values(loc.configs), ...links.map(l => l.path)]
+    const permittedDirs = new Set([...(loc.app.startsWith(`${loc.home}/`) ? [loc.app] : []), ...loc.agents.map(f => f.path), ...Object.values(loc.configs), ...links.map(l => l.path)]
       .flatMap(target => parentPaths(loc.home, target)));
     assert(Array.isArray(m.created_directories) && new Set(m.created_directories).size === m.created_directories.length
       && m.created_directories.every(dir => permittedDirs.has(dir)), '생성한 디렉터리 소유 경로가 다릅니다.');

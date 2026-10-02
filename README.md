@@ -206,4 +206,8 @@ Claude Code도 기존 UserPromptSubmit·PreToolUse·PostToolUse·Stop 훅이 전
 
 
 팀 배포용 DMG도 `make build`에서 생성합니다: `dist/WorkLog-macos-arm64.dmg`.
-DMG를 열고 **WorkLog 설치.app → 설치 → WorkLog 열기** 순서로 실행하면 사용자 Applications 폴더에 앱과 실행 서비스를 설치합니다. 기존 업무 기록은 유지하며, Claude/Codex 및 Jira 연결은 각 사용자가 앱에서 설정합니다. 설치 후 DMG를 추출해도 됩니다. macOS 13 이상 Apple Silicon용이며, 현재 ad-hoc 서명으로 Apple 공증은 포함되지 않아 회사 보안 정책에 따라 실행 승인이 필요할 수 있습니다. 기존 ZIP 배포물도 함께 생성합니다.
+DMG를 열고 **WorkLog를 Applications 폴더로 드래그 → Applications에서 WorkLog 실행** 순서로 설치합니다. 앱은 `/Applications/WorkLog.app`에 위치하며, 첫 실행에서 사용자별 실행 서비스와 런타임을 준비합니다. 디스크 이미지에서 직접 실행하면 Applications로 옮기도록 안내합니다. 기존 업무 기록은 유지하며, Claude/Codex 및 Jira 연결은 각 사용자가 앱에서 설정합니다. 설치 후 DMG를 추출해도 됩니다. macOS 13 이상 Apple Silicon용이며, 현재 ad-hoc 서명으로 Apple 공증은 포함되지 않아 회사 보안 정책에 따라 실행 승인이 필요할 수 있습니다. 기존 ZIP 배포물도 함께 생성합니다.
+
+메뉴 막대 WorkLog 아이콘을 우클릭하고 **WorkLog 설치 제거…**를 선택하면 제거 확인 창을 엽니다. 앱·서비스와 WorkLog 소유 Codex/Claude 훅·스킬 연결을 제거하며 업무 기록은 보존합니다. **연결 정보도 모두 삭제**를 체크하면 Atlassian OAuth 토큰·Client 자격증명(Keychain), 사이트·인증 설정, 로컬 API 인증 파일, WorkLog가 만든 연결 설정 백업도 제거합니다. Codex/Claude 자체 로그인, 다른 앱의 훅·설정, 외부 인증서 원본, 업무·동기화 이력은 유지합니다. Keychain 삭제 실패 시 앱을 보존하고 재시도할 수 있습니다.
+
+기존 `~/Applications` 설치를 DMG 설치로 전환하거나 드래그 설치본을 교체할 때는 먼저 WorkLog 설치 제거를 실행하고 새 앱을 복사하세요. 업무 기록은 유지되며, 연결 정보 삭제를 선택하지 않으면 Atlassian 인증도 유지됩니다. `make install`은 기존 사용자 Applications 설치 방식을 유지합니다.
