@@ -713,15 +713,6 @@ input[type=checkbox], input[type=radio] { flex: none; padding: 0; margin: 0; }
 .item-resume > summary { cursor: pointer; color: var(--text-secondary); }
 .item-resume[open] > summary { margin-bottom: var(--space-3); }
 
-.confluence-choices { display: grid; gap: var(--space-2); max-height: 220px; overflow: auto; margin: var(--space-3) 0; }
-.confluence-choice { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin: var(--space-2) 0; }
-.confluence-choice span { min-width: 0; overflow-wrap: anywhere; }
-.confluence-location { border: 1px solid var(--line); border-radius: var(--radius-control); padding: var(--space-3); margin-top: var(--space-3); }
-.confluence-location nav { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-2) 0; }
-.confluence-target-list { max-height: 230px; overflow: auto; }
-.confluence-target-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px solid var(--line); }
-.confluence-target-row span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.confluence-target-row button { flex: none; }
 
 #calendar.is-selecting-dates, #calendar.is-selecting-dates * { user-select: none; -webkit-user-select: none; cursor: crosshair; }
 /* Keep the date grid stationary when the first date is selected during a drag. */
@@ -732,3 +723,8 @@ input[type=checkbox], input[type=radio] { flex: none; padding: 0; margin: 0; }
 #detail-resize:hover::after, #detail-resize:focus-visible::after, .resizing-detail #detail-resize::after { background: var(--accent); }
 #detail-resize:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 body.resizing-detail, body.resizing-detail * { cursor: col-resize !important; user-select: none; -webkit-user-select: none; }
+
+.oauth-scope-list { padding-left: var(--space-5); }
+.oauth-scope-list li { margin: var(--space-3) 0; }
+.oauth-scope-list code { overflow-wrap: anywhere; }
+.oauth-scope-list span { display: block; color: var(--muted); margin-top: var(--space-1); }

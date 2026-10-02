@@ -353,3 +353,40 @@ for (const [title, endpoint, ready] of [
   await expect(page.locator(ready)).toBeEnabled();
   await expect(page.locator('#modal .settings-loading-overlay')).toHaveCount(0);
 });
+
+test('OAuth registration guide lists every requested scope and its purpose', async ({ page }) => {
+  await saveSettings(h); await open(page); await showSettings(page);
+  await page.getByText('OAuth 앱 등록 안내', { exact: true }).click();
+  const status = await h.manager('/integrations/atlassian');
+  await expect(page.locator('#oauth-required-scopes code')).toHaveText(status.scopes);
+  await expect(page.locator('#oauth-required-scopes')).toContainText('현재 사용자·개인 공간 조회');
+  await expect(page.getByText('offline_access는 OAuth 연결 시 요청하는', { exact: false })).toBeVisible();
+});
+
+test('space settings are removed without changing previously saved data', async ({page}) => {
+  await authorize(h);
+  const allowed=[{cloud_id:'cloud-test',space_id:'20'}];
+  await h.manager('/integrations/atlassian',{method:'PUT',body:{client_id:'fixture-client',confluence_spaces:allowed}});
+  await open(page); await showSettings(page);
+  await expect(page.getByLabel('선택한 공간에만 게시',{exact:true})).toHaveCount(0);
+  await expect(page.getByLabel('공간 이름·키 검색',{exact:true})).toHaveCount(0);
+  await page.locator('#save-atlassian').click();
+  expect((await h.manager('/integrations/atlassian')).config.confluence_spaces).toEqual(allowed);
+});
+
+test('basic and exploration connection buttons request separate permission modes', async ({ page }) => {
+  await saveSettings(h); await open(page); await showSettings(page);
+  await page.evaluate(() => { window.open = () => null; });
+  const requests = [];
+  await page.route('**/api/integrations/atlassian/authorize', async route => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({json:{authorization_url:'https://auth.atlassian.com/authorize?fixture=1'}});
+  });
+  await page.getByRole('button',{name:'Atlassian 연결',exact:true}).click();
+  await expect.poll(()=>requests.length).toBe(1); expect(requests[0]).toEqual({});
+  await page.getByRole('button',{name:'개인 공간 게시 권한 연결',exact:true}).click();
+  await expect.poll(()=>requests.length).toBe(2); expect(requests[1]).toEqual({confluence_exploration:true});
+  await page.getByText('OAuth 앱 등록 안내',{exact:true}).click();
+  await expect(page.locator('#oauth-required-scopes')).toContainText('기본 연결 · Atlassian 연결 버튼');
+  await expect(page.locator('#oauth-required-scopes')).toContainText('개인 공간 게시 · 개인 공간 게시 권한 연결 버튼');
+});

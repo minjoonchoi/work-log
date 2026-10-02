@@ -1,4 +1,3 @@
-import { confluenceSettings, confluenceSettingsHTML } from './confluence-settings.js';
 import { setSettingsLoading } from './settings-tabs.js';
 import { jiraUI } from './jira.js';
 import { descriptionHTML } from './description.js';
@@ -43,13 +42,13 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       <label for="atlassian-client-secret">Client Secret</label><div class="credential-field"><input id="atlassian-client-secret" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false" aria-describedby="client-secret-help"><button id="toggle-client-secret" type="button" class="secondary" aria-controls="atlassian-client-secret" aria-pressed="false" aria-label="Client Secret 보기">보기</button></div>
       <p id="client-secret-help" class="help">Keychain에 안전하게 보관합니다. Client ID가 같으면 빈칸으로 저장해도 기존 값을 유지합니다.</p>
       <details class="settings-help"><summary>OAuth 앱 등록 안내</summary><label for="oauth-callback">OAuth 앱의 Callback URL</label><input id="oauth-callback" readonly value="${esc(s.callback_url || '')}">
-      <p class="help">OAuth 앱에 위 주소를 등록하세요. 연결은 기본 브라우저에서 진행됩니다.</p></details>
+      <p class="help">Atlassian Developer Console의 Authorization → OAuth 2.0에서 위 Callback URL을 등록하세요. Permissions에서 기본 연결 권한을 추가하세요. 개인 공간 게시를 사용하려면 개인 공간 조회·폴더 생성 권한도 추가하세요.</p><h4>필요한 권한 전체</h4><div id="oauth-required-scopes">권한 목록을 불러오는 중…</div><p class="help">권한을 추가하거나 변경했다면 Atlassian을 다시 연결해 동의해야 적용됩니다. offline_access는 OAuth 연결 시 요청하는 토큰 갱신 권한으로, 별도의 API 권한 항목이 아닙니다.</p><p class="help">“Your site admin must authorize this app”가 표시되면 사이트 관리자의 앱 승인 또는 재승인이 필요합니다. 관리자는 Atlassian Administration → Apps → 해당 사이트 → Connected apps에서 확인하세요. 승인 후 다시 연결합니다.</p></details>
       </div><hr class="settings-divider"><div id="atlassian-panel-network" class="atlassian-settings-section"><h3>네트워크·진단</h3><p class="help">회사 네트워크에서 연결되지 않으면 추가 인증서를 설정하세요.</p>
       <label for="atlassian-ca-cert-path">추가 CA 인증서 파일 경로</label><input id="atlassian-ca-cert-path" maxlength="4096" placeholder="~/Certificates/company-ca.pem" autocomplete="off" spellcheck="false" aria-describedby="atlassian-ca-cert-help" value="${esc(s.config?.ca_cert_path || '')}">
       <p id="atlassian-ca-cert-help" class="help">회사 루트·중간 CA 인증서(.pem/.crt)의 절대 경로 또는 ~/ 경로를 입력하세요. 비워서 저장하면 추가 인증서만 해제하며, 기존 연결은 유지합니다.</p>
       </div>
-      ${confluenceSettingsHTML}
-      <div class="settings-actions"><button id="save-atlassian" class="secondary">설정 저장</button><button id="connect-atlassian" class="primary">Atlassian 연결</button><button id="disconnect-atlassian" class="secondary">연결 해제</button></div>
+      <p class="help">업무 요약은 내 개인 공간의 업무 요약 폴더에만 게시됩니다. 개인 공간 게시 권한 연결에서 필요한 권한을 승인하세요. 추가 권한 연결을 취소해도 기존 연결은 유지됩니다.</p>
+      <div class="settings-actions"><button id="save-atlassian" class="secondary">설정 저장</button><button id="connect-atlassian" class="primary">Atlassian 연결</button><button id="connect-atlassian-exploration" class="secondary">개인 공간 게시 권한 연결</button><button id="disconnect-atlassian" class="secondary">연결 해제</button></div>
       ${target ? '' : '<div class="dialog-actions"><button data-close>닫기</button></div>'}`);
     const dialog = $('#modal'), client = $('#atlassian-client-id'), secret = $('#atlassian-client-secret'), toggle = $('#toggle-client-secret'), site = $('#atlassian-site-url'), caCert = $('#atlassian-ca-cert-path');
     let config = s.config, hasSecret = !!s.has_client_secret, origin = null, revision = 0, revealing = 0, busy = false, disposed = false;
@@ -66,17 +65,15 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     function closed() { if (settings === view) clearSettings(); }
     settings = view; dialog.addEventListener('close', closed); present();
     const currentError = e => { if (view.active()) fail(e); };
-    const spacesPolicy = confluenceSettings({ api, esc, active: view.active, fail: currentError });
-    const policyChanged = () => JSON.stringify(spacesPolicy.value()) !== JSON.stringify(config?.confluence_spaces ?? null);
     const dirty = () => client.value.trim() !== config?.client_id || site.value.trim() !== (config?.site_url || '')
-      || caCert.value.trim() !== (config?.ca_cert_path || '') || (!!secret.value && origin !== 'stored') || policyChanged();
+      || caCert.value.trim() !== (config?.ca_cert_path || '') || (!!secret.value && origin !== 'stored');
     const withBusy = fn => async () => {
       if (busy || view.loading || !view.active()) return;
-      busy = true; revealing++; spacesPolicy.setDisabled(true);
-      const controls = [client, secret, toggle, site, caCert, $('#save-atlassian'), $('#connect-atlassian'), $('#disconnect-atlassian'), ...dialog.querySelectorAll('[data-settings-tab], #back-connection-settings')];
+      busy = true; revealing++;
+      const controls = [client, secret, toggle, site, caCert, $('#save-atlassian'), $('#connect-atlassian'), $('#connect-atlassian-exploration'), $('#disconnect-atlassian'), ...dialog.querySelectorAll('[data-settings-tab], #back-connection-settings')];
       controls.forEach(control => control.disabled = true);
       try { await fn(); } catch (e) { currentError(e); }
-      finally { busy = false; if (view.active()) { spacesPolicy.setDisabled(false); controls.forEach(control => control.disabled = false); present(); } }
+      finally { busy = false; if (view.active()) { controls.forEach(control => control.disabled = false); present(); } }
     };
     client.oninput = () => { clearSecret(); $('#dialog-error').hidden = true; };
     site.oninput = () => { $('#dialog-error').hidden = true; };
@@ -104,27 +101,28 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       secret.type = 'password'; present();
       const saved = await api('/integrations/atlassian', { method: 'PUT', body: { client_id: clientId, ...(newSecret ? { client_secret: newSecret } : {}),
         ...(site.value.trim() !== (config?.site_url || '') ? { site_url: site.value.trim() } : {}),
-        ...(caCert.value.trim() !== (config?.ca_cert_path || '') ? { ca_cert_path: caCert.value.trim() } : {}),
-        ...(policyChanged() ? { confluence_spaces: spacesPolicy.value() } : {}) } });
+        ...(caCert.value.trim() !== (config?.ca_cert_path || '') ? { ca_cert_path: caCert.value.trim() } : {}) } });
       if (!view.active()) return false;
       config = saved.config; hasSecret = saved.has_client_secret ?? !!(newSecret || hasSecret); client.value = config.client_id; site.value = config.site_url || '';
-      caCert.value = config.ca_cert_path || ''; spacesPolicy.load(config.confluence_spaces);
+      caCert.value = config.ca_cert_path || '';
       clearSecret(); $('#dialog-error').hidden = true; return true;
     };
     if (onBack) $('#back-connection-settings').onclick = withBusy(async () => { await onBack(); });
     $('#save-atlassian').onclick = withBusy(async () => { if (await save()) { toast('연결 설정을 저장했습니다.'); await pollSettings(); } });
-    $('#connect-atlassian').onclick = withBusy(async () => {
+    const connect = exploration => withBusy(async () => {
       if (dirty() && !await save()) return;
       clearSecret();
-      const result = await api('/integrations/atlassian/authorize', { method: 'POST', body: {} });
+      const result = await api('/integrations/atlassian/authorize', { method: 'POST', body: exploration ? { confluence_exploration: true } : {} });
       if (view.active()) { openExternal(result.authorization_url); await pollSettings(); }
     });
+    $('#connect-atlassian').onclick = connect(false);
+    $('#connect-atlassian-exploration').onclick = connect(true);
     $('#disconnect-atlassian').onclick = withBusy(async () => { await api('/integrations/atlassian', { method: 'DELETE' }); if (view.active()) { await pollSettings(); toast('이 앱의 Atlassian 연결을 해제했습니다.'); } });
-    const formControls = [client, secret, toggle, site, caCert, $('#oauth-callback'), $('#save-atlassian'), $('#connect-atlassian'), $('#disconnect-atlassian')];
+    const formControls = [client, secret, toggle, site, caCert, $('#oauth-callback'), $('#save-atlassian'), $('#connect-atlassian'), $('#connect-atlassian-exploration'), $('#disconnect-atlassian')];
     const retry = $('#retry-atlassian-settings');
     async function loadSettings() {
       if (!view.active()) return;
-      view.loading = true; spacesPolicy.setDisabled(true);
+      view.loading = true;
       const finishLoading = setSettingsLoading(target || $('#modal-content'), true);
       clearLoading = finishLoading;
       formControls.forEach(control => control.disabled = true);
@@ -136,8 +134,24 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
         config = loaded.config; hasSecret = !!loaded.has_client_secret;
         client.value = config?.client_id || ''; site.value = config?.site_url || ''; caCert.value = config?.ca_cert_path || '';
         $('#oauth-callback').value = loaded.callback_url || '';
+        const scopeLabels = {
+          'offline_access': '연결 유지와 액세스 토큰 갱신',
+          'read:jira-work': 'Jira 프로젝트·이슈·업무 로그 조회',
+          'read:jira-user': '현재 Jira 사용자 확인',
+          'write:jira-work': 'Jira 이슈·댓글·업무 로그 작성 및 상태 변경',
+          'read:page:confluence': 'Confluence 페이지 조회와 게시 결과 확인',
+          'read:space:confluence': 'Confluence 공간 목록·검색·게시 대상 확인',
+          'write:page:confluence': 'Confluence 업무 요약 페이지 게시',
+          'read:folder:confluence': '업무 요약 폴더 확인',
+          'write:folder:confluence': '개인 공간에 업무 요약 폴더 생성',
+          'read:content-details:confluence': '현재 사용자·개인 공간 조회와 페이지·폴더 검색'
+        };
+        const scopeGroup = (title, scopes) => `<h5>${title}</h5><ul class="oauth-scope-list">${scopes.map(scope => `<li><code>${esc(scope)}</code><span>${esc(scopeLabels[scope] || '앱 연결에 필요한 권한')}</span></li>`).join('')}</ul>`;
+        $('#oauth-required-scopes').innerHTML = scopeGroup('기본 연결 · Atlassian 연결 버튼', loaded.base_scopes || loaded.scopes || [])
+          + scopeGroup('개인 공간 게시 · 개인 공간 게시 권한 연결 버튼', loaded.exploration_scopes || []);
+
         view.status.textContent = connectionText(loaded);
-        view.loading = false; spacesPolicy.load(config?.confluence_spaces); spacesPolicy.setDisabled(false);
+        view.loading = false;
         formControls.forEach(control => control.disabled = false);
         present();
       } catch (error) {

@@ -155,11 +155,24 @@ test('site change queued behind token refresh preserves the legacy OAuth digest 
   assert.equal(f.state.tokenCalls.filter(call => call.grant_type === 'refresh_token').length, 1);
 });
 
-test('Confluence publication rechecks allowed spaces after awaited pre-send work', async t => {
+test('Confluence publication cannot write to a shared space even when legacy settings allow it', async t => {
   const { h, f, client } = await setup(t);
   await assert.rejects(client.createConfluencePage({ cloud_id: 'cloud-test', space_id: '10', title: '설정 변경 경합', storage: '<p>본문</p>' }, {
     beforeSend: () => save(h, undefined, { confluence_spaces: [] })
-  }), error => error.status === 403 && error.not_sent && /허용되지/.test(error.message));
+  }), error => error.status === 403 && error.not_sent && /개인 공간에만/.test(error.message));
   assert.equal(f.state.pages.length, 0);
   assert.equal(f.state.calls.filter(row => row.method === 'POST' && row.path.endsWith('/wiki/api/v2/pages')).length, 0);
+});
+
+test('mandatory personal-space authorization is rechecked before posting and cannot survive a changed owner', async t => {
+  const { h, f, client } = await setup(t);
+  f.state.personalSpace = {id:40,key:'~me',name:'개인 공간',type:'personal',status:'current'};
+  f.state.spaces.push({...f.state.personalSpace,id:'40'});
+  await save(h, undefined, {confluence_spaces:[]});
+  await assert.rejects(client.createConfluencePage({cloud_id:'cloud-test',space_id:'40',title:'개인 공간',storage:'<p>본문</p>'}, {
+    beforeSend: () => { f.state.personalSpace = {id:41,key:'~other',name:'변경된 개인 공간',type:'personal',status:'current'}; }
+  }), error=>error.status===403 && error.not_sent);
+  assert.equal(f.state.pages.length,0);
+  f.state.personalFailure = 403;
+  assert.equal((await client.confluenceSpaces('cloud-test')).personal_space_status, 'permission_required');
 });

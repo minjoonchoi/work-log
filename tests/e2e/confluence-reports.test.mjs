@@ -9,10 +9,11 @@ import { confluenceStorage } from '../../src/confluence-storage.mjs';
 import { buildReportStorage } from '../../src/confluence-reports.mjs';
 
 const post = body => ({ method: 'POST', body });
-const request = operation_id => ({ operation_id, cloud_id: 'cloud-test', space_id: '10' });
+const request = operation_id => ({ operation_id, cloud_id: 'cloud-test' });
 const writes = fixture => fixture.state.calls.filter(call => call.method === 'POST' && call.path.endsWith('/wiki/api/v2/pages'));
 async function setup(t, env = {}) {
   const h = new Harness(), f = await atlFixture(h);
+  f.state.personalSpace = { ...f.state.spaces[0], type: 'personal' };
   h.env = { ...h.env, ...env };
   t.after(async () => { await h.close(); await f.close(); });
   await h.start('runtime'); await h.start('manager');
@@ -86,7 +87,7 @@ test('rejected publication remains local and durable, repeated failed operation 
   assert.equal((await publish(h, local.id, request('publish-retry-new-operation'))).state, 'published');
   assert.equal(writes(f).length, 2); assert.equal(f.state.pages.length, 1);
   detail = await h.manager(`/reports/${local.id}`); assert.equal(detail.publications.length, 2); assert.equal(detail.report.body, local.body);
-  await assert.rejects(publish(h, local.id, { ...request('publish-rejected'), space_id: '20' }), error => error.status === 409);
+  await assert.rejects(publish(h, local.id, { ...request('publish-rejected'), space_id: '20' }), error => error.status === 400);
 });
 
 test('response-lost publication is never reposted after restart; explicit page reconciliation checks exact space, title and body', async t => {
@@ -116,9 +117,9 @@ test('Confluence capability checks block page writes without new scopes and rest
   const { h, f } = await setup(t), { report: local } = await report(h); await authorize(h);
   f.state.scopes = f.state.scopes.filter(scope => scope !== 'write:page:confluence');
   await assert.rejects(publish(h, local.id, request('publish-missing-scope')), error => error.status === 403);
-  assert.equal(writes(f).length, 0); assert.equal((await h.manager(`/reports/${local.id}`)).publications[0].state, 'failed');
+  assert.equal(writes(f).length, 0); assert.equal((await h.manager(`/reports/${local.id}`)).publications.length, 0);
   f.state.scopes.push('write:page:confluence');
-  await assert.rejects(publish(h, local.id, { ...request('publish-invalid-space'), space_id: '999' }), error => error.status === 404);
+  await assert.rejects(publish(h, local.id, { ...request('publish-invalid-space'), space_id: '999' }), error => error.status === 400);
   assert.equal(writes(f).length, 0);
   for (const next of ['https://example.invalid/steal?cursor=abc', '/wiki/api/v2/pages?cursor=abc', '/wiki/api/v2/spaces?cursor=abc&cursor=def', '/wiki/api/v2/spaces?cursor=abc&inject=bad']) {
     f.state.spacesNext = next;
@@ -129,7 +130,7 @@ test('Confluence capability checks block page writes without new scopes and rest
 });
 
 test('pending and failed headless reports cannot publish or create any external publication intent', async t => {
-  const { h, f } = await setup(t, { HARNESS_TEST_REPORT_FIXTURE: JSON.stringify({ delayMs: 800, scenario: 'report-invalid' }) });
+  const { h, f } = await setup(t, { HARNESS_TEST_REPORT_FIXTURE: JSON.stringify({ delayMs: 800, scenario: 'invalid' }) });
   const created = await h.manager('/reports', post({ operation_id: 'create-invalid-report', dates: ['2026-09-17'], timezone: 'UTC', report_type: 'work' }));
   assert.equal(created.state, 'pending');
   await assert.rejects(publish(h, created.id, request('publish-pending-report')), error => error.status === 409);
@@ -198,30 +199,22 @@ test('legacy reports publish without inline references or evidence sections whil
   assert.match(storage, /권한 관리의 빈 상태|오류 안내를 보완|실서비스 적용은 미확인/);
   assert.match(storage, /href="https:\/\/fixture\.atlassian\.net\/browse\/TEAM-17">TEAM-17<\/a>/);
   assert.doesNotMatch(storage, /LOCAL_EVIDENCE_ONLY|LOCAL_APPENDIX_ONLY|작성 근거|근거 세션|\[(?:session|part):/);
-  assert.equal((await publish(h, original.report.id, { ...request('legacy-frozen-publication'), space_id: '20' })).state, 'unknown');
+  assert.equal((await publish(h, original.report.id, request('legacy-frozen-publication'))).state, 'unknown');
   assert.equal((await resolve(h, original.report.id, 'legacy-frozen-publication', '555')).state, 'published');
   assert.equal(writes(f).length, 1); assert.equal((await h.manager(`/reports/${original.report.id}`)).report.body, legacyBody);
   const saved = new DatabaseSync(path.join(h.dir, 'memory.sqlite'), { readOnly: true });
   assert.equal(saved.prepare('SELECT storage FROM confluence_publications WHERE operation_id=?').get('legacy-frozen-publication').storage, oldStorage); saved.close();
 });
 
-test('space allowlist persists without reconnecting and restricts discovery and direct publication', async t => {
+test('old space settings are preserved but cannot override personal publication', async t => {
   const { h, f } = await setup(t), original = await report(h); await authorize(h);
-  const before = f.state.tokenCalls.length;
-  const allowed = [{ cloud_id: 'cloud-test', space_id: '10', name: '팀 업무', key: 'TEAM' }, { cloud_id: 'cloud-test', space_id: '30' }];
-  await h.manager('/integrations/atlassian', { method: 'PUT', body: { client_id: 'fixture-client', confluence_spaces: allowed } });
-  assert.deepEqual((await h.manager('/integrations/atlassian')).config.confluence_spaces, allowed);
-  assert.equal(f.state.tokenCalls.length, before);
-  const visible = await h.manager('/integrations/atlassian/confluence-spaces?cloud_id=cloud-test&purpose=publish');
-  assert.deepEqual(visible.spaces.map(row => row.id), ['10', '30']);
-  assert.deepEqual((await h.manager('/integrations/atlassian/confluence-spaces?cloud_id=cloud-test')).spaces.map(row => row.id), ['10', '20']);
-  await assert.rejects(publish(h, original.report.id, { ...request('blocked-space'), space_id: '20' }), /허용되지/);
-  assert.equal(writes(f).length, 0);
+  const allowed = [{cloud_id:'cloud-test',space_id:'20'}];
+  await h.manager('/integrations/atlassian', {method:'PUT',body:{client_id:'fixture-client',confluence_spaces:allowed}});
+  await assert.rejects(publish(h,original.report.id,{...request('forged-space'),space_id:'20'}), /직접 지정/);
   await h.stop('manager'); await h.start('manager');
-  assert.deepEqual((await h.manager('/integrations/atlassian')).config.confluence_spaces, allowed);
-  await h.manager('/integrations/atlassian', { method: 'PUT', body: { client_id: 'fixture-client', confluence_spaces: [] } });
-  await assert.rejects(publish(h, original.report.id, request('empty-policy')), /허용되지/);
-  assert.equal(writes(f).length, 0);
+  assert.equal((await publish(h,original.report.id,request('personal-only'))).state,'published');
+  assert.equal(writes(f)[0].body.spaceId,'10'); assert.ok(writes(f)[0].body.parentId);
+  assert.deepEqual((await h.manager('/integrations/atlassian')).config.confluence_spaces,allowed);
 });
 
 test('search, pagination and hierarchy choose a verified page or folder and bind retries to the location', async t => {
@@ -239,15 +232,92 @@ test('search, pagination and hierarchy choose a verified page or folder and bind
   assert.deepEqual((await h.manager(endpoint + '&query=계획')).items.map(row => row.id), ['210']);
   assert.deepEqual((await h.manager(endpoint + '&parent_id=100&parent_type=page')).items.map(row => row.id), ['200']);
   assert.deepEqual((await h.manager(endpoint + '&parent_id=200&parent_type=folder')).items.map(row => row.id), ['210']);
-  await assert.rejects(publish(h, original.report.id, { ...request('wrong-parent'), parent_id: '300', parent_type: 'folder' }), /해당 공간/);
+  await assert.rejects(publish(h, original.report.id, { ...request('wrong-parent'), parent_id: '300', parent_type: 'folder' }), /직접 지정/);
   assert.equal(writes(f).length, 0);
-  const input = { ...request('folder-parent'), parent_id: '200', parent_type: 'folder' };
+  f.state.contentTree[1].title = '업무 요약';
+  const input = request('folder-parent');
   assert.equal((await publish(h, original.report.id, input)).state, 'published');
   assert.equal(writes(f)[0].body.parentId, '200');
   assert.equal((await publish(h, original.report.id, input)).repeated, true);
-  await assert.rejects(publish(h, original.report.id, { ...input, parent_id: '100', parent_type: 'page' }), /식별자/);
-  assert.equal((await publish(h, original.report.id, { ...request('page-parent'), parent_id: '100', parent_type: 'page' })).state, 'published');
-  assert.equal(writes(f).length, 2);
+  await assert.rejects(publish(h, original.report.id, { ...input, parent_id: '100', parent_type: 'page' }), /직접 지정/);
+  assert.equal(f.state.calls.filter(row=>row.method==='POST' && row.path.endsWith('/folders')).length,0);
   f.state.targetsNext = 'https://untrusted.example/wiki/rest/api/search?start=2';
   await assert.rejects(h.manager(endpoint), /탐색 페이지/);
+});
+
+test('own personal space is always publishable without persisting a forged personal flag; other personal spaces stay restricted', async t => {
+  const { h, f } = await setup(t), local = await report(h); await authorize(h);
+  f.state.personalSpace = { id: 40, key: '~me', name: '내 작업 공간', type: 'personal', status: 'current' };
+  f.state.spaces.push({ ...f.state.personalSpace, id: '40' }, { id:'41',key:'~other',name:'다른 사용자 공간',type:'personal',status:'current' });
+  await h.manager('/integrations/atlassian', { method:'PUT',body:{client_id:'fixture-client',confluence_spaces:[]} });
+  const listed = await h.manager('/integrations/atlassian/confluence-spaces?cloud_id=cloud-test&purpose=publish');
+  assert.deepEqual(listed.spaces.map(row=>row.id), ['40']); assert.equal(listed.personal_space.personal, true);
+  await assert.rejects(publish(h,local.report.id,{...request('other-personal'),space_id:'41'}), /직접 지정/);
+  assert.equal(writes(f).length,0);
+  assert.equal((await publish(h,local.report.id,request('own-personal'))).state,'published');
+  assert.equal(writes(f)[0].body.spaceId,'40');
+  assert.deepEqual((await h.manager('/integrations/atlassian')).config.confluence_spaces, []);
+  f.state.personalSpace = null;
+  assert.deepEqual((await h.manager('/integrations/atlassian/confluence-spaces?cloud_id=cloud-test&purpose=publish')).spaces, []);
+});
+
+test('space search finds unloaded pages, binds pagination to the query and rejects untrusted next links', async t => {
+  const { h, f } = await setup(t); await authorize(h);
+  f.state.spaces.push(...[51,52,53].map(id=>({id:String(id),key:`SEARCH${id}`,name:`검색할 공간 ${id}`,status:'current'})));
+  const base = '/integrations/atlassian/confluence-spaces?cloud_id=cloud-test&query=';
+  const first = await h.manager(base+encodeURIComponent('검색할'));
+  assert.deepEqual(first.spaces.map(row=>row.id),['51']); assert.ok(first.next_cursor);
+  assert.deepEqual((await h.manager(base+encodeURIComponent('검색할')+'&cursor='+encodeURIComponent(first.next_cursor))).spaces.map(row=>row.id),['52','53']);
+  await assert.rejects(h.manager(base+'other&cursor='+encodeURIComponent(first.next_cursor)), /검색 조건/);
+  assert.deepEqual((await h.manager(base+encodeURIComponent('없는 공간'))).spaces,[]);
+  f.state.spacesNext='https://untrusted.example/wiki/api/v2/spaces?cursor=bad';
+  await assert.rejects(h.manager(base+encodeURIComponent('검색할')), error=>error.status===502);
+});
+
+test('legacy OAuth stays connected but personal publication requires separate permissions', async t => {
+  const {h,f} = await setup(t), local = await report(h); await authorize(h);
+  f.state.scopes = ['read:jira-work','write:jira-work','read:page:confluence','read:space:confluence','write:page:confluence'];
+  await assert.rejects(publish(h,local.report.id,request('legacy-publish')), /개인 공간 게시 권한 연결/);
+  assert.equal((await h.manager('/integrations/atlassian')).connected,true);
+  assert.equal(writes(f).length,0);
+});
+
+test('missing personal space blocks all folder and page writes', async t => {
+  const {h,f} = await setup(t), local = await report(h); await authorize(h); f.state.personalSpace=null;
+  await assert.rejects(publish(h,local.report.id,request('missing-personal')), /개인 공간이 없습니다/);
+  assert.equal(f.state.calls.filter(row=>row.method==='POST' && /\/(folders|pages)$/.test(row.path)).length,0);
+});
+
+test('different reports share one folder across simultaneous publication and restart', async t => {
+  const {h,f} = await setup(t), first = await report(h), second = await report(h,'second-local-report'); await authorize(h);
+  await Promise.all([publish(h,first.report.id,request('first-personal-publish')),publish(h,second.report.id,request('second-personal-publish'))]);
+  assert.equal(writes(f).length,2); assert.equal(writes(f)[0].body.parentId,writes(f)[1].body.parentId);
+  assert.equal(f.state.calls.filter(row=>row.method==='POST' && row.path.endsWith('/folders')).length,1);
+  await h.stop('manager'); await h.start('manager');
+  const third=await report(h,'third-local-report');
+  await publish(h,third.report.id,request('third-personal-publish'));
+  assert.equal(writes(f).length,3); assert.equal(f.state.calls.filter(row=>row.method==='POST' && row.path.endsWith('/folders')).length,1);
+});
+
+test('lost folder response never creates duplicates, even before search indexes the folder', async t => {
+  const {h,f} = await setup(t), local = await report(h); await authorize(h); f.state.loseFolder=true;
+  await assert.rejects(publish(h,local.report.id,request('folder-response-lost')));
+  const created=f.state.contentTree.pop(); assert.ok(created);
+  await h.stop('manager'); await h.start('manager');
+  await assert.rejects(publish(h,local.report.id,request('folder-not-indexed')), /미확인/);
+  assert.equal(f.state.calls.filter(row=>row.method==='POST' && row.path.endsWith('/folders')).length,1);
+  f.state.contentTree.push(created);
+  assert.equal((await publish(h,local.report.id,request('folder-reconciled'))).state,'published');
+  assert.equal(writes(f)[0].body.parentId,created.id);
+});
+
+test('folder rejection can be retried; ambiguous existing folders stop without writes', async t => {
+  const {h,f} = await setup(t), local = await report(h); await authorize(h); f.state.folderFailure=403;
+  await assert.rejects(publish(h,local.report.id,request('folder-denied')),error=>error.status===403);
+  f.state.folderFailure=null;
+  f.state.contentTree=[1,2].map(n=>({id:String(700+n),type:'folder',title:'업무 요약',spaceId:'10',status:'current'}));
+  await assert.rejects(publish(h,local.report.id,request('ambiguous-folders')), /여러 개/);
+  assert.equal(writes(f).length,0);
+  f.state.contentTree=[];
+  assert.equal((await publish(h,local.report.id,request('folder-retry'))).state,'published');
 });

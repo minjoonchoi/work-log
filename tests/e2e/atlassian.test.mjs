@@ -162,3 +162,31 @@ test('zero duration is never rounded up or sent as invented Jira work time', asy
   const d = await eventually(() => h.manager(`/items/${item.id}`), d => d.sessions[0]?.worklog?.state === 'failed', 20000);
   assert.match(d.sessions[0].worklog.message, /양수 작업 시간/); assert.equal(f.state.worklogs.length, 0);
 });
+
+test('default OAuth requests only legacy scopes; optional exploration requests the union and denial preserves the existing token', async t => {
+  const { h, f } = await setup(t);
+  await authorize(h);
+  const base = ['offline_access','read:jira-work','read:jira-user','write:jira-work','read:page:confluence','read:space:confluence','write:page:confluence'];
+  const extra = ['read:folder:confluence','read:content-details:confluence','write:folder:confluence'];
+  const original = fs.readFileSync(f.record,'utf8');
+  const begin = async input => new URL((await h.manager('/integrations/atlassian/authorize',{method:'POST',body:input})).authorization_url);
+  const reject = async url => {
+    const callback = new URL(url.searchParams.get('redirect_uri'));
+    callback.search = new URLSearchParams({state:url.searchParams.get('state'),error:'access_denied'});
+    assert.equal((await fetch(callback)).status,400);
+  };
+  const basic = await begin({}); assert.deepEqual(basic.searchParams.get('scope').split(' '),base); await reject(basic);
+  const advanced = await begin({confluence_exploration:true}); assert.deepEqual(advanced.searchParams.get('scope').split(' '),[...base,...extra]); await reject(advanced);
+  assert.equal(fs.readFileSync(f.record,'utf8'),original);
+  assert.equal((await h.manager('/integrations/atlassian')).connected,true);
+  f.state.scopes=base;
+  assert.ok((await h.manager('/integrations/atlassian/sites?product=jira')).length);
+  const spaces = await h.manager('/integrations/atlassian/confluence-spaces?cloud_id=cloud-test');
+  assert.deepEqual(spaces.spaces.map(row=>row.id),['10','20']); assert.equal(spaces.can_browse,false);
+  assert.equal(spaces.personal_space_status,'permission_required');
+  assert.equal(f.state.calls.some(row=>row.path.endsWith('/user/current')),false);
+  const search = await h.manager('/integrations/atlassian/confluence-spaces?cloud_id=cloud-test&query='+encodeURIComponent('운영'));
+  assert.deepEqual(search.spaces.map(row=>row.id),['30']);
+  await assert.rejects(begin({confluence_exploration:'true'}), error=>error.status===400);
+  await assert.rejects(begin({scope:'admin'}), error=>error.status===400);
+});

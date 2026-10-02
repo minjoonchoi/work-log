@@ -1,4 +1,3 @@
-import { parentSelection } from './confluence-targets.mjs';
 import { assert, digest, json, now, redact } from './shared.mjs';
 import { confluenceStorage } from './confluence-storage.mjs';
 import { reportBodyMarkdown } from '../apps/web/report-body.js';
@@ -30,6 +29,9 @@ export function confluenceReports({ store, reports, client, notify = () => {} })
   db.prepare("UPDATE confluence_publications SET state='failed',message='전송 전에 서비스가 종료되었습니다. 새 요청으로 게시할 수 있습니다.' WHERE state='preparing'").run();
   db.prepare("UPDATE confluence_publications SET state='unknown',message='게시 응답을 확인하지 못했습니다. Confluence 페이지 ID로 결과를 확인하세요.' WHERE state='sending'").run();
   const one = (sql, ...p) => db.prepare(sql).get(...p), exec = (sql, ...p) => db.prepare(sql).run(...p);
+  db.exec(`CREATE TABLE IF NOT EXISTS confluence_report_folders (
+    cloud_id TEXT NOT NULL, space_id TEXT NOT NULL, folder_id TEXT, state TEXT NOT NULL,
+    PRIMARY KEY(cloud_id,space_id));`);
   const queues = new Map();
   function exclusive(key, fn) {
     const task = (queues.get(key) || Promise.resolve()).catch(() => {}).then(fn); queues.set(key, task);
@@ -50,25 +52,69 @@ export function confluenceReports({ store, reports, client, notify = () => {} })
       state, message ? redact(message).slice(0, 2000) : null, remote.page_id || null, remote.url || null, now(), op); notify();
     return view(raw(op));
   }
+  async function reportFolder(cloud, space) {
+    let saved = one('SELECT * FROM confluence_report_folders WHERE cloud_id=? AND space_id=?', cloud, space.id);
+    if (saved?.folder_id) {
+      let row;
+      try { row = await client.request(`/ex/confluence/${cloud}/wiki/api/v2/folders/${saved.folder_id}`); }
+      catch (error) {
+        if (error.status !== 404) throw error;
+        exec('DELETE FROM confluence_report_folders WHERE cloud_id=? AND space_id=?', cloud, space.id); saved = null;
+      }
+      if (saved) {
+        assert(row?.id === saved.folder_id && row.spaceId === space.id && row.status === 'current' && row.title === '업무 요약',
+          '기존 업무 요약 폴더가 이동·변경되었거나 삭제되었습니다. Confluence에서 폴더를 확인하세요.', 409);
+        return saved.folder_id;
+      }
+    }
+    let cursor = null, folder = null;
+    const seen = new Set();
+    do {
+      assert(!seen.has(cursor) && seen.size < 100, '업무 요약 폴더 검색을 완료하지 못했습니다. 다시 시도하세요.', 502); seen.add(cursor);
+      const result = await client.confluenceTargets({ cloud_id: cloud, space_id: space.id, query: '업무 요약', cursor });
+      for (const row of result.items.filter(row => row.type === 'folder' && row.title === '업무 요약')) {
+        assert(!folder || folder === row.id, '개인 공간에 업무 요약 폴더가 여러 개 있습니다. Confluence에서 하나로 정리한 뒤 다시 게시하세요.', 409);
+        folder = row.id;
+      }
+      cursor = result.next_cursor;
+    } while (cursor);
+    if (!folder) {
+      assert(saved?.state !== 'unknown', '업무 요약 폴더 생성 결과가 미확인입니다. Confluence에서 생성 여부를 확인한 뒤 다시 시도하세요. 중복 폴더는 만들지 않습니다.', 409);
+      try {
+        folder = await client.createReportFolder(cloud, space.id, () => {
+          exec("INSERT INTO confluence_report_folders(cloud_id,space_id,state) VALUES(?,?,'unknown') ON CONFLICT(cloud_id,space_id) DO UPDATE SET state='unknown'", cloud, space.id);
+        });
+      } catch (error) {
+        if (error.not_sent || (error.status >= 400 && error.status < 500)) exec("DELETE FROM confluence_report_folders WHERE cloud_id=? AND space_id=? AND state='unknown'", cloud, space.id);
+        error.message = `업무 요약 폴더 생성 실패: ${error.message}`;
+        throw error;
+      }
+    }
+    exec("INSERT INTO confluence_report_folders(cloud_id,space_id,folder_id,state) VALUES(?,?,?,'ready') ON CONFLICT(cloud_id,space_id) DO UPDATE SET folder_id=excluded.folder_id,state='ready'", cloud, space.id, folder);
+    return folder;
+  }
   function publish(reportId, input) {
-    assert(input && Object.keys(input).every(k => ['operation_id', 'cloud_id', 'space_id', 'parent_id', 'parent_type'].includes(k))
+    assert(input && Object.keys(input).every(k => ['operation_id', 'cloud_id'].includes(k))
       && typeof input.operation_id === 'string' && /^[a-zA-Z0-9-]{8,80}$/.test(input.operation_id)
-      && typeof input.cloud_id === 'string' && /^[a-zA-Z0-9-]{1,200}$/.test(input.cloud_id)
-      && typeof input.space_id === 'string' && /^\d{1,30}$/.test(input.space_id), 'Confluence 게시 요청과 공간을 확인하세요.');
-    const { operation_id, cloud_id, space_id } = input;
-    const parent = parentSelection(input.parent_id, input.parent_type), parent_id = parent?.id || '', parent_type = parent?.type || '';
-    return exclusive(json([reportId, cloud_id, space_id, parent_id]), async () => {
+      && typeof input.cloud_id === 'string' && /^[a-zA-Z0-9-]{1,200}$/.test(input.cloud_id), '개인 공간 게시 요청을 확인하세요. 공간·상위 폴더는 직접 지정할 수 없습니다.');
+    const { operation_id, cloud_id } = input;
+    // Serialize folder discovery/creation across all reports for this site.
+    return exclusive(json(['personal-publication', cloud_id]), async () => {
       const prior = raw(operation_id);
       if (prior) {
-        assert(prior.report_id === reportId && prior.cloud_id === cloud_id && prior.space_id === space_id && prior.parent_id === parent_id && prior.parent_type === parent_type, '같은 게시 요청 식별자의 내용이 다릅니다.', 409);
+        assert(prior.report_id === reportId && prior.cloud_id === cloud_id, '같은 게시 요청 식별자의 내용이 다릅니다.', 409);
         return { ...view(prior), repeated: true };
       }
-      const current = one("SELECT * FROM confluence_publications WHERE report_id=? AND cloud_id=? AND space_id=? AND parent_id=? AND state IN ('preparing','sending','unknown','published')", reportId, cloud_id, space_id, parent_id);
-      if (current) return { ...view(current), repeated: true };
       const detail = reports.detail(reportId, { summary: true }), { report } = detail;
       assert(report.state === 'completed' && typeof report.title === 'string' && report.title.trim() && report.title.length <= 255
         && typeof report.body === 'string' && report.body.trim(), '완료된 로컬 요약만 게시할 수 있습니다.', 409);
       const storage = buildReportStorage(detail), time = now();
+      const space = await client.personalPublicationSpace(cloud_id), space_id = space.id;
+      const existing = one("SELECT * FROM confluence_publications WHERE report_id=? AND cloud_id=? AND space_id=? AND parent_type='folder' AND parent_id=(SELECT folder_id FROM confluence_report_folders WHERE cloud_id=? AND space_id=?) AND state IN ('preparing','sending','unknown','published')", reportId, cloud_id, space_id, cloud_id, space_id);
+      if (existing) return { ...view(existing), repeated: true };
+      const parent_id = await reportFolder(cloud_id, space), parent_type = 'folder';
+      const current = one("SELECT * FROM confluence_publications WHERE report_id=? AND cloud_id=? AND space_id=? AND parent_id=? AND state IN ('preparing','sending','unknown','published')", reportId, cloud_id, space_id, parent_id);
+      if (current) return { ...view(current), repeated: true };
       exec('INSERT INTO confluence_publications(operation_id,report_id,cloud_id,space_id,title,storage,storage_digest,state,created_at,updated_at,parent_id,parent_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', operation_id, reportId, cloud_id, space_id,
         report.title, storage, digest(storage), 'preparing', time, time, parent_id, parent_type); notify();
       try {

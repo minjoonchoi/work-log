@@ -9,6 +9,7 @@ import { atlFixture, authorize } from '../fixtures/atlassian.mjs';
 let h, f;
 test.beforeEach(async ({ context }) => {
   h = new Harness(); f = await atlFixture(h);
+  f.state.personalSpace = {...f.state.spaces[0],type:'personal'};
   h.env.HARNESS_TEST_SESSION_SUMMARIES = '0';
   h.env.HARNESS_TEST_REPORT_FIXTURE = JSON.stringify({ delayMs: 250 });
   await h.start('runtime'); await h.start('manager');
@@ -150,19 +151,19 @@ test('an empty selected date gives a useful error and a failed generated report 
   await expect(page.locator('.report-row')).toHaveCount(2); expect(pageWrites()).toHaveLength(0);
 });
 
-test('Confluence space paging and confirmation publish the completed local report once to the chosen space', async ({ page }) => {
-  await h.ingest(sample('report-publish', '2026-09-17')); const data = await createLocal(page);
-  await authorize(h); await page.locator('#publish-report').click();
-  await expect(page.locator('#report-confluence-space option')).toHaveCount(2);
-  await page.locator('#report-spaces-more').click(); await expect(page.locator('#report-confluence-space option')).toHaveCount(3);
-  await page.locator('#report-confluence-space').selectOption('30'); expect(pageWrites()).toHaveLength(0);
-  await page.getByRole('dialog').getByRole('button', { name: '취소', exact: true }).click(); expect(pageWrites()).toHaveLength(0);
-  await page.locator('#publish-report').click(); await page.locator('#report-spaces-more').click(); await page.locator('#report-confluence-space').selectOption('30');
+test('personal publication has no space or parent selector and creates its folder only on confirmation', async ({page}) => {
+  await h.ingest(sample('report-publish','2026-09-17')); const data=await createLocal(page); await authorize(h);
+  await expect(page.locator('#publish-report')).toHaveText('개인 공간으로 게시');
+  await page.locator('#publish-report').click(); await expect(page.locator('#confirm-publish-report')).toBeEnabled();
+  await expect(page.locator('#report-personal-space')).toContainText('업무 요약');
+  await expect(page.locator('#report-confluence-space, #confluence-location')).toHaveCount(0);
+  expect(f.state.calls.filter(row=>row.method==='POST' && row.path.endsWith('/folders'))).toHaveLength(0);
+  await page.getByRole('dialog').getByRole('button',{name:'취소',exact:true}).click(); expect(pageWrites()).toHaveLength(0);
+  await page.locator('#publish-report').click(); await expect(page.locator('#confirm-publish-report')).toBeEnabled();
   await page.locator('#confirm-publish-report').click(); await expect(page.getByRole('dialog')).not.toBeVisible();
-  await expect(page.locator('.report-publication')).toContainText('Confluence 게시됨');
-  expect(pageWrites()).toHaveLength(1); expect(pageWrites()[0].body.spaceId).toBe('30'); expect(pageWrites()[0].body.title).toBe(data.report.title);
-  await expect(page.locator('[data-report-url]')).toHaveAttribute('href', /https:\/\/fixture\.atlassian\.net\/wiki\//);
-  const saved = await h.manager(`/reports/${data.report.id}`); expect(saved.report.body).toBe(data.report.body); expect(saved.publications[0].state).toBe('published');
+  expect(pageWrites()).toHaveLength(1); expect(pageWrites()[0].body.spaceId).toBe('10');
+  expect(pageWrites()[0].body.parentId).toBe(f.state.contentTree[0].id);
+  expect(pageWrites()[0].body.title).toBe(data.report.title);
 });
 
 test('lost Confluence response stays uncertain without duplicate pages and resolves only after checking a page ID', async ({ page }) => {
@@ -260,7 +261,7 @@ test('unchanged report refreshes reuse captured sources while state and publicat
   expect(details).toHaveLength(before);
   await authorize(h);
   const updated = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === `/api/reports/${data.report.id}` && new URL(response.url()).searchParams.get('view') === 'summary');
-  await h.manager(`/reports/${data.report.id}/publish`, { method: 'POST', body: { operation_id: 'report-cache-publication', cloud_id: 'cloud-test', space_id: '10' } });
+  await h.manager(`/reports/${data.report.id}/publish`, { method: 'POST', body: { operation_id: 'report-cache-publication', cloud_id: 'cloud-test' } });
   expect(Object.hasOwn(await (await updated).json(), 'sessions')).toBe(false);
   await expect(page.locator('.report-publication')).toContainText('Confluence 게시됨');
   expect(details.filter(url => !url.searchParams.has('view'))).toHaveLength(1);
@@ -312,4 +313,17 @@ test('calendar drag selects a date range across rows, removes ranges, cancels wi
   await expect(page.locator('#report-selection-count')).toHaveText('4일 선택됨');
   await page.locator('[data-view="month"]').click();
   for (const day of [14,15,16,17]) await expect(pick(page, `2026-09-${day}`)).toBeChecked();
+});
+
+test('missing personal publication permissions or space disables publication with a specific reason', async ({page}) => {
+  await h.ingest(sample('report-basic','2026-09-17')); await createLocal(page); await authorize(h);
+  const scopes=f.state.scopes; f.state.scopes=scopes.filter(s=>s!=='write:folder:confluence');
+  await page.locator('#publish-report').click();
+  await expect(page.locator('#report-publish-error')).toContainText('개인 공간 게시 권한 연결');
+  await expect(page.locator('#confirm-publish-report')).toBeDisabled();
+  await page.getByRole('button',{name:'취소',exact:true}).click();
+  f.state.scopes=scopes; f.state.personalSpace=null;
+  await page.locator('#publish-report').click();
+  await expect(page.locator('#report-publish-error')).toContainText('개인 공간이 없습니다');
+  await expect(page.locator('#confirm-publish-report')).toBeDisabled(); expect(pageWrites()).toHaveLength(0);
 });

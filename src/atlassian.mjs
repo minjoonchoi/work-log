@@ -1,4 +1,5 @@
-import { spaceRestrictions, assertAllowedSpace, verifyParent, confluenceTargets } from './confluence-targets.mjs';
+import { searchSpaces } from './confluence-space-search.mjs';
+import { spaceRestrictions, ensureAllowedSpace, verifyParent, confluenceTargets } from './confluence-targets.mjs';
 import { atlassianFailure } from './atlassian-errors.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +12,9 @@ import { certificatePath, readCertificates, AtlassianTransport, connectionFailur
 export { jiraDescription } from './jira-adf.mjs';
 
 export const ATLASSIAN_CALLBACK = 'http://127.0.0.1:47831/oauth/atlassian/callback';
-export const ATLASSIAN_SCOPES = ['offline_access', 'read:jira-work', 'read:jira-user', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence', 'read:folder:confluence', 'read:hierarchical-content:confluence', 'read:content-details:confluence'];
+export const ATLASSIAN_BASE_SCOPES = ['offline_access', 'read:jira-work', 'read:jira-user', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'];
+export const ATLASSIAN_EXPLORATION_SCOPES = ['read:folder:confluence', 'read:content-details:confluence', 'write:folder:confluence'];
+export const ATLASSIAN_SCOPES = [...ATLASSIAN_BASE_SCOPES, ...ATLASSIAN_EXPLORATION_SCOPES];
 const clientId = value => {
   assert(typeof value === 'string' && value.trim() && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value), 'Client ID를 확인하세요.');
   return value.trim();
@@ -70,7 +73,7 @@ export class AtlassianClient {
   async statusValue() {
     const config = this.config();
     const result = { config: config ? publicConfiguration(config) : null, has_client_secret: false,
-      callback_url: this.callback, connected: false, connecting: !!this.flow && json(oauthConfiguration(this.flow.config)) === json(oauthConfiguration(config)), scopes: ATLASSIAN_SCOPES,
+      callback_url: this.callback, connected: false, connecting: !!this.flow && json(oauthConfiguration(this.flow.config)) === json(oauthConfiguration(config)), scopes: ATLASSIAN_SCOPES, base_scopes: ATLASSIAN_BASE_SCOPES, exploration_scopes: ATLASSIAN_EXPLORATION_SCOPES,
       message: this.legacyConfig ? '기존 1Password 설정은 더 이상 사용하지 않습니다. Client ID와 Client Secret을 입력해 다시 저장하세요.' : this.flowError };
     if (!config) return result;
     try {
@@ -137,7 +140,10 @@ export class AtlassianClient {
       return { client_secret: credentials.client_secret };
     });
   }
-  async begin() {
+  async begin(input = {}) {
+    assert(input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).every(key => key === 'confluence_exploration')
+      && (input.confluence_exploration === undefined || typeof input.confluence_exploration === 'boolean'), '연결 권한 요청을 확인하세요.');
+    const scopes = input.confluence_exploration ? ATLASSIAN_SCOPES : ATLASSIAN_BASE_SCOPES;
     return this.exclusive(async () => {
       const config = this.config(); assert(config, '먼저 Client ID와 Client Secret을 입력해 저장하세요.');
       readCertificates(config.ca_cert_path);
@@ -158,7 +164,7 @@ export class AtlassianClient {
       this.flowTimer.unref();
       const authorize = new URL('/authorize', this.authOrigin);
       authorize.search = new URLSearchParams({ audience: 'api.atlassian.com', client_id: credentials.client_id,
-        scope: ATLASSIAN_SCOPES.join(' '), redirect_uri: callback.href, state, response_type: 'code', prompt: 'consent' });
+        scope: scopes.join(' '), redirect_uri: callback.href, state, response_type: 'code', prompt: 'consent' });
       this.onChange(); return { authorization_url: authorize.href };
     });
   }
@@ -238,10 +244,10 @@ export class AtlassianClient {
     const send = async token => {
       // Recheck local snapshots after token/site I/O, immediately before a write.
       try {
-        authorization?.(token);
+        await authorization?.(token);
         const pending = beforeSend?.();
         if (pending?.then) await pending;
-        authorization?.(token);
+        await authorization?.(token);
       } catch (e) { e.not_sent = true; throw e; }
       try { return await this.transport.fetch(new URL(apiPath, this.apiOrigin), { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: json(body) } : {}), redirect: 'error', signal: AbortSignal.timeout(15000) }, this.config()?.ca_cert_path); }
@@ -390,12 +396,44 @@ export class AtlassianClient {
     return new URL(`/wiki/pages/viewpage.action?pageId=${pageId}`, url).href;
   }
   confluenceTargets(input) { return confluenceTargets(this, input); }
-  async confluenceSpaces(cloudId, cursor = null, publication = false) {
+  async confluencePersonalSpace(cloudId, expectedToken) {
+    assert(typeof cloudId === 'string' && /^[a-zA-Z0-9-]{1,200}$/.test(cloudId), 'Confluence 사이트를 확인하세요.');
+    const generation = this.authorizationGeneration, config = json(oauthConfiguration(this.config()));
+    const authorization = token => {
+      assert(this.authorizationGeneration === generation && json(oauthConfiguration(this.config())) === config
+        && (!expectedToken || expectedToken === token), 'Atlassian 연결이 변경되었습니다. 개인 공간을 다시 불러오세요.', 409);
+    };
+    let user;
+    try { user = await this.request(`/ex/confluence/${cloudId}/wiki/rest/api/user/current?expand=personalSpace`, { authorization }); }
+    catch (error) { if (error.status === 403) error.message = '개인 공간 조회 권한이 없습니다. read:content-details:confluence 권한으로 Atlassian을 다시 연결하세요.'; throw error; }
+    authorization(expectedToken);
+    assert(user?.type === 'known' && typeof user.accountId === 'string' && user.accountId.length > 0, '현재 Confluence 사용자를 확인하지 못했습니다.', 502);
+    if (user.personalSpace == null) return null;
+    const row = user.personalSpace;
+    assert(/^\d{1,30}$/.test(String(row.id)) && row.type === 'personal' && typeof row.name === 'string' && typeof row.key === 'string', '개인 공간 정보를 확인하지 못했습니다.', 502);
+    if (row.status !== 'current') return null;
+    return { id: String(row.id), name: row.name, key: row.key, personal: true };
+  }
+  async confluenceSpaces(cloudId, cursor = null, publication = false, query = '') {
     assert(cursor === null || (typeof cursor === 'string' && cursor.length > 0 && cursor.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(cursor)), 'Confluence 공간 페이지를 다시 불러오세요.');
     const site = await this.site(cloudId, 'confluence');
     assert(site.scopes.includes('read:space:confluence'), 'Confluence 공간 읽기 권한으로 OAuth를 다시 연결하세요.', 403);
+    assert(typeof query === 'string' && query.length <= 200 && !/[\u0000-\u001f\u007f]/.test(query), '공간 검색어는 200자 이내로 입력하세요.');
+    query = query.trim();
+    let personal = null, personalStatus = 'permission_required';
+    if (site.scopes.includes('read:content-details:confluence')) {
+      try { personal = await this.confluencePersonalSpace(cloudId); personalStatus = personal ? 'available' : 'not_created'; }
+      catch (error) { if (error.status !== 403) throw error; }
+    }
+    const capabilities = { personal_space: personal, personal_space_status: personalStatus,
+      can_browse: ATLASSIAN_EXPLORATION_SCOPES.every(scope => site.scopes.includes(scope)) };
     const allowed = this.config()?.confluence_spaces;
-    if (publication && allowed != null) return { spaces: allowed.filter(row => row.cloud_id === cloudId).map(row => ({ id: row.space_id, name: row.name || row.space_id, key: row.key || row.space_id })), next_cursor: null, restricted: true };
+    if (publication && allowed != null) {
+      const selected = allowed.filter(row => row.cloud_id === cloudId).map(row => ({ id: row.space_id, name: row.name || row.space_id, key: row.key || row.space_id }));
+      const spaces = [...(personal ? [personal] : []), ...selected.filter(row => row.id !== personal?.id)];
+      return { spaces: spaces.filter(row => row.personal || `${row.name} ${row.key}`.toLowerCase().includes(query.toLowerCase())), ...capabilities, next_cursor: null, restricted: true };
+    }
+    if (query) return { ...await searchSpaces(this, cloudId, site, query, cursor), ...capabilities };
     const base = `/ex/confluence/${cloudId}/wiki/api/v2/spaces`, params = new URLSearchParams({ status: 'current', limit: '50' });
     if (cursor) params.set('cursor', cursor);
     const result = await this.request(`${base}?${params}`);
@@ -415,12 +453,32 @@ export class AtlassianClient {
       next_cursor = next.searchParams.get('cursor');
       assert(next_cursor && next_cursor.length <= 4096 && next_cursor !== cursor && !/[\u0000-\u001f\u007f]/.test(next_cursor), 'Confluence 공간 페이지 정보를 확인하세요.', 502);
     }
-    return { spaces, next_cursor };
+    return { spaces, next_cursor, ...capabilities };
+  }
+  async personalPublicationSpace(cloudId) {
+    const site = await this.site(cloudId, 'confluence');
+    assert(['read:page:confluence', 'read:space:confluence', 'write:page:confluence', ...ATLASSIAN_EXPLORATION_SCOPES].every(scope => site.scopes.includes(scope)),
+      '개인 공간 게시 권한이 부족합니다. Atlassian 설정에서 개인 공간 게시 권한 연결을 완료하세요.', 403);
+    const personal = await this.confluencePersonalSpace(cloudId);
+    assert(personal, '개인 공간이 없습니다. Confluence에서 개인 공간을 만든 뒤 다시 게시하세요.', 409);
+    return personal;
+  }
+  async assertPersonalPublication(cloudId, spaceId, token) {
+    const personal = await this.confluencePersonalSpace(cloudId, token);
+    assert(personal?.id === spaceId, '현재 사용자의 개인 공간에만 게시할 수 있습니다. 연결 계정을 확인하세요.', 403);
+  }
+  async createReportFolder(cloudId, spaceId, beforeSend) {
+    const row = await this.request(`/ex/confluence/${cloudId}/wiki/api/v2/folders`, { method: 'POST',
+      body: { spaceId, title: '업무 요약' }, beforeSend,
+      authorization: token => this.assertPersonalPublication(cloudId, spaceId, token) });
+    assert(typeof row?.id === 'string' && /^\d+$/.test(row.id) && row.spaceId === spaceId && row.title === '업무 요약' && row.status === 'current',
+      '업무 요약 폴더 생성 결과를 확인하지 못했습니다.', 502);
+    return row.id;
   }
   async createConfluencePage({ cloud_id, space_id, title, storage, parent_id = null, parent_type = null }, { beforeSend } = {}) {
     let site;
     try {
-      assertAllowedSpace(this, cloud_id, space_id);
+      await ensureAllowedSpace(this, cloud_id, space_id);
       site = await this.site(cloud_id, 'confluence');
       assert(site.scopes.includes('write:page:confluence') && site.scopes.includes('read:space:confluence'), 'Confluence 공간 읽기·페이지 쓰기 권한으로 OAuth를 다시 연결하세요.', 403);
       assert(typeof space_id === 'string' && /^\d+$/.test(space_id) && typeof title === 'string' && title.trim() && title.length <= 255
@@ -433,7 +491,7 @@ export class AtlassianClient {
     } catch (e) { e.not_sent = true; throw e; }
     let result;
     try {
-      result = await this.request(`/ex/confluence/${cloud_id}/wiki/api/v2/pages`, { method: 'POST', beforeSend: async () => { await verifyParent(this, cloud_id, space_id, parent_id, parent_type); return beforeSend?.(); }, authorization: () => assertAllowedSpace(this, cloud_id, space_id),
+      result = await this.request(`/ex/confluence/${cloud_id}/wiki/api/v2/pages`, { method: 'POST', beforeSend: async () => { await verifyParent(this, cloud_id, space_id, parent_id, parent_type); return beforeSend?.(); }, authorization: token => this.assertPersonalPublication(cloud_id, space_id, token),
         body: { ...(parent_id ? { parentId: parent_id } : {}), spaceId: space_id, status: 'current', title, body: { representation: 'storage', value: storage } } });
       assert(typeof result?.id === 'string' && /^\d+$/.test(result.id) && result.spaceId === space_id
         && result.title === title && result.status === 'current' && (!parent_id || result.parentId === parent_id), 'Confluence 페이지 생성 결과를 확인하지 못했습니다.', 502);

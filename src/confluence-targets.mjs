@@ -22,6 +22,17 @@ export function assertAllowedSpace(client, cloud, space) {
   assert(allowed == null || allowed.some(row => row.cloud_id === cloud && row.space_id === space),
     '게시가 허용되지 않은 Confluence 공간입니다. Atlassian 설정에서 허용 공간을 선택하세요.', 403);
 }
+// Personal space membership is resolved from the authenticated user, never from
+// client-provided names, keys or a persisted "personal" flag.
+export async function ensureAllowedSpace(client, cloud, space, token) {
+  try { assertAllowedSpace(client, cloud, space); return; }
+  catch (error) {
+    if (error.status !== 403 || !client.confluencePersonalSpace) throw error;
+    const personal = await client.confluencePersonalSpace(cloud, token);
+    if (personal?.id === space) return;
+    assertAllowedSpace(client, cloud, space);
+  }
+}
 export function parentSelection(id, type) {
   if (id == null || id === '') { assert(type == null || type === '', '상위 페이지·폴더를 선택하세요.'); return null; }
   assert(typeof id === 'string' && /^\d{1,30}$/.test(id) && ['page', 'folder'].includes(type), '상위 페이지·폴더를 다시 선택하세요.');
@@ -29,7 +40,7 @@ export function parentSelection(id, type) {
 }
 export async function verifyParent(client, cloud, space, id, type) {
   const parent = parentSelection(id, type); if (!parent) return null;
-  assertAllowedSpace(client, cloud, space);
+  await ensureAllowedSpace(client, cloud, space);
   const row = await client.request(`/ex/confluence/${cloud}/wiki/api/v2/${type === 'folder' ? 'folders' : 'pages'}/${id}`);
   assert(row?.id === id && row.spaceId === space && row.status === 'current', '선택한 상위 페이지·폴더가 해당 공간에 없거나 사용할 수 없습니다. 다시 선택하세요.', 409);
   return { id, type, title: row.title };
@@ -44,7 +55,7 @@ function pageParams(cursor, key) {
   return value.cursor ? { cursor: value.cursor } : { start: String(value.start) };
 }
 export async function confluenceTargets(client, { cloud_id, space_id, query = '', cursor = null, parent_id = null, parent_type = null }) {
-  assertAllowedSpace(client, cloud_id, space_id);
+  await ensureAllowedSpace(client, cloud_id, space_id);
   assert(typeof query === 'string' && query.length <= 200 && !/[\u0000-\u001f\u007f]/.test(query), '검색어는 200자 이내로 입력하세요.');
   const site = await client.site(cloud_id, 'confluence');
   const parent = parentSelection(parent_id, parent_type);
@@ -81,6 +92,6 @@ export async function confluenceTargets(client, { cloud_id, space_id, query = ''
     next_cursor = Buffer.from(JSON.stringify({ key, ...(remote ? { cursor: remote } : { start: Number(start) }) })).toString('base64url');
     assert(next_cursor !== cursor, 'Confluence 탐색 페이지가 반복되었습니다.', 502);
   }
-  assertAllowedSpace(client, cloud_id, space_id);
+  await ensureAllowedSpace(client, cloud_id, space_id);
   return { items, next_cursor };
 }

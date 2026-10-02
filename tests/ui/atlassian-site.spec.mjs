@@ -111,7 +111,7 @@ test('Jira create, existing-issue search and Confluence explicitly select the pr
   await report(page); await page.locator('#publish-report').click();
   await expect(page.locator('#report-confluence-site')).toHaveValue('cloud-test');
   await expect(page.locator('#report-confluence-site option:checked')).toHaveText('Fixture 팀 · https://fixture.atlassian.net');
-  await expect(page.locator('#report-confluence-space')).toHaveValue('10');
+  await expect(page.locator('#report-personal-space')).toBeVisible();
   expect(products).toEqual(['jira', 'jira', 'confluence']);
   expect(f.state.calls.filter(call => call.method !== 'GET')).toHaveLength(0);
   await page.screenshot({ path: 'output/screenshots/company-atlassian-site-selection.png' });

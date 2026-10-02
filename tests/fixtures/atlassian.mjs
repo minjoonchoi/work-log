@@ -7,10 +7,10 @@ import assert from 'node:assert/strict';
 // Protocol simulators: never contact Atlassian, op, or the user's Keychain.
 export const oauthClient = { client_id: 'fixture-client', client_secret: 'fixture-secret' };
 export async function atlFixture(h, { tls } = {}) {
-  const state = { tokenCalls: [], calls: [], issues: [], worklogs: [], comments: [], pages: [], contentTree: [],
+  const state = { tokenCalls: [], calls: [], issues: [], worklogs: [], comments: [], pages: [], contentTree: [], personalSpace: null,
     spaces: [{ id: '10', key: 'TEAM', name: '팀 업무', status: 'current' }, { id: '20', key: 'DOCS', name: '프로젝트 문서', status: 'current' }, { id: '30', key: 'OPS', name: '운영 기록', status: 'current' }],
     pageFailure: null, losePage: false, refresh: 'fixture-refresh-1', access: 'fixture-access-1', revision: 1,
-    scopes: ['read:jira-work', 'read:jira-user', 'write:jira-work', 'read:folder:confluence', 'read:hierarchical-content:confluence', 'read:content-details:confluence', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'], rejectRefresh: false, rejectAccessOnce: false, worklogFailure: null, loseIssue: false, loseWorklog: false,
+    scopes: ['read:jira-work', 'read:jira-user', 'write:jira-work', 'read:folder:confluence', 'write:folder:confluence', 'read:hierarchical-content:confluence', 'read:content-details:confluence', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'], rejectRefresh: false, rejectAccessOnce: false, worklogFailure: null, loseIssue: false, loseWorklog: false,
     user: { accountId: 'fixture-current-user', active: true, displayName: 'Fixture 사용자' }, myselfFailure: null,
     commentFailure: null, commentReadFailure: null, loseComment: false,
     transitionFailure: null, issueReadFailure: null, issueUpdateFailure: null, issueUpdateResponseLost: false,
@@ -63,6 +63,12 @@ export async function atlFixture(h, { tls } = {}) {
         if (!state.scopes.includes('read:jira-user')) return send({}, 403);
         return send(user);
       }
+      if (url.pathname.endsWith('/wiki/rest/api/user/current')) {
+        assert.equal(url.searchParams.get('expand'), 'personalSpace');
+        if (state.personalFailure) return send({}, state.personalFailure);
+        if (state.personalDelay) await new Promise(resolve => setTimeout(resolve, state.personalDelay));
+        return send({ type: 'known', accountId: state.user.accountId, personalSpace: state.personalSpace });
+      }
       if (url.pathname.endsWith('/search/jql')) {
         const jql = url.searchParams.get('jql'), token = url.searchParams.get('nextPageToken');
         const terms = [...jql.matchAll(/summary ~ "([^"]+)\*"/g)].map(m => m[1].toLowerCase());
@@ -112,6 +118,13 @@ export async function atlFixture(h, { tls } = {}) {
       if (content) {
         const row = state.contentTree.find(row => row.id === content[2] && row.type === (content[1] === 'pages' ? 'page' : 'folder'));
         if (row) return send(row);
+      }
+      if (url.pathname.endsWith('/wiki/api/v2/folders') && req.method === 'POST') {
+        if (state.folderFailure) return send({}, state.folderFailure);
+        const folder = { id: String(8000 + state.contentTree.length), type: 'folder', spaceId: body.spaceId, title: body.title, status: 'current' };
+        state.contentTree.push(folder);
+        if (state.loseFolder) { state.loseFolder = false; return res.destroy(); }
+        return send(folder);
       }
       if (url.pathname.endsWith('/wiki/api/v2/pages') && req.method === 'POST') {
         assert.equal(body.body.representation, 'storage'); assert.equal(body.status, 'current');

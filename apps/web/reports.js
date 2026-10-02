@@ -2,7 +2,6 @@ import { calendarSelection } from './calendar-selection.js';
 import { showListSkeleton, finishListLoading } from './loading.js';
 import { descriptionHTML } from './description.js';
 import { reportBodyMarkdown } from './report-body.js';
-import { locationHTML, locationPicker } from './confluence-location.js';
 
 export function reportsUI({ api, esc, modal, toast, absoluteTime, navigate, active, showSettings }) {
   const $ = selector => document.querySelector(selector), selectedDates = new Set();
@@ -89,37 +88,30 @@ export function reportsUI({ api, esc, modal, toast, absoluteTime, navigate, acti
     const status = await api('/integrations/atlassian');
     if (!current()) return;
     if (!status.connected) { toast('Confluence 게시를 위해 Atlassian을 연결하세요. 로컬 요약은 보관됩니다.'); return showSettings(); }
-    const sites = (await api('/integrations/atlassian/sites?product=confluence')).filter(site => site.scopes?.includes('read:page:confluence') && (status.config?.confluence_spaces == null || status.config.confluence_spaces.some(row => row.cloud_id === site.id)));
+    const sites = (await api('/integrations/atlassian/sites?product=confluence')).filter(site => site.scopes?.includes('read:page:confluence'));
     if (!current()) return;
-    modal(`<h2>Confluence에 업무 요약 게시</h2><p>확인한 요약으로 선택한 공간에 새 페이지를 만듭니다.</p><strong>${esc(report.title)}</strong><div id="report-publish-error" class="error" role="alert" hidden></div>
+    modal(`<h2>개인 공간으로 게시</h2><p>내 개인 공간의 <strong>업무 요약</strong> 폴더에 새 페이지를 만듭니다. 폴더가 없으면 자동으로 생성합니다.</p><strong>${esc(report.title)}</strong><div id="report-publish-error" class="error" role="alert" hidden></div>
       <label for="report-confluence-site">사이트</label><select id="report-confluence-site">${sites.map(site => `<option value="${esc(site.id)}">${esc(site.url ? `${site.name} · ${site.url}` : site.name)}</option>`).join('')}</select>
-      <label for="report-confluence-space">Confluence 공간</label><select id="report-confluence-space" disabled></select><button id="report-spaces-more" class="secondary" hidden>공간 더 보기</button>
-      ${locationHTML}<div class="dialog-actions"><button data-close>취소</button><button id="confirm-publish-report" class="primary" disabled>페이지 게시</button></div>`);
-    const dialog = $('#modal'), site = $('#report-confluence-site'), spaces = $('#report-confluence-space'), confirm = $('#confirm-publish-report'), error = $('#report-publish-error'), more = $('#report-spaces-more');
+      <p id="report-personal-space" role="status">개인 공간 확인 중…</p>
+      <div class="dialog-actions"><button data-close>취소</button><button id="confirm-publish-report" class="primary" disabled>개인 공간으로 게시</button></div>`);
+    const dialog = $('#modal'), site = $('#report-confluence-site'), destination = $('#report-personal-space'), confirm = $('#confirm-publish-report'), error = $('#report-publish-error');
     site.value = sites.find(value => value.preferred)?.id || sites[0]?.id || '';
-    let cursor = null, revision = 0, operation = null;
-    const location = locationPicker({ root: $('#confluence-location'), api, esc, active: () => dialog.open && spaces.isConnected, changed: () => { operation = null; } });
-    async function loadSpaces(append = false) {
-      const current = ++revision, cloud = site.value; confirm.disabled = true; spaces.disabled = true; more.disabled = true; error.hidden = true;
-      if (!append) { spaces.innerHTML = ''; cursor = null; operation = null; location.reset(cloud, ''); }
+    let revision = 0, operation = null, ready = false;
+    async function loadPersonalSpace() {
+      const current = ++revision; confirm.disabled = true; ready = false; operation = null; error.hidden = true;
+      destination.textContent = '개인 공간 확인 중…';
       try {
-        const result = await api(`/integrations/atlassian/confluence-spaces?purpose=publish&cloud_id=${encodeURIComponent(cloud)}${append && cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
-        if (current !== revision || !dialog.open || !spaces.isConnected) return;
-        const selected = spaces.value;
-        const known = new Map([...spaces.options].map(option => [option.value, option.textContent]));
-        for (const space of result.spaces) known.set(space.id, `${space.name} (${space.key})`);
-        spaces.innerHTML = [...known].map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join('');
-        if (selected) spaces.value = selected;
-        cursor = result.next_cursor; more.hidden = !cursor;
-        if (!spaces.options.length) throw new Error('게시할 수 있는 공간이 없습니다. Atlassian 설정의 허용 공간과 연결 권한을 확인하세요.');
-        if (!append) location.reset(cloud, spaces.value);
-      } catch (e) { if (current === revision && error.isConnected) { error.textContent = e.message; error.hidden = false; } }
-      finally { if (current === revision && spaces.isConnected) { spaces.disabled = false; confirm.disabled = !spaces.value; more.disabled = false; } }
+        const space = await api(`/integrations/atlassian/personal-publication-space?cloud_id=${encodeURIComponent(site.value)}`);
+        if (current !== revision || !dialog.open || !destination.isConnected) return;
+        destination.textContent = `${space.name} → 업무 요약`; ready = true;
+      } catch (e) {
+        if (current === revision && error.isConnected) { destination.textContent = '개인 공간을 확인할 수 없습니다.'; error.textContent = e.message; error.hidden = false; }
+      } finally { if (current === revision && confirm.isConnected) confirm.disabled = !ready; }
     }
-    site.onchange = () => loadSpaces(); more.onclick = () => loadSpaces(true); spaces.onchange = () => { operation = null; location.reset(site.value, spaces.value); };
+    site.onchange = loadPersonalSpace;
     confirm.onclick = async () => {
-      operation ||= { operation_id: crypto.randomUUID(), cloud_id: site.value, space_id: spaces.value, ...location.value() };
-      location.setDisabled(true); confirm.disabled = true; site.disabled = true; spaces.disabled = true; more.disabled = true; error.hidden = true;
+      operation ||= { operation_id: crypto.randomUUID(), cloud_id: site.value };
+      confirm.disabled = true; site.disabled = true; error.hidden = true;
       try {
         const result = await api(`/reports/${report.id}/publish`, { method: 'POST', body: operation });
         if (result.state !== 'published') throw new Error(result.message || '게시 결과를 요약에서 확인하세요.');
@@ -134,9 +126,9 @@ export function reportsUI({ api, esc, modal, toast, absoluteTime, navigate, acti
           if (latest.publications?.find(row => row.operation_id === operation?.operation_id)?.state === 'failed') operation = null;
         } catch { /* Retain the existing intent until its outcome is known. */ }
         detailRevision = ''; await refresh();
-      } finally { if (confirm.isConnected) { location.setDisabled(false); confirm.disabled = false; site.disabled = false; spaces.disabled = false; more.disabled = false; } }
+      } finally { if (confirm.isConnected) { confirm.disabled = !ready; site.disabled = false; } }
     };
-    if (sites.length) await loadSpaces(); else { error.textContent = status.config?.confluence_spaces?.length === 0 ? 'Atlassian 설정에서 게시를 허용할 공간을 선택하세요.' : '허용한 공간과 Confluence 읽기·공간 조회·페이지 작성 권한을 확인하세요.'; error.hidden = false; }
+    if (sites.length) await loadPersonalSpace(); else { error.textContent = 'Confluence에 접근할 수 있는 사이트가 없습니다. 연결 권한을 확인하세요.'; error.hidden = false; }
   }
   function resolveDialog(reportId, publication) {
     modal(`<h2>Confluence 게시 결과 확인</h2><p>게시된 것으로 보이는 페이지 ID를 입력하세요. 공간·제목·내용이 이 요약과 일치하는지 확인합니다. 페이지를 다시 만들지 않습니다.</p><div id="report-resolve-error" class="error" role="alert" hidden></div><label for="report-page-id">페이지 ID</label><input id="report-page-id" inputmode="numeric"><div class="dialog-actions"><button data-close>닫기</button><button id="resolve-report-publication" class="primary">페이지 확인</button></div>`);
@@ -205,7 +197,7 @@ export function reportsUI({ api, esc, modal, toast, absoluteTime, navigate, acti
     panel.hidden = false;
     panel.innerHTML = `<div class="report-detail-heading"><div><span class="eyebrow">WORK SUMMARY</span><h2>${esc(report.title || '요약 작성 중')}</h2></div><button id="close-report-detail" aria-label="요약 상세 닫기">×</button></div><p class="report-context">${esc(absoluteTime(report.created_at))} 작성 · ${esc(report.timezone)}<br>${esc(periodLabel(report.dates))} · 세션 ${report.session_count}개</p>
       <p class="report-state" role="status">${esc(labels[report.state] || report.state)}${report.progress ? ` · ${Number(report.progress.completed) || 0}/${Number(report.progress.total) || 0}개 처리` : ''}</p>${report.message ? `<p class="error" role="alert">${esc(report.message)}</p>` : ''}
-      ${report.state === 'completed' ? `<div class="report-actions"><button id="publish-report" class="primary">Confluence 게시</button><button id="regenerate-report" class="secondary">같은 기간 새 업무 요약</button></div><div class="report-body work-item-description">${reportHTML(report.body, data)}</div><details id="report-markdown" ${rawOpen ? 'open' : ''}><summary>저장된 Markdown 원문</summary><pre>${esc(report.body || '')}</pre></details>` : ['failed', 'cancelled', 'interrupted'].includes(report.state) ? '<button id="regenerate-report" class="secondary">다시 작성</button>' : '<p class="help">기록이 많으면 나누어 작성한 뒤 통합합니다. 로컬 실행 서비스에서 진행하며 화면을 이동해도 계속됩니다.</p>'}
+      ${report.state === 'completed' ? `<div class="report-actions"><button id="publish-report" class="primary">개인 공간으로 게시</button><button id="regenerate-report" class="secondary">같은 기간 새 업무 요약</button></div><div class="report-body work-item-description">${reportHTML(report.body, data)}</div><details id="report-markdown" ${rawOpen ? 'open' : ''}><summary>저장된 Markdown 원문</summary><pre>${esc(report.body || '')}</pre></details>` : ['failed', 'cancelled', 'interrupted'].includes(report.state) ? '<button id="regenerate-report" class="secondary">다시 작성</button>' : '<p class="help">기록이 많으면 나누어 작성한 뒤 통합합니다. 로컬 실행 서비스에서 진행하며 화면을 이동해도 계속됩니다.</p>'}
       <div class="report-publications">${publications.map(publication => `<article class="report-publication" data-publication-id="${esc(publication.operation_id)}"><strong>${esc(publication.state === 'published' ? 'Confluence 게시됨' : publication.state === 'unknown' ? '게시 결과 확인 필요' : publication.state === 'failed' ? '게시 실패' : '게시 중')}</strong>${publication.url ? ` <a href="${esc(publication.url)}" data-report-url="${esc(publication.url)}" target="_blank" rel="noopener noreferrer">페이지 열기 ↗</a>` : ''}${publication.message ? `<p>${esc(publication.message)}</p>` : ''}${publication.state === 'unknown' ? `<button class="secondary" data-resolve-publication="${esc(publication.operation_id)}">게시 결과 확인</button>` : ''}</article>`).join('')}</div>
       <details id="report-sources" ${sourcesOpen ? 'open' : ''}><summary>기준 이력 · ${sessions.length}개 세션</summary><p class="help">요약 작성 시점의 기록입니다. 이후 업무 편집·병합·삭제로 이 내용을 바꾸지 않습니다.</p><ul>${sessions.map(session => `<li><strong>${esc(session.work_item_title || session.title || session.work_item_id || session.id)}</strong> · ${esc(absoluteTime(session.start_at))}<button class="report-reference" data-report-reference="${esc(session.id)}" data-reference-kind="session">원본 이력 보기</button><small>${esc(session.id)}${session.tags?.length ? ` · ${esc(session.tags.join(', '))}` : ''}</small></li>`).join('')}</ul>${data.parts?.length > 1 ? `<details id="report-parts" ${partsOpen ? 'open' : ''}><summary>부분 작성 기록 · ${data.parts.length}개</summary><ul>${data.parts.filter(part => part.state === 'completed').map(part => `<li><button class="report-reference" data-report-reference="${esc(part.id)}" data-reference-kind="part">${esc(part.title || '부분 요약')}</button></li>`).join('')}</ul></details>` : ''}</details>`;
     $('#close-report-detail').onclick = () => { selectedReport = null; detailRevision = ''; panel.hidden = true; };
