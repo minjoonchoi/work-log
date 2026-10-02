@@ -203,3 +203,7 @@ Codex 대화 기록의 중간 `commentary` 텍스트는 약 1초 주기로 읽�
 Claude Code도 기존 UserPromptSubmit·PreToolUse·PostToolUse·Stop 훅이 전달한 `transcript_path`를 통해 진행 메시지를 수집합니다. 텍스트 뒤의 도구 호출·후속 응답으로 중간 메시지임이 확인되면 같은 프롬프트에 연결합니다. 최종 여부가 불명확하면 다음 기록을 기다리며, Stop 최종 답변과 중복 저장하지 않습니다. 도구 결과·thinking·하위 에이전트 기록과 연결이 모호한 입력은 제외합니다. 기존 이력 수집 훅을 다시 연결할 필요는 없습니다.
 
 `make install`은 Applications 설치가 성공한 뒤 `output` 아래에서 WorkLog 번들 식별자와 패키지 이름이 확인된 `WorkLog.app` 빌드 복사본을 정리합니다(이전 버전 포함). 스크린샷·로그·다른 앱·심볼릭 링크와 명시한 `--source-app` 원본은 보존하며, 설치 실패 시 정리하지 않습니다.
+
+
+팀 배포용 DMG도 `make build`에서 생성합니다: `dist/WorkLog-macos-arm64.dmg`.
+DMG를 열고 **WorkLog 설치.app → 설치 → WorkLog 열기** 순서로 실행하면 사용자 Applications 폴더에 앱과 실행 서비스를 설치합니다. 기존 업무 기록은 유지하며, Claude/Codex 및 Jira 연결은 각 사용자가 앱에서 설정합니다. 설치 후 DMG를 추출해도 됩니다. macOS 13 이상 Apple Silicon용이며, 현재 ad-hoc 서명으로 Apple 공증은 포함되지 않아 회사 보안 정책에 따라 실행 승인이 필요할 수 있습니다. 기존 ZIP 배포물도 함께 생성합니다.

@@ -1,3 +1,4 @@
+import { buildDMG } from './build-dmg.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -48,7 +49,7 @@ ${process.env.HARNESS_GUI_DATA_DIR ? `<key>HarnessDataRoot</key><string>${xml(pa
   onProgress('앱에 서명하고 빌드 결과를 확인합니다.');
   run('codesign', ['--force', '--deep', '--sign', '-', app]);
   run('codesign', ['--verify', '--deep', '--strict', app]);
-  let archivePath = null;
+  let archivePath = null, dmgPath = null;
   if (archive) {
     const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-package-'));
     try {
@@ -62,9 +63,11 @@ ${process.env.HARNESS_GUI_DATA_DIR ? `<key>HarnessDataRoot</key><string>${xml(pa
       atomic(path.join(packageDir, 'INSTALL.txt'), 'WorkLog 0.3.1 · macOS Apple Silicon\n\nInstall WorkLog.command는 ~/Applications 앱과 WorkLog 백그라운드 서비스만 설치합니다. Claude/Codex 설정은 변경하지 않습니다.\n앱의 연결 설정에서 Claude와 Codex를 각각 연결하거나 해제하세요. 연결 시 기록 훅만 추가하고 기존 설정을 보존합니다. 위임 스킬과 직무 패키지는 제공하지 않습니다.\nUninstall WorkLog.command는 앱에서 연결한 훅·스킬 연결을 포함해 WorkLog 소유 설치 항목을 제거합니다. 업무 DB·사용자 등록 작업 유형·산출물·로그·Keychain 토큰은 보존합니다.\n먼저 사내 허용 정책을 확인하세요. 기존 WorkLog 설치는 소유 기록을 확인해 재설치하며 업무 데이터와 에이전트 연결을 유지합니다.\n이 빌드는 개발용 ad-hoc 서명이며 공증되지 않았습니다.\n');
       archivePath = path.resolve(outputDir, 'WorkLog-macos-arm64.zip');
       run('ditto', ['-c', '-k', '--keepParent', packageDir, archivePath]);
+      onProgress('설치 앱을 포함한 DMG를 생성합니다.');
+      dmgPath = buildDMG(app, outputDir, { run });
     } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   }
-  return { app, archive: archivePath, signing: 'local ad-hoc; not notarized', test_data_root: process.env.HARNESS_GUI_DATA_DIR || null };
+  return { app, archive: archivePath, dmg: dmgPath, signing: 'local ad-hoc; not notarized', test_data_root: process.env.HARNESS_GUI_DATA_DIR || null };
 }
 
 const invokedAsProgram = process.argv[1] && fs.existsSync(process.argv[1])
