@@ -1,3 +1,4 @@
+import { agentCLI } from './agent-cli.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -35,13 +36,13 @@ export function commandFor(engine, context) {
     assertModelSelection(engine, execution);
   }
   if (engine === 'codex') return {
-    command: process.env.HARNESS_CODEX_BIN || 'codex', args: ['exec', '--json', '--model', execution.model,
+    command: agentCLI('codex').command, args: ['exec', '--json', '--model', execution.model,
       '-c', `model_reasoning_effort="${execution.effort}"`, '--dangerously-bypass-approvals-and-sandbox',
       ...(policy?.mode === 'direct' ? codexDirectArguments() : codexWorkerArguments()),
       '--output-schema', schemaPath, '-o', outputPath, '-C', cwd, '--skip-git-repo-check', '-']
   };
   if (engine === 'claude') return {
-    command: process.env.HARNESS_CLAUDE_BIN || 'claude', args: ['-p', '--model', execution.model, ...(execution.effort == null ? [] : ['--effort', execution.effort]),
+    command: agentCLI('claude').command, args: ['-p', '--model', execution.model, ...(execution.effort == null ? [] : ['--effort', execution.effort]),
       '--output-format', 'stream-json', '--verbose', ...(policy ? ['--max-turns', String(policy.max_model_turns)] : []),
       '--json-schema', fs.readFileSync(schemaPath, 'utf8'),
       '--allow-dangerously-skip-permissions', '--permission-mode', 'bypassPermissions',
@@ -66,6 +67,7 @@ export function execute(context) {
   const allowed = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM', 'CODEX_HOME',
     'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'];
   const env = Object.fromEntries(allowed.filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]]));
+  if (['codex', 'claude'].includes(engine)) env.PATH = agentCLI(engine).path;
   Object.assign(env, { HARNESS_DATA_DIR: context.dataDir, WORKLOG_TRACKING_DISABLED: '1', HARNESS_WORKER: '1', HARNESS_PARENT: json(parent),
     HARNESS_ATTEMPT_ID: parent.task_id, HARNESS_ENGINE: engine, HARNESS_STAGE: stage,
     HARNESS_TEST_MODE: process.env.HARNESS_TEST_MODE || '' });
@@ -100,6 +102,11 @@ export function execute(context) {
       try { const outer = observer.final || JSON.parse(stdout); nativeSession = outer.session_id || null; usage = outer.usage || null;
         if (outer.is_error) terminalFailure = errorMessage(outer.errors?.join('\n') || outer.result) || 'Claude 작업이 실패했습니다.';
       } catch {}
+    }
+    if (!ok && observed.error?.includes('ENOENT')) {
+      observed.error = !fs.existsSync(cwd)
+        ? `작업 폴더가 없습니다: ${cwd}`
+        : `${engine} CLI를 실행하지 못했습니다. 실행 파일 또는 인터프리터 경로를 확인하세요: ${command} (${observed.error})`;
     }
     const failure = terminalFailure || (!ok && streamError);
     const unsupported = !ok && /(?:unexpected argument|unknown option|unrecognized (?:option|argument)|unknown field)/i.test(stderr || '');

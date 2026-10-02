@@ -216,3 +216,7 @@ DMG를 열고 **WorkLog를 Applications 폴더로 드래그 → Applications에�
 메뉴 막대 WorkLog 아이콘을 우클릭하고 **WorkLog 설치 제거…**를 선택하면 제거 확인 창을 엽니다. 앱·서비스와 WorkLog 소유 Codex/Claude 훅·스킬 연결을 제거하며 업무 기록은 보존합니다. **연결 정보도 모두 삭제**를 체크하면 Atlassian OAuth 토큰·Client 자격증명(Keychain), 사이트·인증 설정, 로컬 API 인증 파일, WorkLog가 만든 연결 설정 백업도 제거합니다. Codex/Claude 자체 로그인, 다른 앱의 훅·설정, 외부 인증서 원본, 업무·동기화 이력은 유지합니다. Keychain 삭제 실패 시 앱을 보존하고 재시도할 수 있습니다.
 
 **업데이트는 설치 제거 없이** WorkLog 메뉴에서 종료 → 새 DMG의 앱을 **기존 WorkLog와 같은 설치 폴더에 드래그하고 대치** → 새 앱 실행 순서로 진행합니다. 첫 실행에서 빌드 변경을 감지해 내부 런타임만 교체하며, 업무 기록·자동 작성 설정·Codex/Claude 훅 연결·Atlassian 설정·Keychain 인증은 유지됩니다. 실패하거나 중간에 종료되어도 다음 실행에서 복구하고 재시도합니다. 기존 `make install` 설치 경로는 `~/Applications/WorkLog.app`이므로 이 경우 그 폴더에 대치하거나 `make install`을 다시 실행하세요. DMG의 Applications 바로가기는 `/Applications`를 가리키므로 서로 다른 경로에 앱을 중복 설치하지 마세요.
+
+### 에이전트 CLI 경로 탐색
+
+자동 요약은 사용자 지정 `HARNESS_CODEX_BIN`·`HARNESS_CLAUDE_BIN`을 우선하고, `PATH`, 사용자 홈의 `.local/bin`·`.npm-global/bin`·`.volta/bin`, Homebrew, nvm 설치 경로에서 CLI를 찾습니다. nvm은 `NVM_DIR` 또는 현재 사용자의 `~/.nvm`을 기준으로 설치된 버전을 탐색합니다. 특정 사용자명이나 Node 버전을 고정하지 않으며, 선택한 CLI와 Node의 실행 경로를 자식 프로세스에 전달합니다. 셸 설정 파일을 실행하거나 전역 PATH를 변경하지 않습니다.
