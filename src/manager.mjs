@@ -157,6 +157,9 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
   publicHandler: async (req, res, url) => {
     const routes = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/loading.js': ['loading.js', 'text/javascript'], '/history.js': ['history.js', 'text/javascript'], '/integrations.js': ['integrations.js', 'text/javascript'], '/jira.js': ['jira.js', 'text/javascript'], '/writing.js': ['writing.js', 'text/javascript'], '/execution-settings.js': ['execution-settings.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
       '/icons.css': ['icons.css', 'text/css'],
+      '/detail-resize.js': ['detail-resize.js', 'text/javascript'],
+      '/calendar-selection.js': ['calendar-selection.js', 'text/javascript'],
+      '/confluence-settings.js': ['confluence-settings.js', 'text/javascript'], '/confluence-location.js': ['confluence-location.js', 'text/javascript'],
       '/held-sessions.js': ['held-sessions.js', 'text/javascript'],
       '/agent-connections.js': ['agent-connections.js', 'text/javascript'],
       '/settings-tabs.js': ['settings-tabs.js', 'text/javascript'],
@@ -205,7 +208,8 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
         '사이트 조회 조건을 확인하세요.');
       return atlassian.selectableSites(url.searchParams.get('product') ?? 'jira');
     }
-    if (p === '/api/integrations/atlassian/confluence-spaces' && req.method === 'GET') return atlassian.confluenceSpaces(url.searchParams.get('cloud_id'), url.searchParams.get('cursor'));
+    if (p === '/api/integrations/atlassian/confluence-spaces' && req.method === 'GET') return atlassian.confluenceSpaces(url.searchParams.get('cloud_id'), url.searchParams.get('cursor'), url.searchParams.get('purpose') === 'publish');
+    if (p === '/api/integrations/atlassian/confluence-targets' && req.method === 'GET') return atlassian.confluenceTargets(Object.fromEntries(url.searchParams));
     if (p === '/api/integrations/atlassian/projects' && req.method === 'GET') return atlassian.jiraProjects(url.searchParams.get('cloud_id'));
     if (p === '/api/integrations/atlassian/issue-types' && req.method === 'GET') return atlassian.jiraIssueTypes(url.searchParams.get('cloud_id'), url.searchParams.get('project'));
     if (p === '/api/integrations/atlassian/jira-issue' && req.method === 'GET') return atlassian.jiraIssue(url.searchParams.get('cloud_id'), url.searchParams.get('key'));

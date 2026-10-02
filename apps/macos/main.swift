@@ -169,6 +169,7 @@ final class ServiceControlClient {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate, WKNavigationDelegate, WKScriptMessageHandler {
+    var installationPrepared = false
     var statusItem: NSStatusItem!
     var utilityMenu: NSMenu!
     var window: NSWindow!
@@ -204,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if prepareDraggedInstallation() { return }
+        if !installationPrepared && prepareDraggedInstallation() { return }
         NSApp.setActivationPolicy(.accessory)
         let appMenu = NSMenu()
         let appRoot = NSMenuItem(); appMenu.addItem(appRoot)
@@ -300,7 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     func prepareDraggedInstallation() -> Bool {
         let app = Bundle.main.bundleURL.standardizedFileURL
         let home = FileManager.default.homeDirectoryForCurrentUser
-        guard ProcessInfo.processInfo.environment["HARNESS_DATA_DIR"] == nil,
+        guard dataRoot.standardizedFileURL == home.appendingPathComponent("Library/Application Support/WorkLog").standardizedFileURL,
               Bundle.main.object(forInfoDictionaryKey: "HarnessDataRoot") == nil else { return false }
         if app.path.hasPrefix("/Volumes/") {
             let alert = NSAlert(); alert.messageText = "WorkLog를 Applications 폴더로 옮겨주세요"
@@ -308,31 +309,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             alert.runModal(); NSApp.terminate(nil); return true
         }
         guard ["/Applications/WorkLog.app", home.appendingPathComponent("Applications/WorkLog.app").path].contains(app.path) else { return false }
-        if serviceControl.resolve(dataRoot) != nil {
-            // Retry an interrupted first registration. Ordinary launches and
-            // partial uninstall recovery keep their existing app UI.
-            guard let bytes = try? Data(contentsOf: dataRoot.appendingPathComponent("installation.json")),
-                  let receipt = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
-                  receipt["app_location"] != nil, receipt["state"] as? String == "installed",
-                  let files = receipt["files"] as? [[String: Any]],
-                  ["not_started", "starting"].contains(files.first?["activation"] as? String ?? "") else { return false }
+        if let bytes = try? Data(contentsOf: dataRoot.appendingPathComponent("installation.json")),
+           let receipt = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] {
+            let buildID = try? String(contentsOf: app.appendingPathComponent("Contents/Resources/build-id"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+            let files = receipt["files"] as? [[String: Any]]
+            let state = receipt["state"] as? String
+            let updatePending = receipt["runtime_update"] != nil
+            let changedBuild = buildID != nil && receipt["build_id"] as? String != buildID
+            let registrationPending = !ProcessInfo.processInfo.arguments.contains("--background") &&
+                ["not_started", "starting"].contains(files?.first?["activation"] as? String ?? "")
+            if !updatePending && state == "installed" && !changedBuild && !registrationPending { return false }
+            if !updatePending && ["needs_attention", "uninstalling", "install_failed"].contains(state ?? "") { return false }
         }
         NSApp.setActivationPolicy(.regular)
         let setupWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 140), styleMask: [.titled], backing: .buffered, defer: false)
         setupWindow.title = "WorkLog"
-        let label = NSTextField(labelWithString: "처음 실행에 필요한 서비스를 준비하고 있습니다…")
+        let label = NSTextField(labelWithString: "설정을 유지하며 실행 파일을 준비하고 있습니다…")
         label.frame = NSRect(x: 25, y: 60, width: 380, height: 25)
         setupWindow.contentView?.addSubview(label); setupWindow.center(); setupWindow.makeKeyAndOrderFront(nil)
         DispatchQueue.global(qos: .userInitiated).async {
             var failure: String?
+            var handoff = false
             do {
                 let process = Process(), pipe = Pipe()
                 process.executableURL = app.appendingPathComponent("Contents/MacOS/node")
                 process.arguments = [app.appendingPathComponent("Contents/Resources/harness/scripts/first-launch.mjs").path, app.path]
                 process.standardOutput = pipe; process.standardError = pipe
+                var environment = ProcessInfo.processInfo.environment
+                environment["NODE_NO_WARNINGS"] = "1"; process.environment = environment
                 try process.run()
                 let output = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
                 if process.terminationStatus != 0 { failure = String(data: output, encoding: .utf8) ?? "서비스 준비에 실패했습니다." }
+                else if let result = (try? JSONSerialization.jsonObject(with: output)) as? [String: Any] {
+                    handoff = result["handoff"] as? Bool ?? false
+                } else { failure = "앱 갱신 결과를 확인할 수 없습니다. 다시 실행하세요." }
             } catch { failure = error.localizedDescription }
             DispatchQueue.main.async {
                 setupWindow.orderOut(nil)
@@ -340,7 +350,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                     let alert = NSAlert(); alert.messageText = "WorkLog 설치를 완료하지 못했습니다"
                     alert.informativeText = String(failure.suffix(4000)); alert.runModal()
                 }
-                NSApp.terminate(nil)
+                if failure != nil || handoff { NSApp.terminate(nil) }
+                else {
+                    self.installationPrepared = true
+                    self.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+                }
             }
         }
         return true
@@ -435,6 +449,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     func popoverDidShow(_ notification: Notification) { setQuickVisible(true) }
     func popoverDidClose(_ notification: Notification) { setQuickVisible(false) }
     func openMain(_ route: [String: Any]) {
+        // Background login stays in the menu bar. Once the user opens a window,
+        // keep a normal app presence so Dock/Cmd+Tab can bring it back, even
+        // after the window is closed or minimized.
+        NSApp.setActivationPolicy(.regular)
         var target = route
         if let view = target["view"] as? String { target["view"] = normalizedRoute(view) }
         pendingRoute = target

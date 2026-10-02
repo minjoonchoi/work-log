@@ -1,3 +1,4 @@
+import { detailResize } from './detail-resize.js';
 import { showListSkeleton, finishListLoading } from './loading.js';
 import { integrationUI } from './integrations.js';
 import { agentConnectionsUI } from './agent-connections.js';
@@ -9,6 +10,7 @@ import { descriptionPreview } from './description.js';
 import { itemTagsUI } from './item-tags.js';
 import { reportsUI } from './reports.js';
 const $ = selector => document.querySelector(selector);
+detailResize($('#detail'), $('#detail-resize'));
 const esc = text => String(text ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function savedMode(key, fallback) {
   try { const value = localStorage.getItem(key); return ['items', 'sessions'].includes(value) ? value : fallback; } catch { return fallback; }
@@ -654,7 +656,7 @@ function closeDetail() { detailRequest++; $('#detail').hidden = true; state.deta
 // immediately dismissed by that same click bubbling back to the document.
 document.addEventListener('click', event => {
   const panel = $('#detail');
-  if (panel.hidden || document.querySelector('dialog[open]') || panel.contains(event.target)) return;
+  if (panel.hidden || document.querySelector('dialog[open]') || panel.contains(event.target) || $('#detail-resize').contains(event.target)) return;
   closeDetail();
 }, true);
 document.addEventListener('keydown', event => {

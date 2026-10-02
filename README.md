@@ -138,6 +138,10 @@ GUI의 **연결 설정 → Atlassian 설정**에서 Atlassian 앱의 **Client ID
 
 같은 화면의 **Atlassian 사이트 주소**에 `https://company.atlassian.net`을 저장하면 Jira 이슈 생성·연결과 Confluence 게시에서 해당 사이트를 기본으로 선택합니다. `company.atlassian.net`처럼 호스트만 입력해도 됩니다. 비워 두면 접근 가능한 사이트 목록에서 선택하며, 주소만 변경해도 기존 OAuth 연결은 유지됩니다. 지정한 사이트가 현재 계정의 접근 목록에 없으면 다른 사이트를 자동 선택하지 않고 안내합니다. 이미 연결한 Jira 이슈의 대상은 바꾸지 않습니다.
 
+**Confluence 게시 공간 → 선택한 공간에만 게시**를 켜고 여러 공간을 선택해 저장하면 게시 대상을 제한합니다. 선택이 0개이면 게시를 차단하며, 기존 설정은 제한 없이 유지됩니다. 공간 제한만 변경하면 기존 OAuth 연결은 유지됩니다. 게시 창에서 제목으로 페이지·폴더를 검색하거나 하위 항목을 탐색한 뒤 **선택**하면 그 아래에 새 페이지를 만듭니다. **공간 전체**는 공간 내 모든 페이지·폴더 목록이고, 선택하지 않으면 공간 기본 위치에 게시합니다.
+
+검색·폴더 탐색에는 OAuth 앱의 `read:content-details:confluence`, `read:folder:confluence`, `read:hierarchical-content:confluence` 권한이 추가로 필요합니다. 기존 연결에 권한이 없으면 앱 권한을 추가한 뒤 Atlassian을 다시 연결하세요.
+
 이 주소는 회사의 Jira·Confluence 사이트를 선택하는 값입니다. Cloud OAuth 토큰 교환은 `auth.atlassian.com`, API 요청은 `api.atlassian.com`과 조회한 `cloudId`를 사용합니다. 사이트 주소 변경은 토큰 서버의 네트워크 연결 오류를 해결하는 설정이 아닙니다. [Atlassian Cloud OAuth API 호출 방식](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)
 
 이전 1Password vault/item 설정은 자동으로 읽거나 변환하지 않습니다. Atlassian 설정에서 자격증명을 직접 다시 입력하며, 기존 업무 기록과 토큰은 삭제하지 않습니다. Atlassian의 **연결 해제**는 OAuth 토큰만 제거하고 저장한 앱 자격증명은 유지합니다.
@@ -210,4 +214,4 @@ DMG를 열고 **WorkLog를 Applications 폴더로 드래그 → Applications에�
 
 메뉴 막대 WorkLog 아이콘을 우클릭하고 **WorkLog 설치 제거…**를 선택하면 제거 확인 창을 엽니다. 앱·서비스와 WorkLog 소유 Codex/Claude 훅·스킬 연결을 제거하며 업무 기록은 보존합니다. **연결 정보도 모두 삭제**를 체크하면 Atlassian OAuth 토큰·Client 자격증명(Keychain), 사이트·인증 설정, 로컬 API 인증 파일, WorkLog가 만든 연결 설정 백업도 제거합니다. Codex/Claude 자체 로그인, 다른 앱의 훅·설정, 외부 인증서 원본, 업무·동기화 이력은 유지합니다. Keychain 삭제 실패 시 앱을 보존하고 재시도할 수 있습니다.
 
-기존 `~/Applications` 설치를 DMG 설치로 전환하거나 드래그 설치본을 교체할 때는 먼저 WorkLog 설치 제거를 실행하고 새 앱을 복사하세요. 업무 기록은 유지되며, 연결 정보 삭제를 선택하지 않으면 Atlassian 인증도 유지됩니다. `make install`은 기존 사용자 Applications 설치 방식을 유지합니다.
+**업데이트는 설치 제거 없이** WorkLog 메뉴에서 종료 → 새 DMG의 앱을 **기존 WorkLog와 같은 설치 폴더에 드래그하고 대치** → 새 앱 실행 순서로 진행합니다. 첫 실행에서 빌드 변경을 감지해 내부 런타임만 교체하며, 업무 기록·자동 작성 설정·Codex/Claude 훅 연결·Atlassian 설정·Keychain 인증은 유지됩니다. 실패하거나 중간에 종료되어도 다음 실행에서 복구하고 재시도합니다. 기존 `make install` 설치 경로는 `~/Applications/WorkLog.app`이므로 이 경우 그 폴더에 대치하거나 `make install`을 다시 실행하세요. DMG의 Applications 바로가기는 `/Applications`를 가리키므로 서로 다른 경로에 앱을 중복 설치하지 마세요.

@@ -1,3 +1,4 @@
+import { appBuildId } from './update-dragged.mjs';
 import { disconnectAgentComponent } from './agent-connections.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,7 +41,7 @@ export function prepareInstall({ output, homeDir = os.homedir(), sourceApp, adop
     ProgramArguments: argv, RunAtLoad: true, KeepAlive: false, EnvironmentVariables: { HARNESS_DATA_DIR: loc.data,
       PATH: [path.join(loc.app, 'Contents/MacOS'), path.dirname(process.execPath), process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'].join(path.delimiter) } }) });
   const hooks = {}, links = [];
-  const plan = { adopt, installationId, homeDir: loc.home, version, sourceApp: path.resolve(sourceApp), targetApp: loc.app,
+  const plan = { buildId: appBuildId(sourceApp), adopt, installationId, homeDir: loc.home, version, sourceApp: path.resolve(sourceApp), targetApp: loc.app,
     dataDir: loc.data, runtimeRoot, files, hooks, links, skills, manifest: loc.manifest,
     note: '준비만 완료. --apply로 설치합니다. 기존 지시문을 보존하며 WorkLog 소유 기록과 일치하는 항목만 제거할 수 있습니다.' };
   fs.mkdirSync(output, { recursive: true });
@@ -120,7 +121,7 @@ function applyInstallCore(plan, { homeDir = plan.homeDir, activate = true, launc
         fs.writeFileSync(packageFile, JSON.stringify({ version: 1, revision: 0, installed: [] }, null, 2), { flag: 'wx', mode: 0o600 });
       }
       const backupDir = path.join(loc.data, 'install-backups', plan.installationId);
-      receipt = { ...(plan.adopt ? { app_location: loc.app } : {}), format: 2, owner: OWNER, id: plan.installationId, home: loc.home, version: plan.version, skills: plan.skills, state: 'installing', created_at: new Date().toISOString(),
+      receipt = { build_id: plan.buildId, ...(plan.adopt ? { app_location: loc.app } : {}), format: 2, owner: OWNER, id: plan.installationId, home: loc.home, version: plan.version, skills: plan.skills, state: 'installing', created_at: new Date().toISOString(),
         trees: [{ path: loc.app, entries: inventory(stagedApp) }, { path: plan.runtimeRoot, entries: inventory(stagedRuntime) }],
         files: plan.files.map(f => ({ path: f.target, label: f.label, argv: f.argv, content: f.content, digest: digest(f.content), mode: 0o600, activation: 'not_started' })),
         links: [], hooks: [], created_directories: [], created_configs: [], backup_dir: backupDir };

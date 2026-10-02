@@ -1,3 +1,6 @@
+import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import { updateDraggedApp } from '../../scripts/update-dragged.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -115,4 +118,70 @@ test('first-launch registration failure is retryable without another app copy', 
     ? { status: 113, stderr: 'Could not find service' } : { status: 0 } });
   assert.equal(readManifest(f.loc).files[0].activation, 'registered');
   assert.equal(fs.statSync(f.app).ino, ino);
+});
+
+function deliverUpdate(f) {
+  const build = crypto.randomUUID();
+  fs.writeFileSync(path.join(f.app, 'Contents/Resources/build-id'), build);
+  fs.writeFileSync(path.join(f.app, 'Contents/Resources/harness/src/hook.mjs'), 'new hook implementation');
+  return build;
+}
+test('drag replacement patches runtime while retaining identity, settings, hooks, service registration and data', t => {
+  const f = fixture(t); f.install();
+  for (const engine of ['claude', 'codex']) connectAgent(engine, { homeDir: f.homeDir });
+  const previous = readManifest(f.loc);
+  const files = [...Object.values(f.loc.configs), ...previous.files.map(file => file.path)];
+  for (const name of ['work.sqlite', 'execution-settings.json', 'integrations/atlassian.json', 'token']) {
+    const file = path.join(f.loc.data, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `saved ${name}`); files.push(file);
+  }
+  const before = files.map(file => fs.readFileSync(file));
+  const build = deliverUpdate(f);
+  assert.equal(f.install().status, 'updated');
+  const after = readManifest(f.loc);
+  assert.equal(after.id, previous.id); assert.equal(after.version, previous.version);
+  assert.equal(after.build_id, build); assert.deepEqual(after.hooks, previous.hooks); assert.deepEqual(after.links, previous.links);
+  assert.deepEqual(files.map(file => fs.readFileSync(file)), before);
+  assert.equal(fs.readFileSync(path.join(after.trees[1].path, 'harness/src/hook.mjs'), 'utf8'), 'new hook implementation');
+  assert.equal(f.install().status, 'already_installed');
+  assert.equal(applyUninstall({ homeDir: f.homeDir, deactivate: false }).status, 'uninstalled');
+});
+for (const point of ['journaled', 'backed_up', 'swapped']) test(`update failure at ${point} restores runtime and permits retry`, t => {
+  const f = fixture(t); f.install(); const previous = readManifest(f.loc), original = inventory(previous.trees[1].path);
+  deliverUpdate(f);
+  assert.throws(() => updateDraggedApp(f.app, { homeDir: f.homeDir, checkpoint: phase => { if (phase === point) throw new Error('fixture disk error'); } }), /fixture disk error/);
+  assert.deepEqual(inventory(previous.trees[1].path), original);
+  assert.equal(readManifest(f.loc).state, 'installed'); assert.equal(readManifest(f.loc).runtime_update, undefined);
+  assert.equal(f.install().status, 'updated');
+});
+test('update refuses live old services and modified runtime without overwriting them', t => {
+  const f = fixture(t); f.install(); deliverUpdate(f);
+  const lock = path.join(f.loc.data, 'runtime.lock'); fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+  assert.throws(() => f.install(), /메뉴에서 종료/); fs.unlinkSync(lock);
+  const marker = path.join(readManifest(f.loc).trees[1].path, 'user-file'); fs.writeFileSync(marker, 'keep');
+  assert.throws(() => f.install(), /변경된 실행 파일/); assert.equal(fs.readFileSync(marker, 'utf8'), 'keep');
+});
+
+for (const point of ['journaled', 'backed_up', 'swapped', 'committed']) test(`relaunch recovers process death at ${point}`, t => {
+  const f = fixture(t); f.install(); const build = deliverUpdate(f);
+  const module = new URL('../../scripts/update-dragged.mjs', import.meta.url).href;
+  const code = `import { updateDraggedApp } from ${JSON.stringify(module)}; updateDraggedApp(${JSON.stringify(f.app)}, { homeDir: ${JSON.stringify(f.homeDir)}, checkpoint: phase => { if (phase === ${JSON.stringify(point)}) process.exit(71); } });`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(child.status, 71, child.stderr);
+  assert.ok(readManifest(f.loc).runtime_update);
+  assert.ok(['updated', 'already_installed'].includes(f.install().status));
+  const receipt = readManifest(f.loc);
+  assert.equal(receipt.build_id, build); assert.equal(receipt.runtime_update, undefined);
+  assert.equal(fs.readdirSync(path.dirname(receipt.trees[1].path)).some(name => name.startsWith('.worklog-')), false);
+});
+
+for (const runningParent of [false, true]) test(`updated app ${runningParent ? 'continues in its registered host' : 'hands off to the registered login app'}`, t => {
+  const f = fixture(t); f.install(); deliverUpdate(f);
+  const file = readManifest(f.loc).files[0], calls = [];
+  const result = f.install({ activate: true, launchctl: (command, args) => {
+    calls.push(args[0]);
+    if (args[0] === 'print') return { status: 0, stdout: `program = ${file.argv[0]}\narguments = {\n${file.argv.join('\n')}\n}\n${runningParent ? `pid = ${process.ppid}\n` : ''}` };
+    return { status: 0 };
+  } });
+  assert.equal(result.handoff, !runningParent);
+  assert.deepEqual(calls, runningParent ? ['print'] : ['print', 'kickstart']);
 });

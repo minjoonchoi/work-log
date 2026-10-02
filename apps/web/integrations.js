@@ -1,3 +1,4 @@
+import { confluenceSettings, confluenceSettingsHTML } from './confluence-settings.js';
 import { setSettingsLoading } from './settings-tabs.js';
 import { jiraUI } from './jira.js';
 import { descriptionHTML } from './description.js';
@@ -47,6 +48,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       <label for="atlassian-ca-cert-path">추가 CA 인증서 파일 경로</label><input id="atlassian-ca-cert-path" maxlength="4096" placeholder="~/Certificates/company-ca.pem" autocomplete="off" spellcheck="false" aria-describedby="atlassian-ca-cert-help" value="${esc(s.config?.ca_cert_path || '')}">
       <p id="atlassian-ca-cert-help" class="help">회사 루트·중간 CA 인증서(.pem/.crt)의 절대 경로 또는 ~/ 경로를 입력하세요. 비워서 저장하면 추가 인증서만 해제하며, 기존 연결은 유지합니다.</p>
       </div>
+      ${confluenceSettingsHTML}
       <div class="settings-actions"><button id="save-atlassian" class="secondary">설정 저장</button><button id="connect-atlassian" class="primary">Atlassian 연결</button><button id="disconnect-atlassian" class="secondary">연결 해제</button></div>
       ${target ? '' : '<div class="dialog-actions"><button data-close>닫기</button></div>'}`);
     const dialog = $('#modal'), client = $('#atlassian-client-id'), secret = $('#atlassian-client-secret'), toggle = $('#toggle-client-secret'), site = $('#atlassian-site-url'), caCert = $('#atlassian-ca-cert-path');
@@ -64,15 +66,17 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     function closed() { if (settings === view) clearSettings(); }
     settings = view; dialog.addEventListener('close', closed); present();
     const currentError = e => { if (view.active()) fail(e); };
+    const spacesPolicy = confluenceSettings({ api, esc, active: view.active, fail: currentError });
+    const policyChanged = () => JSON.stringify(spacesPolicy.value()) !== JSON.stringify(config?.confluence_spaces ?? null);
     const dirty = () => client.value.trim() !== config?.client_id || site.value.trim() !== (config?.site_url || '')
-      || caCert.value.trim() !== (config?.ca_cert_path || '') || (!!secret.value && origin !== 'stored');
+      || caCert.value.trim() !== (config?.ca_cert_path || '') || (!!secret.value && origin !== 'stored') || policyChanged();
     const withBusy = fn => async () => {
       if (busy || view.loading || !view.active()) return;
-      busy = true; revealing++;
+      busy = true; revealing++; spacesPolicy.setDisabled(true);
       const controls = [client, secret, toggle, site, caCert, $('#save-atlassian'), $('#connect-atlassian'), $('#disconnect-atlassian'), ...dialog.querySelectorAll('[data-settings-tab], #back-connection-settings')];
       controls.forEach(control => control.disabled = true);
       try { await fn(); } catch (e) { currentError(e); }
-      finally { busy = false; if (view.active()) { controls.forEach(control => control.disabled = false); present(); } }
+      finally { busy = false; if (view.active()) { spacesPolicy.setDisabled(false); controls.forEach(control => control.disabled = false); present(); } }
     };
     client.oninput = () => { clearSecret(); $('#dialog-error').hidden = true; };
     site.oninput = () => { $('#dialog-error').hidden = true; };
@@ -100,10 +104,11 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       secret.type = 'password'; present();
       const saved = await api('/integrations/atlassian', { method: 'PUT', body: { client_id: clientId, ...(newSecret ? { client_secret: newSecret } : {}),
         ...(site.value.trim() !== (config?.site_url || '') ? { site_url: site.value.trim() } : {}),
-        ...(caCert.value.trim() !== (config?.ca_cert_path || '') ? { ca_cert_path: caCert.value.trim() } : {}) } });
+        ...(caCert.value.trim() !== (config?.ca_cert_path || '') ? { ca_cert_path: caCert.value.trim() } : {}),
+        ...(policyChanged() ? { confluence_spaces: spacesPolicy.value() } : {}) } });
       if (!view.active()) return false;
       config = saved.config; hasSecret = saved.has_client_secret ?? !!(newSecret || hasSecret); client.value = config.client_id; site.value = config.site_url || '';
-      caCert.value = config.ca_cert_path || '';
+      caCert.value = config.ca_cert_path || ''; spacesPolicy.load(config.confluence_spaces);
       clearSecret(); $('#dialog-error').hidden = true; return true;
     };
     if (onBack) $('#back-connection-settings').onclick = withBusy(async () => { await onBack(); });
@@ -119,7 +124,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     const retry = $('#retry-atlassian-settings');
     async function loadSettings() {
       if (!view.active()) return;
-      view.loading = true;
+      view.loading = true; spacesPolicy.setDisabled(true);
       const finishLoading = setSettingsLoading(target || $('#modal-content'), true);
       clearLoading = finishLoading;
       formControls.forEach(control => control.disabled = true);
@@ -132,7 +137,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
         client.value = config?.client_id || ''; site.value = config?.site_url || ''; caCert.value = config?.ca_cert_path || '';
         $('#oauth-callback').value = loaded.callback_url || '';
         view.status.textContent = connectionText(loaded);
-        view.loading = false;
+        view.loading = false; spacesPolicy.load(config?.confluence_spaces); spacesPolicy.setDisabled(false);
         formControls.forEach(control => control.disabled = false);
         present();
       } catch (error) {

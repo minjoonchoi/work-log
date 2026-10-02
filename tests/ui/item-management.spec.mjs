@@ -212,3 +212,27 @@ test('all-select deletes and restores all 101 displayed items without an arbitra
   expect(await h.manager('/sessions')).toHaveLength(101); expect(await h.manager('/items?trash=true')).toEqual([]);
   expect(f.state.calls).toHaveLength(0);
 });
+
+test('detail panel scales with the window, resizes by dragging and keyboard, and retains its proportion', async ({ page }) => {
+  await h.ingest(sample('resize-item', '너비 조절 업무'));
+  await open(page); const item = (await h.manager('/items'))[0];
+  await row(page, item).locator('.item-open').click();
+  const panel = page.locator('#detail'), handle = page.getByRole('separator', { name: '업무 상세 너비 조절' });
+  const width = () => panel.evaluate(node => node.getBoundingClientRect().width);
+  await expect(handle).toBeVisible(); expect(await width()).toBeCloseTo(640, 0);
+  await page.setViewportSize({ width: 1600, height: 900 }); expect(await width()).toBeCloseTo(800, 0);
+  let box = await handle.boundingBox();
+  await page.mouse.move(box.x + 5, 300); await page.mouse.down(); await page.mouse.move(box.x - 195, 300, { steps: 10 }); await page.mouse.up();
+  expect(await width()).toBeCloseTo(1000, 0); await expect(panel).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 900 }); expect(await width()).toBeCloseTo(800, 0);
+  await page.reload(); await row(page, item).locator('.item-open').click(); await expect(panel).toBeVisible(); expect(await width()).toBeCloseTo(800, 0);
+  box = await handle.boundingBox();
+  await page.mouse.move(box.x + 5, 300); await page.mouse.down(); await page.mouse.move(box.x + 105, 300, { steps: 5 });
+  await page.keyboard.press('Escape'); await page.mouse.up(); expect(await width()).toBeCloseTo(800, 0); await expect(panel).toBeVisible();
+  await handle.focus(); await page.keyboard.press('Home'); expect(await width()).toBeCloseTo(500, 0);
+  await page.keyboard.press('ArrowLeft'); expect(await width()).toBeCloseTo(532, 0);
+  await page.keyboard.press('End'); expect(await width()).toBeCloseTo(1256, 0);
+  await handle.dblclick(); expect(await width()).toBeCloseTo(640, 0);
+  await page.setViewportSize({ width: 480, height: 800 }); expect(await width()).toBeCloseTo(456, 0);
+  await page.keyboard.press('Escape'); await expect(panel).toBeHidden(); await expect(handle).toBeHidden();
+});

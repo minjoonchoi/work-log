@@ -7,10 +7,10 @@ import assert from 'node:assert/strict';
 // Protocol simulators: never contact Atlassian, op, or the user's Keychain.
 export const oauthClient = { client_id: 'fixture-client', client_secret: 'fixture-secret' };
 export async function atlFixture(h, { tls } = {}) {
-  const state = { tokenCalls: [], calls: [], issues: [], worklogs: [], comments: [], pages: [],
+  const state = { tokenCalls: [], calls: [], issues: [], worklogs: [], comments: [], pages: [], contentTree: [],
     spaces: [{ id: '10', key: 'TEAM', name: '팀 업무', status: 'current' }, { id: '20', key: 'DOCS', name: '프로젝트 문서', status: 'current' }, { id: '30', key: 'OPS', name: '운영 기록', status: 'current' }],
     pageFailure: null, losePage: false, refresh: 'fixture-refresh-1', access: 'fixture-access-1', revision: 1,
-    scopes: ['read:jira-work', 'read:jira-user', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'], rejectRefresh: false, rejectAccessOnce: false, worklogFailure: null, loseIssue: false, loseWorklog: false,
+    scopes: ['read:jira-work', 'read:jira-user', 'write:jira-work', 'read:folder:confluence', 'read:hierarchical-content:confluence', 'read:content-details:confluence', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'], rejectRefresh: false, rejectAccessOnce: false, worklogFailure: null, loseIssue: false, loseWorklog: false,
     user: { accountId: 'fixture-current-user', active: true, displayName: 'Fixture 사용자' }, myselfFailure: null,
     commentFailure: null, commentReadFailure: null, loseComment: false,
     transitionFailure: null, issueReadFailure: null, issueUpdateFailure: null, issueUpdateResponseLost: false,
@@ -97,11 +97,27 @@ export async function atlFixture(h, { tls } = {}) {
       if (spaceId) {
         const space = state.spaces.find(row => row.id === spaceId); return send(space || {}, space ? 200 : 404);
       }
+      if (url.pathname.endsWith('/wiki/rest/api/search')) {
+        const cql = url.searchParams.get('cql'), key = JSON.parse(cql.match(/space = ("(?:[^"\\]|\\.)*")/)[1]);
+        const space = state.spaces.find(row => row.key === key);
+        const title = cql.match(/title ~ ("(?:[^"\\]|\\.)*")/);
+        const query = title ? JSON.parse(title[1]).replace(/\\(.)/g, '$1').toLowerCase() : '';
+        const rows = state.contentTree.filter(row => row.spaceId === space?.id && row.title.toLowerCase().includes(query));
+        const start = Number(url.searchParams.get('start') || 0), size = 2;
+        return send({ results: rows.slice(start, start + size).map(content => ({ content })), _links: { next: state.targetsNext ?? (start + size < rows.length ? `/wiki/rest/api/search?start=${start + size}` : null) } });
+      }
+      const children = url.pathname.match(/\/wiki\/api\/v2\/(pages|folders)\/(\d+)\/direct-children$/);
+      if (children) return send({ results: state.contentTree.filter(row => row.parentId === children[2]), _links: {} });
+      const content = url.pathname.match(/\/wiki\/api\/v2\/(pages|folders)\/(\d+)$/);
+      if (content) {
+        const row = state.contentTree.find(row => row.id === content[2] && row.type === (content[1] === 'pages' ? 'page' : 'folder'));
+        if (row) return send(row);
+      }
       if (url.pathname.endsWith('/wiki/api/v2/pages') && req.method === 'POST') {
         assert.equal(body.body.representation, 'storage'); assert.equal(body.status, 'current');
         if (state.pageDelay) await new Promise(resolve => setTimeout(resolve, state.pageDelay));
         if (state.pageFailure) return send({}, state.pageFailure);
-        const page = { id: String(1000 + state.pages.length), spaceId: body.spaceId, title: body.title, status: body.status,
+        const page = { id: String(1000 + state.pages.length), spaceId: body.spaceId, title: body.title, status: body.status, ...(body.parentId ? { parentId: body.parentId } : {}),
           body: { storage: { representation: 'storage', value: body.body.value } } };
         state.pages.push(page);
         if (state.losePage) { state.losePage = false; return res.destroy(); }

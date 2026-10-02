@@ -154,3 +154,12 @@ test('site change queued behind token refresh preserves the legacy OAuth digest 
   assert.equal((await h.manager(`${endpoint}/sites`))[0].id, 'cloud-other');
   assert.equal(f.state.tokenCalls.filter(call => call.grant_type === 'refresh_token').length, 1);
 });
+
+test('Confluence publication rechecks allowed spaces after awaited pre-send work', async t => {
+  const { h, f, client } = await setup(t);
+  await assert.rejects(client.createConfluencePage({ cloud_id: 'cloud-test', space_id: '10', title: '설정 변경 경합', storage: '<p>본문</p>' }, {
+    beforeSend: () => save(h, undefined, { confluence_spaces: [] })
+  }), error => error.status === 403 && error.not_sent && /허용되지/.test(error.message));
+  assert.equal(f.state.pages.length, 0);
+  assert.equal(f.state.calls.filter(row => row.method === 'POST' && row.path.endsWith('/wiki/api/v2/pages')).length, 0);
+});

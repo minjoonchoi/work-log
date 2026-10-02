@@ -1,3 +1,4 @@
+import { parentSelection } from './confluence-targets.mjs';
 import { assert, digest, json, now, redact } from './shared.mjs';
 import { confluenceStorage } from './confluence-storage.mjs';
 import { reportBodyMarkdown } from '../apps/web/report-body.js';
@@ -20,8 +21,11 @@ export function confluenceReports({ store, reports, client, notify = () => {} })
     operation_id TEXT PRIMARY KEY, report_id TEXT NOT NULL, cloud_id TEXT NOT NULL, space_id TEXT NOT NULL,
     title TEXT NOT NULL, storage TEXT NOT NULL, storage_digest TEXT NOT NULL, state TEXT NOT NULL,
     page_id TEXT, url TEXT, message TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE INDEX IF NOT EXISTS confluence_publication_target ON confluence_publications(report_id,cloud_id,space_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS confluence_publication_active_target ON confluence_publications(report_id,cloud_id,space_id)
+    CREATE INDEX IF NOT EXISTS confluence_publication_target ON confluence_publications(report_id,cloud_id,space_id);`);
+  const columns = db.prepare('PRAGMA table_info(confluence_publications)').all().map(row => row.name);
+  for (const name of ['parent_id', 'parent_type']) if (!columns.includes(name)) db.exec(`ALTER TABLE confluence_publications ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
+  db.exec(`DROP INDEX IF EXISTS confluence_publication_active_target;
+    CREATE UNIQUE INDEX IF NOT EXISTS confluence_publication_active_location ON confluence_publications(report_id,cloud_id,space_id,parent_id)
       WHERE state IN ('preparing','sending','unknown','published');`);
   db.prepare("UPDATE confluence_publications SET state='failed',message='전송 전에 서비스가 종료되었습니다. 새 요청으로 게시할 수 있습니다.' WHERE state='preparing'").run();
   db.prepare("UPDATE confluence_publications SET state='unknown',message='게시 응답을 확인하지 못했습니다. Confluence 페이지 ID로 결과를 확인하세요.' WHERE state='sending'").run();
@@ -38,7 +42,7 @@ export function confluenceReports({ store, reports, client, notify = () => {} })
   }
   function publications(reportId) {
     assert(reports.execution(reportId), '업무 요약을 찾을 수 없습니다.', 404);
-    return db.prepare(`SELECT operation_id,report_id,cloud_id,space_id,title,state,page_id,url,message,created_at,updated_at
+    return db.prepare(`SELECT operation_id,report_id,cloud_id,space_id,title,state,page_id,url,message,created_at,updated_at,parent_id,parent_type
       FROM confluence_publications WHERE report_id=? ORDER BY rowid DESC`).all(reportId);
   }
   function finish(op, state, message = null, remote = {}) {
@@ -47,27 +51,28 @@ export function confluenceReports({ store, reports, client, notify = () => {} })
     return view(raw(op));
   }
   function publish(reportId, input) {
-    assert(input && Object.keys(input).every(k => ['operation_id', 'cloud_id', 'space_id'].includes(k))
+    assert(input && Object.keys(input).every(k => ['operation_id', 'cloud_id', 'space_id', 'parent_id', 'parent_type'].includes(k))
       && typeof input.operation_id === 'string' && /^[a-zA-Z0-9-]{8,80}$/.test(input.operation_id)
       && typeof input.cloud_id === 'string' && /^[a-zA-Z0-9-]{1,200}$/.test(input.cloud_id)
       && typeof input.space_id === 'string' && /^\d{1,30}$/.test(input.space_id), 'Confluence 게시 요청과 공간을 확인하세요.');
     const { operation_id, cloud_id, space_id } = input;
-    return exclusive(json([reportId, cloud_id, space_id]), async () => {
+    const parent = parentSelection(input.parent_id, input.parent_type), parent_id = parent?.id || '', parent_type = parent?.type || '';
+    return exclusive(json([reportId, cloud_id, space_id, parent_id]), async () => {
       const prior = raw(operation_id);
       if (prior) {
-        assert(prior.report_id === reportId && prior.cloud_id === cloud_id && prior.space_id === space_id, '같은 게시 요청 식별자의 내용이 다릅니다.', 409);
+        assert(prior.report_id === reportId && prior.cloud_id === cloud_id && prior.space_id === space_id && prior.parent_id === parent_id && prior.parent_type === parent_type, '같은 게시 요청 식별자의 내용이 다릅니다.', 409);
         return { ...view(prior), repeated: true };
       }
-      const current = one("SELECT * FROM confluence_publications WHERE report_id=? AND cloud_id=? AND space_id=? AND state IN ('preparing','sending','unknown','published')", reportId, cloud_id, space_id);
+      const current = one("SELECT * FROM confluence_publications WHERE report_id=? AND cloud_id=? AND space_id=? AND parent_id=? AND state IN ('preparing','sending','unknown','published')", reportId, cloud_id, space_id, parent_id);
       if (current) return { ...view(current), repeated: true };
       const detail = reports.detail(reportId, { summary: true }), { report } = detail;
       assert(report.state === 'completed' && typeof report.title === 'string' && report.title.trim() && report.title.length <= 255
         && typeof report.body === 'string' && report.body.trim(), '완료된 로컬 요약만 게시할 수 있습니다.', 409);
       const storage = buildReportStorage(detail), time = now();
-      exec('INSERT INTO confluence_publications VALUES(?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?)', operation_id, reportId, cloud_id, space_id,
-        report.title, storage, digest(storage), 'preparing', time, time); notify();
+      exec('INSERT INTO confluence_publications(operation_id,report_id,cloud_id,space_id,title,storage,storage_digest,state,created_at,updated_at,parent_id,parent_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', operation_id, reportId, cloud_id, space_id,
+        report.title, storage, digest(storage), 'preparing', time, time, parent_id, parent_type); notify();
       try {
-        const remote = await client.createConfluencePage({ cloud_id, space_id, title: report.title, storage }, {
+        const remote = await client.createConfluencePage({ cloud_id, space_id, title: report.title, storage, parent_id, parent_type }, {
           beforeSend: () => { finish(operation_id, 'sending'); }
         });
         return finish(operation_id, 'published', null, remote);
@@ -82,7 +87,7 @@ export function confluenceReports({ store, reports, client, notify = () => {} })
   function resolve(reportId, operationId, input) {
     assert(input && Object.keys(input).length === 1 && typeof input.page_id === 'string' && /^\d{1,30}$/.test(input.page_id), '확인할 Confluence 페이지 ID를 입력하세요.');
     const prior = raw(operationId); assert(prior && prior.report_id === reportId, '게시 기록을 찾을 수 없습니다.', 404);
-    return exclusive(json([reportId, prior.cloud_id, prior.space_id]), async () => {
+    return exclusive(json([reportId, prior.cloud_id, prior.space_id, prior.parent_id]), async () => {
       const current = raw(operationId);
       if (current.state === 'published') {
         assert(current.page_id === input.page_id, '이미 연결된 Confluence 페이지가 다릅니다.', 409);
@@ -91,7 +96,7 @@ export function confluenceReports({ store, reports, client, notify = () => {} })
       assert(current.state === 'unknown', '응답을 확인하지 못한 게시 기록만 페이지 ID로 확인할 수 있습니다.', 409);
       const { page, url } = await client.confluencePageForPublication(current.cloud_id, input.page_id);
       assert(page?.id === input.page_id && page.spaceId === current.space_id && page.status === 'current'
-        && page.title === current.title && typeof page.body?.storage?.value === 'string' && digest(page.body.storage.value) === current.storage_digest,
+        && (!current.parent_id || page.parentId === current.parent_id) && page.title === current.title && typeof page.body?.storage?.value === 'string' && digest(page.body.storage.value) === current.storage_digest,
       '공간·제목·본문이 원본 요약과 일치하지 않습니다. 게시 기록은 미확인으로 유지됩니다.', 409);
       return finish(operationId, 'published', '지정한 페이지의 공간·제목·본문이 저장한 게시 내용과 일치함을 확인했습니다.', { page_id: input.page_id, url });
     });

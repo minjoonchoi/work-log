@@ -127,6 +127,9 @@ GUI의 탐색·설정·캘린더 이동·빠른 패널 아이콘은 정적 inlin
 
 ### Finder 드래그 설치와 UI 제거
 
-DMG의 `Applications` 바로가기는 `/Applications`를 가리킨다. 첫 실행은 해당 위치의 앱을 복사하지 않고 채택하고, 사용자 홈 안에 런타임·LaunchAgent·소유 기록을 만든다. `app_location`은 `/Applications/WorkLog.app` 또는 해당 사용자의 `~/Applications/WorkLog.app`만 허용한다. 전역 앱 내부 접근은 별도 `safeInstallationPath`로 검사하고, 설정·런타임 경로는 기존 홈 경계를 유지한다. 전역 Applications 디렉터리는 생성·정리 소유 대상에 포함하지 않는다. 사용자 Applications 설치와 위치를 바꾸거나 드래그 설치본을 교체할 때는 기존 UI 제거 후 설치하며 업무 데이터는 보존한다.
+DMG의 `Applications` 바로가기는 `/Applications`를 가리킨다. 첫 실행은 해당 위치의 앱을 복사하지 않고 채택하고, 사용자 홈 안에 런타임·LaunchAgent·소유 기록을 만든다. `app_location`은 `/Applications/WorkLog.app` 또는 해당 사용자의 `~/Applications/WorkLog.app`만 허용한다. 전역 앱 내부 접근은 별도 `safeInstallationPath`로 검사하고, 설정·런타임 경로는 기존 홈 경계를 유지한다. 전역 Applications 디렉터리는 생성·정리 소유 대상에 포함하지 않는다. 업데이트는 같은 설치 경로에 앱을 대치하며 설치 제거를 요구하지 않는다. 사용자 Applications와 시스템 Applications는 별도 경로이므로 기존 설치 폴더를 유지한다.
 
 제거 UI는 임시 위치로 복사한 별도 도우미 앱에서 실행한다. 기본 제거는 WorkLog 소유 훅·스킬·서비스·앱만 제거한다. 사용자가 `연결 정보도 모두 삭제`를 체크하면 서비스 종료 확인 후 현재 데이터 디렉터리 해시에 대응하는 `local.worklog.atlassian`의 `oauth-*`, `client-*` Keychain 항목 두 개, `integrations/atlassian.json`, 로컬 API 인증 토큰·endpoint 파일, WorkLog 형식의 연결 설정 백업도 제거한다. 다른 CLI의 로그인, 사용자 인증서 원본, 업무 DB와 동기화 이력은 보존한다. Keychain/파일 정리에 실패하면 상세 원인과 재시도 가능한 앱을 남기고, 선택한 정리 의도는 소유 기록에 유지한다. 실패 후 앱 메뉴에서 제거를 다시 실행할 수 있다.
+
+
+앱 번들의 `Contents/Resources/build-id`와 소유 기록의 `build_id`를 비교해 Finder 대치를 감지한다. 새 앱은 서비스를 시작하기 전에 `update-dragged.mjs`를 실행한다. 실행 중인 이전 런타임이나 변경된 소유 파일이 있으면 갱신을 멈추고 원인을 표시한다. 사용자 홈의 같은 런타임 경로에서 준비·백업·이름 교체를 수행하며, 소유 기록의 `runtime_update`에 이전·새 파일 목록과 단계를 기록한다. 완료 전 중단은 이전 런타임으로 복구한 후 재시도하고, 완료 후 중단은 소유가 검증된 백업만 정리한다. Finder가 이미 대치한 앱 자체는 롤백하지 않는다. 훅 명령의 경로·설치 ID·서비스 설정·Keychain·업무 DB는 변경하지 않는다. 일반 `make install`도 새 빌드 ID를 기록한다.

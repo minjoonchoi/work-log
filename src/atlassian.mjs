@@ -1,3 +1,4 @@
+import { spaceRestrictions, assertAllowedSpace, verifyParent, confluenceTargets } from './confluence-targets.mjs';
 import { atlassianFailure } from './atlassian-errors.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,7 +11,7 @@ import { certificatePath, readCertificates, AtlassianTransport, connectionFailur
 export { jiraDescription } from './jira-adf.mjs';
 
 export const ATLASSIAN_CALLBACK = 'http://127.0.0.1:47831/oauth/atlassian/callback';
-export const ATLASSIAN_SCOPES = ['offline_access', 'read:jira-work', 'read:jira-user', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence'];
+export const ATLASSIAN_SCOPES = ['offline_access', 'read:jira-work', 'read:jira-user', 'write:jira-work', 'read:page:confluence', 'read:space:confluence', 'write:page:confluence', 'read:folder:confluence', 'read:hierarchical-content:confluence', 'read:content-details:confluence'];
 const clientId = value => {
   assert(typeof value === 'string' && value.trim() && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value), 'Client ID를 확인하세요.');
   return value.trim();
@@ -32,14 +33,15 @@ const siteUrl = value => {
 // this exact legacy shape so existing token digests remain valid.
 const oauthConfiguration = config => config && ({ client_id: config.client_id, credential_version: config.credential_version });
 const publicConfiguration = config => ({ client_id: config.client_id, ...(config.site_url ? { site_url: config.site_url } : {}),
-  ...(config.ca_cert_path ? { ca_cert_path: config.ca_cert_path } : {}) });
+  ...(config.ca_cert_path ? { ca_cert_path: config.ca_cert_path } : {}), ...(config.confluence_spaces !== undefined ? { confluence_spaces: config.confluence_spaces } : {}) });
 const configuration = input => {
   assert(input && typeof input === 'object' && !Array.isArray(input)
-    && Object.keys(input).every(k => ['client_id', 'credential_version', 'site_url', 'ca_cert_path'].includes(k))
+    && Object.keys(input).every(k => ['client_id', 'credential_version', 'site_url', 'ca_cert_path', 'confluence_spaces'].includes(k))
     && typeof input.credential_version === 'string' && /^[a-f0-9]{32}$/.test(input.credential_version), 'Atlassian 연결 설정을 다시 저장하세요.');
   const site = input.site_url === undefined ? null : siteUrl(input.site_url);
   const ca = input.ca_cert_path === undefined ? null : certificatePath(input.ca_cert_path);
-  return { client_id: clientId(input.client_id), credential_version: input.credential_version, ...(site ? { site_url: site } : {}), ...(ca ? { ca_cert_path: ca } : {}) };
+  const spaces = spaceRestrictions(input.confluence_spaces);
+  return { ...(spaces !== undefined ? { confluence_spaces: spaces } : {}), client_id: clientId(input.client_id), credential_version: input.credential_version, ...(site ? { site_url: site } : {}), ...(ca ? { ca_cert_path: ca } : {}) };
 };
 const sameState = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const error = (message, status = 400, code) => Object.assign(new Error(message), { status, code });
@@ -83,13 +85,15 @@ export class AtlassianClient {
   save(input) {
     return this.exclusive(async () => {
       assert(input && typeof input === 'object' && !Array.isArray(input)
-        && Object.keys(input).every(k => ['client_id', 'client_secret', 'site_url', 'ca_cert_path'].includes(k)), 'Client ID·Client Secret·회사 Jira 사이트·추가 CA 인증서 경로만 입력하세요.');
+        && Object.keys(input).every(k => ['client_id', 'client_secret', 'site_url', 'ca_cert_path', 'confluence_spaces'].includes(k)), 'Atlassian 연결 설정 항목을 확인하세요.');
       const client_id = clientId(input.client_id);
       assert(input.client_secret === undefined || (typeof input.client_secret === 'string' && input.client_secret.length <= 4096
         && !/[\u0000-\u001f\u007f]/.test(input.client_secret)), 'Client Secret을 확인하세요.');
       const supplied = input.client_secret?.trim() ? input.client_secret : null, current = this.config();
       const site = Object.hasOwn(input, 'site_url') ? siteUrl(input.site_url) : current?.site_url || null;
       const ca = Object.hasOwn(input, 'ca_cert_path') ? certificatePath(input.ca_cert_path) : current?.ca_cert_path || null;
+      const spaces = Object.hasOwn(input, 'confluence_spaces') ? spaceRestrictions(input.confluence_spaces) : current?.confluence_spaces;
+      const policy = spaces !== undefined ? { confluence_spaces: spaces } : {};
       readCertificates(ca);
       assert(supplied || current?.client_id === client_id, '처음 저장하거나 Client ID를 변경할 때는 Client Secret을 입력하세요.');
       const previous = await this.credentials.stored();
@@ -99,8 +103,8 @@ export class AtlassianClient {
       assert(supplied || matches, '저장된 Client Secret을 확인할 수 없습니다. 다시 입력하세요.');
       const client_secret = supplied || previous.client_secret;
       if (current?.client_id === client_id && matches && sameState(previous.client_secret, client_secret)) {
-        const value = { ...oauthConfiguration(current), ...(site ? { site_url: site } : {}), ...(ca ? { ca_cert_path: ca } : {}) };
-        if ((current.site_url || null) !== site || (current.ca_cert_path || null) !== ca) {
+        const value = { ...policy, ...oauthConfiguration(current), ...(site ? { site_url: site } : {}), ...(ca ? { ca_cert_path: ca } : {}) };
+        if ((current.site_url || null) !== site || (current.ca_cert_path || null) !== ca || json(current.confluence_spaces ?? null) !== json(spaces ?? null)) {
           try { atomic(this.file, JSON.stringify(value, null, 2)); }
           catch { throw error('Atlassian 연결 설정을 저장하지 못했습니다. 로컬 저장 경로를 확인하세요.', 503); }
           if ((current.site_url || null) !== site) this.siteGeneration++;
@@ -109,7 +113,7 @@ export class AtlassianClient {
         }
         return { config: publicConfiguration(value), has_client_secret: true };
       }
-      const value = { client_id, credential_version: crypto.randomBytes(16).toString('hex'), ...(site ? { site_url: site } : {}), ...(ca ? { ca_cert_path: ca } : {}) };
+      const value = { ...policy, client_id, credential_version: crypto.randomBytes(16).toString('hex'), ...(site ? { site_url: site } : {}), ...(ca ? { ca_cert_path: ca } : {}) };
       try {
         await this.credentials.write({ ...oauthConfiguration(value), client_secret });
         atomic(this.file, JSON.stringify(value, null, 2));
@@ -385,10 +389,13 @@ export class AtlassianClient {
     assert(url.protocol === 'https:' && !url.username && !url.password && url.hostname.endsWith('.atlassian.net'), 'Confluence 사이트 주소를 확인하세요.', 502);
     return new URL(`/wiki/pages/viewpage.action?pageId=${pageId}`, url).href;
   }
-  async confluenceSpaces(cloudId, cursor = null) {
+  confluenceTargets(input) { return confluenceTargets(this, input); }
+  async confluenceSpaces(cloudId, cursor = null, publication = false) {
     assert(cursor === null || (typeof cursor === 'string' && cursor.length > 0 && cursor.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(cursor)), 'Confluence 공간 페이지를 다시 불러오세요.');
     const site = await this.site(cloudId, 'confluence');
     assert(site.scopes.includes('read:space:confluence'), 'Confluence 공간 읽기 권한으로 OAuth를 다시 연결하세요.', 403);
+    const allowed = this.config()?.confluence_spaces;
+    if (publication && allowed != null) return { spaces: allowed.filter(row => row.cloud_id === cloudId).map(row => ({ id: row.space_id, name: row.name || row.space_id, key: row.key || row.space_id })), next_cursor: null, restricted: true };
     const base = `/ex/confluence/${cloudId}/wiki/api/v2/spaces`, params = new URLSearchParams({ status: 'current', limit: '50' });
     if (cursor) params.set('cursor', cursor);
     const result = await this.request(`${base}?${params}`);
@@ -410,9 +417,10 @@ export class AtlassianClient {
     }
     return { spaces, next_cursor };
   }
-  async createConfluencePage({ cloud_id, space_id, title, storage }, { beforeSend } = {}) {
+  async createConfluencePage({ cloud_id, space_id, title, storage, parent_id = null, parent_type = null }, { beforeSend } = {}) {
     let site;
     try {
+      assertAllowedSpace(this, cloud_id, space_id);
       site = await this.site(cloud_id, 'confluence');
       assert(site.scopes.includes('write:page:confluence') && site.scopes.includes('read:space:confluence'), 'Confluence 공간 읽기·페이지 쓰기 권한으로 OAuth를 다시 연결하세요.', 403);
       assert(typeof space_id === 'string' && /^\d+$/.test(space_id) && typeof title === 'string' && title.trim() && title.length <= 255
@@ -420,14 +428,15 @@ export class AtlassianClient {
       // Validate the accessible target before initiating the irreversible POST.
       const space = await this.request(`/ex/confluence/${cloud_id}/wiki/api/v2/spaces/${space_id}`);
       assert(space?.id === space_id && space.status === 'current', '현재 사용할 수 있는 Confluence 공간을 선택하세요.', 409);
+      await verifyParent(this, cloud_id, space_id, parent_id, parent_type);
       this.confluenceUrl(site, '0');
     } catch (e) { e.not_sent = true; throw e; }
     let result;
     try {
-      result = await this.request(`/ex/confluence/${cloud_id}/wiki/api/v2/pages`, { method: 'POST', beforeSend,
-        body: { spaceId: space_id, status: 'current', title, body: { representation: 'storage', value: storage } } });
+      result = await this.request(`/ex/confluence/${cloud_id}/wiki/api/v2/pages`, { method: 'POST', beforeSend: async () => { await verifyParent(this, cloud_id, space_id, parent_id, parent_type); return beforeSend?.(); }, authorization: () => assertAllowedSpace(this, cloud_id, space_id),
+        body: { ...(parent_id ? { parentId: parent_id } : {}), spaceId: space_id, status: 'current', title, body: { representation: 'storage', value: storage } } });
       assert(typeof result?.id === 'string' && /^\d+$/.test(result.id) && result.spaceId === space_id
-        && result.title === title && result.status === 'current', 'Confluence 페이지 생성 결과를 확인하지 못했습니다.', 502);
+        && result.title === title && result.status === 'current' && (!parent_id || result.parentId === parent_id), 'Confluence 페이지 생성 결과를 확인하지 못했습니다.', 502);
     } catch (e) {
       if (e.status === 400) e.message = 'Confluence 페이지 제목·본문과 공간 설정을 확인하세요.';
       throw e;

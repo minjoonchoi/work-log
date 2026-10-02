@@ -286,3 +286,30 @@ test('historical source lists stay stored but are omitted from the reader-facing
   await openSources(page); await page.locator('#report-sources .report-reference').first().click();
   await expect(page.getByRole('dialog').locator('.report-source-text')).toHaveText(['보존할 원본 이력', '보존할 원본 이력']);
 });
+
+test('calendar drag selects a date range across rows, removes ranges, cancels with Escape and preserves individual picks', async ({ page }) => {
+  await open(page); await calendar(page);
+  const point = async date => {
+    const cell = page.locator(`.month-day[data-date="${date}"]`); await cell.scrollIntoViewIfNeeded();
+    const box = await cell.boundingBox(); return { x: box.x + 25, y: box.y + 45 };
+  };
+  const start = await point('2026-09-11'), end = await point('2026-09-15');
+  await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 10 }); await page.mouse.up();
+  await expect(page.locator('#report-selection-count')).toHaveText('5일 선택됨');
+  for (const day of [11,12,13,14,15]) await expect(pick(page, `2026-09-${day}`)).toBeChecked();
+  const middle = await point('2026-09-13');
+  await page.mouse.move(end.x, end.y); await page.mouse.down(); await page.mouse.move(middle.x, middle.y, { steps: 5 }); await page.mouse.up();
+  await expect(page.locator('#report-selection-count')).toHaveText('2일 선택됨');
+  await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 5 });
+  await page.keyboard.press('Escape'); await page.mouse.up();
+  await expect(page.locator('#report-selection-count')).toHaveText('2일 선택됨');
+  await pick(page, '2026-09-15').check(); await expect(page.locator('#report-selection-count')).toHaveText('3일 선택됨');
+  await page.locator('#clear-report-dates').click();
+  await page.locator('[data-view="week"]').click();
+  const a = await page.locator('.time-header [data-date="2026-09-14"] time').boundingBox();
+  const b = await page.locator('.time-header [data-date="2026-09-17"] time').boundingBox();
+  await page.mouse.move(a.x + 5, a.y + 5); await page.mouse.down(); await page.mouse.move(b.x + 5, b.y + 5, { steps: 10 }); await page.mouse.up();
+  await expect(page.locator('#report-selection-count')).toHaveText('4일 선택됨');
+  await page.locator('[data-view="month"]').click();
+  for (const day of [14,15,16,17]) await expect(pick(page, `2026-09-${day}`)).toBeChecked();
+});

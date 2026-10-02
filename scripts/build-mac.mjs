@@ -1,4 +1,5 @@
 import { buildDMG } from './build-dmg.mjs';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -28,6 +29,7 @@ export function buildMac({ outputDir = path.join(ROOT, 'dist'), archive = true, 
 ${process.env.HARNESS_GUI_DATA_DIR ? `<key>HarnessDataRoot</key><string>${xml(path.resolve(process.env.HARNESS_GUI_DATA_DIR))}</string>` : ''}
 </dict></plist>`;
   atomic(path.join(contents, 'Info.plist'), plist);
+  atomic(path.join(resources, 'build-id'), crypto.randomUUID());
   onProgress('앱 아이콘을 생성하고 GUI를 컴파일합니다.');
   run('swift', [path.join(ROOT, 'scripts/build-icons.swift'), path.join(ROOT, 'apps/macos/assets/worklog.svg'), path.join(resources, 'WorkLog.icns')]);
   run('swiftc', ['-O', '-target', 'arm64-apple-macos13.0', '-framework', 'Cocoa', '-framework', 'WebKit', path.join(ROOT, 'apps/macos/main.swift'), '-o', path.join(contents, 'MacOS/WorkLog')]);
@@ -41,7 +43,7 @@ ${process.env.HARNESS_GUI_DATA_DIR ? `<key>HarnessDataRoot</key><string>${xml(pa
   // Recreate only this build's generated scripts directory; do not ship development fixture launchers.
   fs.rmSync(path.join(bundled, 'scripts'), { recursive: true, force: true });
   fs.mkdirSync(path.join(bundled, 'scripts'), { recursive: true });
-  for (const file of ['first-launch.mjs', 'install.mjs', 'replace-install.mjs', 'uninstall.mjs', 'remove-connections.mjs', 'install-state.mjs', 'install-output.mjs', 'agent-connections.mjs', 'service-control.mjs']) fs.copyFileSync(path.join(ROOT, 'scripts', file), path.join(bundled, 'scripts', file));
+  for (const file of ['update-dragged.mjs', 'first-launch.mjs', 'install.mjs', 'replace-install.mjs', 'uninstall.mjs', 'remove-connections.mjs', 'install-state.mjs', 'install-output.mjs', 'agent-connections.mjs', 'service-control.mjs']) fs.copyFileSync(path.join(ROOT, 'scripts', file), path.join(bundled, 'scripts', file));
   fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(bundled, 'package.json'));
   fs.copyFileSync(path.join(ROOT, 'package-lock.json'), path.join(bundled, 'package-lock.json'));
   for (const pkg of ['playwright', 'playwright-core', 'undici', 'ajv', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'require-from-string']) fs.cpSync(path.join(ROOT, 'node_modules', pkg), path.join(bundled, 'node_modules', pkg), { recursive: true });

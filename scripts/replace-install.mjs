@@ -132,7 +132,7 @@ export function replaceInstall(loc, previous, plan, staged, { activate, launchct
   assert(!previous.app_location, '드래그하여 설치한 앱은 설치 제거 후 새 앱으로 교체하세요. 업무 기록은 보존됩니다.');
   intact(loc, previous);
   assert(plan.runtimeRoot === previous.trees[1].path && plan.installationId === previous.id, '재설치 대상이 변경되었습니다. 다시 실행하세요.');
-  const receipt = { ...structuredClone(previous), state: 'reinstalling', updated_at: new Date().toISOString(),
+  const receipt = { ...structuredClone(previous), build_id: plan.buildId, state: 'reinstalling', updated_at: new Date().toISOString(),
     trees: previous.trees.map((tree, i) => ({ path: tree.path, entries: inventory(staged[i]) })),
     files: plan.files.map(file => ({ path: file.target, label: file.label, argv: file.argv, content: file.content,
       digest: digest(file.content), mode: 0o600, activation: 'not_started' })),

@@ -42,6 +42,7 @@ let delegate = AppDelegate()
 delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
 let background = ProcessInfo.processInfo.arguments.contains("--background")
 let backgroundHidden = !delegate.window.isVisible && !delegate.popover.isShown && delegate.webView == nil
+let backgroundAccessory = application.activationPolicy() == .accessory
 if background { delegate.loadMain() }
 let retry = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in delegate.refreshConnection() }
 var firstMain = "", firstQuick = ""
@@ -62,9 +63,15 @@ Timer.scheduledTimer(withTimeInterval: 5.5, repeats: false) { _ in
             let initialLaunchOpenedWindow = delegate.window.isVisible && !delegate.popover.isShown
             _ = delegate.applicationShouldHandleReopen(application, hasVisibleWindows: false)
             let reopenedWindow = delegate.window.isVisible && !delegate.popover.isShown
+            let dockVisible = application.activationPolicy() == .regular
+            delegate.window.close()
+            let dockRetainedAfterClose = application.activationPolicy() == .regular && !delegate.window.isVisible
+            _ = delegate.applicationShouldHandleReopen(application, hasVisibleWindows: false)
+            let dockReopenWorks = delegate.window.isVisible && application.activationPolicy() == .regular
             delegate.window.orderOut(nil)
             let result: [String: Any] = ["firstMain": firstMain, "firstQuick": firstQuick,
                 "main": main as? String ?? "", "quick": quick as? String ?? "", "health": delegate.connectionItem.title,
+                "backgroundAccessory": backgroundAccessory, "dockVisible": dockVisible, "dockRetainedAfterClose": dockRetainedAfterClose, "dockReopenWorks": dockReopenWorks,
                 "backgroundHidden": backgroundHidden, "initialLaunchOpenedWindow": initialLaunchOpenedWindow, "reopenedWindow": reopenedWindow]
             let bytes = try! JSONSerialization.data(withJSONObject: result)
             print(String(data: bytes, encoding: .utf8)!)
@@ -93,6 +100,8 @@ application.run()
   const result = await run(['--background']);
   assert.ok(navigationFailures >= 2, 'both initial WebView requests fail while the endpoint remains unchanged');
   assert.equal(result.backgroundHidden, true);
+  assert.equal(result.backgroundAccessory, true);
+  for (const key of ['dockVisible', 'dockRetainedAfterClose', 'dockReopenWorks']) assert.equal(result[key], true, key);
   assert.equal(result.initialLaunchOpenedWindow, false);
   assert.equal(result.reopenedWindow, true);
   assert.equal(result.health, '실행·관리 서비스 연결됨');
@@ -104,6 +113,7 @@ application.run()
   const launched = await run([]);
   assert.equal(launched.initialLaunchOpenedWindow, true, 'ordinary app launch opens the main window instead of toggling the menu-bar popover');
   assert.equal(launched.reopenedWindow, true);
+  for (const key of ['dockVisible', 'dockRetainedAfterClose', 'dockReopenWorks']) assert.equal(launched[key], true, key);
 });
 
 test('native WebViews load the real manager pages, injected authentication, modules and work item data', { skip: process.platform !== 'darwin', timeout: 20000 }, async t => {
