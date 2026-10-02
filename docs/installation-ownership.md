@@ -23,11 +23,11 @@ make uninstall-plan UNINSTALL_ARGS='--json'
 
 새 앱과 실행 파일을 먼저 준비한 뒤 기존 설치의 전체 파일 목록·종류·내용·권한·심링크 대상을 소유 기록과 비교한다. 수정·추가된 파일이나 변경된 서비스 정의가 있으면 덮어쓰지 않는다. WorkLog 소유 서비스의 종료를 확인한 후 파일을 교체하고 서비스를 다시 시작한다. 이 과정에서 하네스가 실행 중인 작업은 중단될 수 있지만 원본 Claude/Codex 앱과 사용자의 에이전트 세션 프로세스는 종료 대상으로 삼지 않는다. 재설치는 사용자가 실행한 설치 명령에 의한 갱신이며 무인 자동 업데이트가 아니다.
 
-설치·재설치 성공 후에는 이 저장소의 `dist/WorkLog.app`, `dist/package/WorkLog/WorkLog.app` 두 경로만 중복 정리 후보로 확인한다. 설치 소유 기록의 앱과 전체 파일 목록·종류·내용·권한·심링크 대상이 일치하는 복사본만 제거한다. 수정·추가 파일, 앱 또는 상위 경로의 심링크, 다른 버전, 확인 실패가 있으면 해당 앱을 보존하고 결과의 `build_cleanup.preserved` 목록에 경로와 이유를 남긴다. 다른 앱을 검색하거나 `dist/package/WorkLog` 폴더 전체를 지우지 않는다. 예전 `dist/Work Log.app`도 정리 대상이 아니다. 설치가 실패하면 기존 빌드 산출물은 정리하지 않는다.
+설치·재설치 성공 후에는 `dist/WorkLog.app`, `dist/package/WorkLog/WorkLog.app`과 `output`의 WorkLog 빌드 앱을 정리한다. 설치본을 소유 기록으로 먼저 검증하고, 빌드 복사본은 설치본과 일치하거나 WorkLog 번들 ID·패키지 이름이 확인되면 이전 버전도 제거한다. 확인되지 않은 앱과 앱 또는 상위 경로의 심링크는 보존하고 `build_cleanup.preserved`에 이유를 남긴다. `dist/package/WorkLog` 폴더 전체나 다른 앱은 지우지 않는다. 설치가 실패하면 기존 빌드 산출물은 정리하지 않는다.
 
 `make install INSTALL_ARGS='--source-app /path/to/WorkLog.app'`은 미리 빌드된 앱을 설치한다. 기존 Node만 사용하며 Node 다운로드·`npm ci`·앱 빌드를 건너뛴다. 명시한 원본 앱은 중복 정리 후보 경로에 있더라도 보존한다. ZIP의 설치 명령이나 `scripts/install.mjs`를 직접 실행하는 경우에도 원본 앱을 소비하거나 삭제하지 않는다.
 
-`make build`는 개발·배포용 `dist/WorkLog.app`과 `dist/WorkLog-macos-arm64.zip`을 남긴다. ZIP에는 앱과 설치·제거 명령이 포함되며 포장용 임시 폴더는 정리한다. 설치용 빌드는 `dist`에 새 앱이나 ZIP을 만들지 않는다. 과거 ZIP, Node 캐시, 업무 데이터는 중복 앱 정리 대상이 아니다.
+`make build`는 `dist/WorkLog-macos-arm64.dmg`과 `dist/WorkLog-macos-arm64.zip`만 새로 남긴다. 앱은 임시 폴더에서 빌드하고 포장 후 성공·실패와 관계없이 임시 폴더를 정리한다. 성공하면 이전 `dist`의 확인된 WorkLog 앱 복사본도 정리한다. ZIP에는 앱과 설치·제거 명령이 포함된다. 설치용 빌드는 임시 앱만 만들며 기존 DMG·ZIP, Node 캐시, 업무 데이터는 정리하지 않는다.
 
 ## 빌드용 Node 선택과 준비
 
@@ -41,7 +41,7 @@ Node는 빌드하는 앱 안에 복사한다. 기존 시스템·nvm 설치본을
 
 `make install-plan`, `make uninstall-plan`, `make uninstall`, `make test`는 `--existing` 모드로 기존 Node만 사용하고 다운로드하지 않는다. 이 모드는 자동 탐색 시 nvm 다음으로 설치된 앱과 `dist/WorkLog.app`의 Node를 확인한 뒤 캐시를 찾으며, 버전과 `node:sqlite` 지원을 검사한다. `make test`에는 선택한 Node와 함께 사용할 npm도 필요하다. 제거 명령은 빌드가 필요 없으며 셸에 Node가 없어도 설치된 앱의 실행 파일을 후보로 사용할 수 있다. 필요한 Node를 찾지 못하면 사용자 설정을 바꾸지 않고 실패한다.
 
-`npm run build:mac`을 직접 실행하는 경우에는 `HARNESS_BUNDLE_NODE` 또는 실행 중인 `process.execPath`를 사용한다. 번들 후보 검증은 기존 `dist/WorkLog.app`을 교체하기 전에 수행한다. Node 자동 준비와 의존성 설치까지 필요하면 `make build`를 사용한다. 빌드만으로 사용자 설치본이 교체되지는 않으며, 반영하려면 `make install`을 실행한다.
+`npm run build:mac`을 직접 실행하는 경우에는 `HARNESS_BUNDLE_NODE` 또는 실행 중인 `process.execPath`를 사용한다. 번들 후보 검증은 기존 배포 파일을 교체하기 전에 수행한다. Node 자동 준비와 의존성 설치까지 필요하면 `make build`를 사용한다. 빌드만으로 사용자 설치본이 교체되지는 않으며, 반영하려면 `make install`을 실행한다.
 
 ## Claude와 Codex 연결·해제
 

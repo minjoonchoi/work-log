@@ -395,3 +395,14 @@ test('failed installation leaves output build bundles untouched', t => {
   assert.throws(() => c.install({ build() { throw new Error('build failed'); } }), /build failed/);
   assert.equal(present(app), true);
 });
+
+test('installation cleans an older recognized dist build despite a different build payload', t => {
+  const f=setup(t); f.duplicate(f.legacy[0]);
+  const app=f.legacy[0];
+  fs.writeFileSync(path.join(app,'Contents/Info.plist'),'<key>CFBundleIdentifier</key><string>local.worklog.harness</string>');
+  fs.writeFileSync(path.join(app,'Contents/Resources/harness/package.json'),'{"name":"work-log"}');
+  fs.writeFileSync(path.join(app,'Contents/MacOS/WorkLog'),'older build');
+  const result=f.install();
+  assert.ok(result.build_cleanup.removed.includes(app)); assert.equal(present(app),false);
+  assert.ok(present(f.loc.app)); assert.equal(present(f.calls[0].outputDir),false);
+});

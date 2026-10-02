@@ -92,7 +92,7 @@ HARNESS_NODE_DOWNLOAD=0 make build
 
 설치 후에는 `~/Applications/WorkLog.app`을 실행합니다. 일반 실행은 업무 목록 창을 열고 메뉴 막대 아이콘은 빠른 패널을 엽니다. **연결 설정**에서 사용할 Claude 또는 Codex의 **이력 수집**과 선택적인 **하네스 위임**을 각각 연결합니다. 한쪽만 해제할 수 있으며 다른 엔진의 연결에도 영향을 주지 않습니다. Atlassian은 같은 화면의 별도 설정에서 관리합니다. 이후 최신 코드를 반영하려면 `make install`을 다시 실행합니다.
 
-설치·재설치가 성공한 뒤에는 과거 빌드가 남긴 `dist/WorkLog.app`, `dist/package/WorkLog/WorkLog.app`을 확인합니다. 설치 소유 기록과 전체 파일 목록·내용·권한이 일치하는 복사본만 정리합니다. 수정·추가 파일, 앱이나 상위 경로의 심링크, 다른 버전이 있으면 보존하고 결과의 `build_cleanup.preserved` 목록에 알립니다. 예전 `dist/Work Log.app`이나 다른 위치의 앱은 자동 정리 대상이 아닙니다.
+설치·재설치는 임시 폴더에서 앱을 빌드해 Applications에 설치하고 임시 앱을 정리합니다. `dist/WorkLog.app`, `dist/package/WorkLog/WorkLog.app`에 남은 이전 WorkLog 빌드도 버전에 관계없이 정리합니다. WorkLog로 확인되지 않거나 심링크인 경로는 보존하고 `build_cleanup.preserved`에 알립니다. 업무 데이터·설정과 DMG·ZIP은 유지합니다.
 
 미리 빌드한 앱을 설치하려면 `make install INSTALL_ARGS='--source-app /path/to/WorkLog.app'`을 사용합니다. 이 경우 기존 Node로 설치하고 Node 다운로드·의존성 설치·앱 빌드를 건너뛰며, 지정한 원본 앱은 보존합니다.
 
@@ -103,9 +103,9 @@ make build
 make install-plan
 ```
 
-`make build`는 개발·배포용 Node 준비·의존성 설치·앱 빌드·ZIP 생성을 수행합니다. 위의 `node` CLI 예시는 셸에 Node가 있을 때 사용할 수 있습니다. `HARNESS_GUI_DATA_DIR` 없이 빌드하면 일반 사용자 데이터 경로를 사용하는 배포용 앱을 만듭니다. `npm run build:mac`을 직접 실행하면 `HARNESS_BUNDLE_NODE` 또는 빌드 스크립트를 실행 중인 Node를 번들 후보로 검사하며, 검사 실패 시 기존 `dist/WorkLog.app`을 덮어쓰지 않습니다. Node 자동 준비는 `make build`를 사용하세요.
+`make build`는 개발·배포용 Node 준비·의존성 설치·앱 빌드·DMG·ZIP 생성을 수행합니다. 위의 `node` CLI 예시는 셸에 Node가 있을 때 사용할 수 있습니다. `HARNESS_GUI_DATA_DIR` 없이 빌드하면 일반 사용자 데이터 경로를 사용하는 배포용 앱을 만듭니다. `npm run build:mac`을 직접 실행하면 `HARNESS_BUNDLE_NODE` 또는 빌드 스크립트를 실행 중인 Node를 번들 후보로 검사하며, 검사 실패 시 기존 배포 파일을 덮어쓰지 않습니다. Node 자동 준비는 `make build`를 사용하세요.
 
-결과는 `dist/WorkLog.app`과 `dist/WorkLog-macos-arm64.zip`입니다. ZIP에는 앱과 `Install WorkLog.command`, `Uninstall WorkLog.command`가 들어 있습니다. ZIP 포장에 사용한 임시 폴더는 정리하며 `dist/package`에 새 앱 복사본을 남기지 않습니다. 개발용 ad-hoc 서명이며 Apple 공증은 적용하지 않았습니다.
+결과는 `dist/WorkLog-macos-arm64.dmg`과 `dist/WorkLog-macos-arm64.zip` 두 파일입니다. 앱은 임시 폴더에서 빌드하고 포장 후 정리하므로 `dist`에 `.app`을 남기지 않습니다. ZIP에는 앱과 `Install WorkLog.command`, `Uninstall WorkLog.command`가 들어 있습니다. 개발용 ad-hoc 서명이며 Apple 공증은 적용하지 않았습니다.
 
 **설치 계획 생성은 사용자 설정을 변경하지 않습니다.** 실제 설치는 ZIP의 설치 명령을 사용하거나 `node scripts/install.mjs --apply`를 명시해 수행합니다. 다음 변경을 만듭니다.
 

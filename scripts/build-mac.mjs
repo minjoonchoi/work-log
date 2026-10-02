@@ -1,3 +1,4 @@
+import { cleanReleaseApps } from './build-copies.mjs';
 import { buildDMG } from './build-dmg.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -7,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ROOT, assert, atomic, json } from '../src/shared.mjs';
 
-export function buildMac({ outputDir = path.join(ROOT, 'dist'), archive = true, stdio = 'inherit', onProgress = () => {} } = {}) {
+function buildMacOutput({ appOutputDir, outputDir = path.join(ROOT, 'dist'), archive = true, stdio = 'inherit', onProgress = () => {} } = {}) {
   const run = (command, args) => { const result = spawnSync(command, args, { stdio }); assert(result.status === 0, `${command} 실패`); };
   // Check the actual runtime before replacing a previous successful build.
   const candidate = process.env.HARNESS_BUNDLE_NODE || process.execPath;
@@ -16,7 +17,7 @@ export function buildMac({ outputDir = path.join(ROOT, 'dist'), archive = true, 
   assert(probe.status === 0, `앱에 포함할 Node를 확인하세요. make build는 로컬 Node 선택과 자동 준비를 지원합니다.\n${probe.stderr || probe.error?.message || ''}`);
   const node = probe.stdout.trim();
   assert(fs.existsSync(node), 'HARNESS_BUNDLE_NODE에 Node 22.17+ 실행 파일 경로를 지정하세요.');
-  const app = path.resolve(outputDir, 'WorkLog.app'), contents = path.join(app, 'Contents'), resources = path.join(contents, 'Resources');
+  const app = path.resolve(appOutputDir || outputDir, 'WorkLog.app'), contents = path.join(app, 'Contents'), resources = path.join(contents, 'Resources');
   fs.rmSync(app, { recursive: true, force: true });
   fs.mkdirSync(path.join(contents, 'MacOS'), { recursive: true }); fs.mkdirSync(resources, { recursive: true });
   const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -77,6 +78,19 @@ ${process.env.HARNESS_GUI_DATA_DIR ? `<key>HarnessDataRoot</key><string>${xml(pa
     } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   }
   return { app, archive: archivePath, dmg: dmgPath, signing: 'local ad-hoc; not notarized', test_data_root: process.env.HARNESS_GUI_DATA_DIR || null };
+}
+
+// Distribution builds expose only archives. Installers explicitly request an
+// unpacked app in their own temporary directory and clean it after installation.
+export function buildMac(options = {}) {
+  if (options.archive === false) return buildMacOutput(options);
+  const outputDir = path.resolve(options.outputDir || path.join(ROOT, 'dist'));
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-build-'));
+  try {
+    fs.mkdirSync(outputDir, { recursive: true });
+    const result = buildMacOutput({ ...options, outputDir, appOutputDir: stage });
+    return { ...result, app: null, build_cleanup: cleanReleaseApps(outputDir) };
+  } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }
 
 const invokedAsProgram = process.argv[1] && fs.existsSync(process.argv[1])

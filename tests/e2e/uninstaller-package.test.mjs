@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,9 +7,18 @@ import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { ROOT } from '../../src/shared.mjs';
 
-const app = path.join(ROOT, 'dist/WorkLog.app');
+const archive = path.join(ROOT, 'dist/WorkLog-macos-arm64.zip');
+let extracted, app;
+before(() => {
+  if (process.platform !== 'darwin' || !fs.existsSync(archive)) return;
+  extracted = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-package-test-'));
+  const result = spawnSync('ditto', ['-x', '-k', archive, extracted], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  app = path.join(extracted, 'WorkLog/WorkLog.app');
+});
+after(() => { if (extracted) fs.rmSync(extracted, { recursive: true, force: true }); });
 for (const dragged of [false, true]) test(`staged GUI removal survives ${dragged ? 'drag installation' : 'standard installation'} and preserves work data`, {
-  skip: process.platform !== 'darwin' || !fs.existsSync(path.join(app, 'Contents/Helpers/WorkLog Uninstaller.app'))
+  skip: process.platform !== 'darwin' || !fs.existsSync(archive)
 }, t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-ui-uninstall-test-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
