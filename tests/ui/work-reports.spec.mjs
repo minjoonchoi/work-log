@@ -319,7 +319,7 @@ test('missing personal publication permissions or space disables publication wit
   await h.ingest(sample('report-basic','2026-09-17')); await createLocal(page); await authorize(h);
   const scopes=f.state.scopes; f.state.scopes=scopes.filter(s=>s!=='write:folder:confluence');
   await page.locator('#publish-report').click();
-  await expect(page.locator('#report-publish-error')).toContainText('개인 공간 게시 권한 연결');
+  await expect(page.locator('#report-publish-error')).toContainText('개인 공간 게시 권한이 부족');
   await expect(page.locator('#confirm-publish-report')).toBeDisabled();
   await page.getByRole('button',{name:'취소',exact:true}).click();
   f.state.scopes=scopes; f.state.personalSpace=null;

@@ -277,7 +277,7 @@ test('space search finds unloaded pages, binds pagination to the query and rejec
 test('legacy OAuth stays connected but personal publication requires separate permissions', async t => {
   const {h,f} = await setup(t), local = await report(h); await authorize(h);
   f.state.scopes = ['read:jira-work','write:jira-work','read:page:confluence','read:space:confluence','write:page:confluence'];
-  await assert.rejects(publish(h,local.report.id,request('legacy-publish')), /개인 공간 게시 권한 연결/);
+  await assert.rejects(publish(h,local.report.id,request('legacy-publish')), /개인 공간 게시 권한이 부족/);
   assert.equal((await h.manager('/integrations/atlassian')).connected,true);
   assert.equal(writes(f).length,0);
 });

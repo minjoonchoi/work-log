@@ -374,7 +374,7 @@ test('space settings are removed without changing previously saved data', async 
   expect((await h.manager('/integrations/atlassian')).config.confluence_spaces).toEqual(allowed);
 });
 
-test('basic and exploration connection buttons request separate permission modes', async ({ page }) => {
+test('Atlassian exposes only the basic connection button and never requests extra scopes', async ({ page }) => {
   await saveSettings(h); await open(page); await showSettings(page);
   await page.evaluate(() => { window.open = () => null; });
   const requests = [];
@@ -384,9 +384,9 @@ test('basic and exploration connection buttons request separate permission modes
   });
   await page.getByRole('button',{name:'Atlassian 연결',exact:true}).click();
   await expect.poll(()=>requests.length).toBe(1); expect(requests[0]).toEqual({});
-  await page.getByRole('button',{name:'개인 공간 게시 권한 연결',exact:true}).click();
-  await expect.poll(()=>requests.length).toBe(2); expect(requests[1]).toEqual({confluence_exploration:true});
+  await expect(page.getByRole('button',{name:'개인 공간 게시 권한 연결',exact:true})).toHaveCount(0);
+  expect(requests).toEqual([{}]);
   await page.getByText('OAuth 앱 등록 안내',{exact:true}).click();
   await expect(page.locator('#oauth-required-scopes')).toContainText('기본 연결 · Atlassian 연결 버튼');
-  await expect(page.locator('#oauth-required-scopes')).toContainText('개인 공간 게시 · 개인 공간 게시 권한 연결 버튼');
+  await expect(page.locator('#oauth-required-scopes')).toContainText('개인 공간 게시에 필요한 추가 권한');
 });

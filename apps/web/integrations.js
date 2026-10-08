@@ -47,8 +47,8 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
       <label for="atlassian-ca-cert-path">추가 CA 인증서 파일 경로</label><input id="atlassian-ca-cert-path" maxlength="4096" placeholder="~/Certificates/company-ca.pem" autocomplete="off" spellcheck="false" aria-describedby="atlassian-ca-cert-help" value="${esc(s.config?.ca_cert_path || '')}">
       <p id="atlassian-ca-cert-help" class="help">회사 루트·중간 CA 인증서(.pem/.crt)의 절대 경로 또는 ~/ 경로를 입력하세요. 비워서 저장하면 추가 인증서만 해제하며, 기존 연결은 유지합니다.</p>
       </div>
-      <p class="help">업무 요약은 내 개인 공간의 업무 요약 폴더에만 게시됩니다. 개인 공간 게시 권한 연결에서 필요한 권한을 승인하세요. 추가 권한 연결을 취소해도 기존 연결은 유지됩니다.</p>
-      <div class="settings-actions"><button id="save-atlassian" class="secondary">설정 저장</button><button id="connect-atlassian" class="primary">Atlassian 연결</button><button id="connect-atlassian-exploration" class="secondary">개인 공간 게시 권한 연결</button><button id="disconnect-atlassian" class="secondary">연결 해제</button></div>
+      <p class="help">업무 요약은 내 개인 공간의 업무 요약 폴더에만 게시됩니다. 게시에는 개인 공간 조회·폴더 생성 권한이 필요합니다.</p>
+      <div class="settings-actions"><button id="save-atlassian" class="secondary">설정 저장</button><button id="connect-atlassian" class="primary">Atlassian 연결</button><button id="disconnect-atlassian" class="secondary">연결 해제</button></div>
       ${target ? '' : '<div class="dialog-actions"><button data-close>닫기</button></div>'}`);
     const dialog = $('#modal'), client = $('#atlassian-client-id'), secret = $('#atlassian-client-secret'), toggle = $('#toggle-client-secret'), site = $('#atlassian-site-url'), caCert = $('#atlassian-ca-cert-path');
     let config = s.config, hasSecret = !!s.has_client_secret, origin = null, revision = 0, revealing = 0, busy = false, disposed = false;
@@ -70,7 +70,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     const withBusy = fn => async () => {
       if (busy || view.loading || !view.active()) return;
       busy = true; revealing++;
-      const controls = [client, secret, toggle, site, caCert, $('#save-atlassian'), $('#connect-atlassian'), $('#connect-atlassian-exploration'), $('#disconnect-atlassian'), ...dialog.querySelectorAll('[data-settings-tab], #back-connection-settings')];
+      const controls = [client, secret, toggle, site, caCert, $('#save-atlassian'), $('#connect-atlassian'), $('#disconnect-atlassian'), ...dialog.querySelectorAll('[data-settings-tab], #back-connection-settings')];
       controls.forEach(control => control.disabled = true);
       try { await fn(); } catch (e) { currentError(e); }
       finally { busy = false; if (view.active()) { controls.forEach(control => control.disabled = false); present(); } }
@@ -109,16 +109,14 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
     };
     if (onBack) $('#back-connection-settings').onclick = withBusy(async () => { await onBack(); });
     $('#save-atlassian').onclick = withBusy(async () => { if (await save()) { toast('연결 설정을 저장했습니다.'); await pollSettings(); } });
-    const connect = exploration => withBusy(async () => {
+    $('#connect-atlassian').onclick = withBusy(async () => {
       if (dirty() && !await save()) return;
       clearSecret();
-      const result = await api('/integrations/atlassian/authorize', { method: 'POST', body: exploration ? { confluence_exploration: true } : {} });
+      const result = await api('/integrations/atlassian/authorize', { method: 'POST', body: {} });
       if (view.active()) { openExternal(result.authorization_url); await pollSettings(); }
     });
-    $('#connect-atlassian').onclick = connect(false);
-    $('#connect-atlassian-exploration').onclick = connect(true);
     $('#disconnect-atlassian').onclick = withBusy(async () => { await api('/integrations/atlassian', { method: 'DELETE' }); if (view.active()) { await pollSettings(); toast('이 앱의 Atlassian 연결을 해제했습니다.'); } });
-    const formControls = [client, secret, toggle, site, caCert, $('#oauth-callback'), $('#save-atlassian'), $('#connect-atlassian'), $('#connect-atlassian-exploration'), $('#disconnect-atlassian')];
+    const formControls = [client, secret, toggle, site, caCert, $('#oauth-callback'), $('#save-atlassian'), $('#connect-atlassian'), $('#disconnect-atlassian')];
     const retry = $('#retry-atlassian-settings');
     async function loadSettings() {
       if (!view.active()) return;
@@ -148,7 +146,7 @@ export function integrationUI({ api, esc, modal, toast, refresh, absoluteTime })
         };
         const scopeGroup = (title, scopes) => `<h5>${title}</h5><ul class="oauth-scope-list">${scopes.map(scope => `<li><code>${esc(scope)}</code><span>${esc(scopeLabels[scope] || '앱 연결에 필요한 권한')}</span></li>`).join('')}</ul>`;
         $('#oauth-required-scopes').innerHTML = scopeGroup('기본 연결 · Atlassian 연결 버튼', loaded.base_scopes || loaded.scopes || [])
-          + scopeGroup('개인 공간 게시 · 개인 공간 게시 권한 연결 버튼', loaded.exploration_scopes || []);
+          + scopeGroup('개인 공간 게시에 필요한 추가 권한', loaded.exploration_scopes || []);
 
         view.status.textContent = connectionText(loaded);
         view.loading = false;

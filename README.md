@@ -140,7 +140,7 @@ GUI의 **연결 설정 → Atlassian 설정**에서 Atlassian 앱의 **Client ID
 
 **개인 공간으로 게시**는 현재 연결한 사용자의 개인 공간에만 게시합니다. **업무 요약** 폴더를 찾아 재사용하고, 없으면 최초 게시 때 생성합니다. 공간 설정·상위 페이지 선택은 제공하지 않습니다. 개인 공간이 없다면 Confluence에서 먼저 만들어야 합니다. 기존 게시 이력과 이전 공간 설정 데이터는 보존하되, 이전 공간 설정은 새 업무 요약 게시에 적용하지 않습니다.
 
-기본 **Atlassian 연결**은 기존 7개 권한만 요청합니다. **개인 공간 게시 권한 연결**은 기본 권한에 `read:content-details:confluence`, `read:folder:confluence`, `write:folder:confluence`를 추가 요청합니다. 연결 거절 시 기존 토큰은 유지됩니다. **OAuth 앱 등록 안내 → 필요한 권한 전체**에 권한과 용도가 표시됩니다. 폴더 생성 응답이 유실되면 자동 재생성하지 않고 기존 폴더를 확인합니다.
+**Atlassian 연결**은 기존 7개 권한만 요청합니다. 별도의 개인 공간 게시 권한 연결 버튼은 제공하지 않습니다. 개인 공간 게시는 현재 연결에 `read:content-details:confluence`, `read:folder:confluence`, `write:folder:confluence`가 이미 승인되어 있어야 하며, 부족하면 필요한 권한을 안내합니다. **OAuth 앱 등록 안내 → 필요한 권한 전체**에서 기본 연결 권한과 게시에 필요한 추가 권한을 구분해 확인할 수 있습니다. 폴더 생성 응답이 유실되면 자동 재생성하지 않고 기존 폴더를 확인합니다.
 
 
 이 주소는 회사의 Jira·Confluence 사이트를 선택하는 값입니다. Cloud OAuth 토큰 교환은 `auth.atlassian.com`, API 요청은 `api.atlassian.com`과 조회한 `cloudId`를 사용합니다. 사이트 주소 변경은 토큰 서버의 네트워크 연결 오류를 해결하는 설정이 아닙니다. [Atlassian Cloud OAuth API 호출 방식](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)

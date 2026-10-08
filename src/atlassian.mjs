@@ -458,7 +458,7 @@ export class AtlassianClient {
   async personalPublicationSpace(cloudId) {
     const site = await this.site(cloudId, 'confluence');
     assert(['read:page:confluence', 'read:space:confluence', 'write:page:confluence', ...ATLASSIAN_EXPLORATION_SCOPES].every(scope => site.scopes.includes(scope)),
-      '개인 공간 게시 권한이 부족합니다. Atlassian 설정에서 개인 공간 게시 권한 연결을 완료하세요.', 403);
+      '개인 공간 게시 권한이 부족합니다. 현재 연결에 개인 공간 조회·폴더 읽기·폴더 생성 권한이 필요합니다.', 403);
     const personal = await this.confluencePersonalSpace(cloudId);
     assert(personal, '개인 공간이 없습니다. Confluence에서 개인 공간을 만든 뒤 다시 게시하세요.', 409);
     return personal;
