@@ -1,3 +1,4 @@
+import { isPlainWriting, plainWritingPrompt } from './plain-writing.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, assert, json } from './shared.mjs';
@@ -105,6 +106,7 @@ export function compileRequest(task, input, prompt, job, requestSchema) {
 
 export function buildPrompt({ stage, definition, request, candidate, issues, inputReferences = [] }) {
   const { job } = definition, taskType = definition.task_types[stage];
+  if (isPlainWriting(request.task) && taskType?.writes_artifact) return plainWritingPrompt({ definition, request });
   assert(taskType?.executor === 'agent', '모델로 수행할 수 없는 작업 유형입니다.');
   const direct = workerStagePolicy(definition.worker_policy, stage)?.mode === 'direct';
   const directReview = direct && stage === 'review';

@@ -1,3 +1,5 @@
+import { closeWritingProcess } from './writing-process.mjs';
+import { isPlainWriting } from './plain-writing.mjs';
 import { historyTasks, historySettings, retiredWorkMessage } from './product-scope.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,7 +30,7 @@ const readAgentConnections = fs.existsSync(path.join(dir, 'installation.json'))
 const { definitions, rules, responseSchema, taskTypes, workflows, profiles, executionProfiles, runSchema, requestSchema } = loadCatalog();
 const packages = harnessPackages({ dir, jobs: definitions.jobs });
 const settings = executionSettings({ dir, jobs: definitions.jobs, workflows, profiles: executionProfiles, packages });
-const runtimeDigest = digest([...['runtime', 'plans', 'agent-origin', 'review-policy', 'task-policy', 'worker-policy', 'worker-context', 'workflow-checkpoint', 'code-bundle', 'artifact-handoff', 'executor', 'execution-settings', 'harness-packages', 'task-drafts', 'task-type-draft', 'model-capabilities', 'task-instruction', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite', 'work-report', 'result-summary'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
+const runtimeDigest = digest([...['runtime', 'plans', 'agent-origin', 'review-policy', 'task-policy', 'worker-policy', 'worker-context', 'workflow-checkpoint', 'code-bundle', 'artifact-handoff', 'executor', 'plain-writing', 'writing-process', 'stored-writing', 'execution-settings', 'harness-packages', 'task-drafts', 'task-type-draft', 'model-capabilities', 'task-instruction', 'verifier', 'shared', 'process-runner', 'catalog', 'scenarios', 'checks', 'schema', 'workflow', 'intake', 'session-summary', 'text-rewrite', 'work-report', 'result-summary'].map(name => fs.readFileSync(path.join(ROOT, `src/${name}.mjs`), 'utf8')),
   fs.readFileSync(path.join(ROOT, 'harness/model-capabilities.json'), 'utf8'),
   fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8')].join('\n'));
 const db = database(path.join(dir, 'runtime.sqlite'), `
@@ -287,6 +289,7 @@ async function agentStep(row, request, definition, task, candidate, issues, roun
   emitWorkEvent(request, { ...workerBase, id: `input-${attempt}`, kind: 'input', event_at: now(), turn_id: attempt, text: prompt });
   const processRun = execute({ engine: request.engine, cwd, attemptDir, stage: task, prompt, limits: definition.limits, parent, dataDir: dir,
     execution: request.engine === 'fixture' ? null : definition.execution_profile.stages[task][request.engine],
+    plainText: directWriter && isPlainWriting(request.task),
     schema: directWriter ? directResponseSchema : definition.response_schema,
     workerPolicy: stagePolicy, allowedFile: job.file, fixture: { ...request.fixture, job, round, epoch: row.epoch, input: request.input, direct: directWriter },
     onSpawn: pid => db.prepare('UPDATE attempts SET pid=? WHERE id=?').run(pid, attempt) });
@@ -411,7 +414,7 @@ function schedule() {
   plans.tick();
   const ready = db.prepare("SELECT * FROM runs WHERE status='pending' ORDER BY created_at").all();
   for (const row of ready) {
-    if (running.size >= definitions.limits.concurrency) break;
+    if (running.size >= 1) break; // One CLI subprocess at a time across all writing coordinators.
     const request = JSON.parse(row.request);
     if (request.plan_id && !plans.canSchedule(request.plan_id)) continue;
     if (request.task === 'checks.run') { if (activeCheckRun) continue; activeCheckRun = row.id; }
@@ -664,6 +667,7 @@ async function stop() {
     processRun.cancel();
   }
   server.close(); await Promise.allSettled([...executions.values()]);
+  await closeWritingProcess();
   server.closeAllConnections(); process.exit(0);
 }
 process.on('SIGTERM', stop); process.on('SIGINT', stop);

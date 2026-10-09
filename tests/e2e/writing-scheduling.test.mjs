@@ -183,7 +183,7 @@ test('periodic admission replaces a stale pending summary atomically and preserv
   assert.equal(c.store.db.prepare('SELECT COUNT(*) AS n FROM writing_requests').get().n, 2);
   mock.unavailable(true); await writer({ ...c, writings: restored }).tick();
   assert.deepEqual(restored.cancellations().map(row => row.run_id), [originalRun]);
-  assert.deepEqual(mock.cancellations, []); assert.equal(mock.submissions.length, 2);
+  assert.deepEqual(mock.cancellations, []); assert.equal(mock.submissions.length, 1);
 
   mock.unavailable(false); await writer({ ...c, writings: writingStore(c.store, c.integrations) }).tick();
   assert.deepEqual(mock.cancellations, [originalRun]); assert.deepEqual(restored.cancellations(), []);
@@ -192,36 +192,20 @@ test('periodic admission replaces a stale pending summary atomically and preserv
   assert.equal(mock.submissions.length, 2);
 });
 
-test('five stale automatic summaries hold admission slots until cancellation is reconciled, then a timer refills the batch', async t => {
-  const c = setup(t), mock = await runtime(t, c.dir);
-  const agents = Array.from({ length: 5 }, (_, index) => `capacity-author-${index}`);
-  c.store.ingestMany(agents.flatMap(agent => [...pair(agent, '09:00:00', '09:01:00', 'first'),
-    ...pair(agent, '09:30:00', '09:31:00', 'second')]));
-  c.store.ingestMany([event('capacity-trigger', 'input', '10:00:00', 'first-prompt', { source: 'system_hook' })]);
-  assert.equal(c.writings.scheduleAutomatic({ summaries: true, metadata: false }), true);
-  const originals = c.writings.pending();
-  assert.equal(originals.length, 5); assert.ok(originals.every(row => row.source === 'automatic' && row.state === 'pending'));
-
-  c.store.ingestMany(agents.flatMap(agent => pair(agent, '09:05:00', '09:06:00', 'late-history')));
-  assert.ok(originals.every(row => !c.writings.isCurrent(row)));
-  assert.equal(c.writings.scheduleAutomatic({ summaries: true, metadata: false }), true);
-  assert.ok(originals.every(row => c.writings.get(row.operation_id).state === 'superseded'));
-  assert.equal(c.writings.pending().length, 0);
-  assert.equal(c.writings.cancellingSummaryCount(), 5);
-  assert.deepEqual(c.writings.cancellations().map(row => row.run_id).sort(), originals.map(row => stableId('run-', row.run_key)).sort());
-  const restored = writingStore(c.store, c.integrations, { clock: () => Date.parse('2026-09-17T09:40:00Z') });
-  assert.equal(restored.scheduleAutomatic({ summaries: true, metadata: false }), false);
-  await writer({ ...c, writings: restored }).tick();
-  assert.deepEqual(restored.cancellations(), []);
-  assert.equal(restored.scheduleAutomatic({ summaries: true, metadata: false }), true);
-  const replacements = restored.pending();
-  assert.equal(replacements.length, 5);
-  assert.deepEqual(new Set(replacements.map(row => row.target_id)), new Set(originals.map(row => row.target_id)));
-  assert.ok(replacements.every(row => row.snapshot.input.sessions[0].events.length === 4));
-  await writer({ ...c, writings: restored }).tick();
-  assert.equal(mock.submissions.length, 5); assert.deepEqual(restored.cancellations(), []);
-  assert.ok(restored.pending().every(row => row.state === 'running'));
-  assert.equal(c.store.db.prepare('SELECT COUNT(*) AS n FROM writing_requests').get().n, 10);
+test('eligible summaries are queued together and the coordinator submits only one until it finishes', async t => {
+  const c=setup(t), mock=await runtime(t,c.dir);
+  c.store.ingestMany(Array.from({length:5},(_,i)=>pair(`serial-${i}`,'09:00:00','09:01:00','first')).flat());
+  c.store.ingestMany([event('serial-trigger','input','10:00:00','prompt',{source:'system_hook'})]);
+  assert.equal(c.writings.scheduleAutomatic({summaries:true,metadata:false}),true);
+  assert.equal(c.writings.pending().length,5);
+  await writer(c).tick(); await writer(c).tick();
+  assert.equal(mock.submissions.length,1);
+  assert.equal(c.writings.pending().filter(row=>row.state==='running').length,1);
+  const first=c.writings.pending().find(row=>row.state==='running');
+  mock.runs.get(first.run_id).status='failed'; mock.runs.get(first.run_id).message='fixture failure';
+  await writer(c).tick();
+  assert.equal(mock.submissions.length,2);
+  assert.equal(c.writings.pending().filter(row=>row.state==='running').length,1);
 });
 
 test('idle eligibility starts at exactly fifteen minutes and an unchanged timer reuses source evidence', t => {
@@ -264,7 +248,7 @@ test('SessionEnd queues all eligible unsummarized history of its item without wa
   assert.equal(c.writings.isCurrent(owner), false, 'resuming invalidates an old summary');
 });
 
-test('SessionEnd backlog respects automatic-summary disable and the five-slot limit', t => {
+test('SessionEnd backlog queues all targets once and respects automatic-summary disable', t => {
   const c = setup(t, { clock: () => Date.parse('2026-09-17T09:07:00Z') });
   const source = { source: 'system_hook', work_item_id: 'backlog-item' };
   c.store.ingestMany(Array.from({ length: 8 }, (_, i) => pair(`exit-backlog-${i}`, '09:00:00', '09:05:00', `turn-${i}`, source)).flat());
@@ -272,7 +256,7 @@ test('SessionEnd backlog respects automatic-summary disable and the five-slot li
   assert.equal(c.writings.scheduleAutomatic({ summaries: false }), false);
   assert.equal(c.writings.pending().length, 0);
   assert.equal(c.writings.scheduleAutomatic({ summaries: true }), true);
-  assert.equal(c.writings.pending().length, 5);
+  assert.equal(c.writings.pending().length, 8);
   assert.equal(c.writings.scheduleAutomatic({ summaries: true }), false);
 });
 

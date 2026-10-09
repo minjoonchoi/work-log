@@ -273,20 +273,15 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
         .sort((a, b) => Number(!!(a.previous || a.summary)) - Number(!!(b.previous || b.summary))
           || (a.previous?.updated_at || a.summary?.updated_at || a.session.start_at).localeCompare(b.previous?.updated_at || b.summary?.updated_at || b.session.start_at)
           || a.session.id.localeCompare(b.session.id));
-      const inFlight = db.prepare("SELECT COUNT(*) AS n FROM writing_requests WHERE source='automatic' AND format='session-summary' AND state IN ('pending','running')").get().n;
-      // A lost cancellation acknowledgement can still mean a live subprocess.
-      const capacity = Math.max(0, 5 - inFlight - cancellingSummaryCount());
       let selected = 0;
       for (const { session, reason, previous, summary } of candidates) {
-        if (selected >= capacity) break;
         if (summary?.accepted_digest === session.source_digest && summary.text?.trim()) continue;
         if (active(previous) && isCurrent(previous)) continue;
         // Retry a failed source only through an explicit request or changed
         // history, never once per timer tick (including after a restart).
         if (previous?.state === 'failed' && previous.snapshot.source_digest === session.source_digest) continue;
         if (summary?.state === 'failed' && summary.source_digest === session.source_digest) continue;
-        // Invalid input still consumes one bounded admission slot and records a
-        // durable failure digest, so a large history cannot spin on every tick.
+        // Record a durable failure digest rather than retry invalid input on every tick.
         selected += 1;
         try {
           const source = snapshot('session-summary', session.id);

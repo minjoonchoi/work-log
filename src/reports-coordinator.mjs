@@ -9,13 +9,14 @@ export function reportsCoordinator({ dir, reports, notify, fixture = false }) {
     if (busy) return; busy = true;
     try {
       if (reports.advance()) notify();
-      let admitted = 0;
+      let admitted = reports.pending().some(part => part.state === 'running') ? 1 : 0;
       for (const part of reports.pending()) {
         const report = reports.execution(part.report_id);
         if (!['pending', 'running'].includes(report.state)) continue;
         try {
           if (part.state === 'pending') {
-            if (++admitted > 3) continue;
+            if (admitted >= 1) continue;
+            admitted++;
             const run = await request(dir, 'runtime', '/runs', { method: 'POST', body: {
               task: 'work.report.create', input: part.input, internal: true, work_item_id: report.owner_id,
               origin: { engine: 'harness-report', agent_session_id: part.id, turn_id: part.id }, idempotency_key: part.id,

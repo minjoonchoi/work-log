@@ -59,27 +59,21 @@ export function writingCoordinator({ dir, writings, notify, automatic = true, au
       }
     }
   }
-  async function parallel(rows) {
-    const results = await Promise.allSettled(rows.map(processRow));
-    const failure = results.find(result => result.status === 'rejected');
-    if (failure) throw failure.reason;
-  }
   async function tick() {
     if (busy) return; busy = true;
     try {
-      // Reconcile completed/obsolete requests before filling the timer's five
-      // slots. Model execution is never awaited by the input hook.
+      // Reconcile receipts before submitting the next queued writing request.
       for (const row of writings.pending()) if (!writings.isCurrent(row)) { writings.finish(row, 'superseded'); notify(); }
       await cancelSuperseded();
-      await parallel(writings.pending().filter(row => row.state === 'running'));
+      for (const row of writings.pending().filter(row => row.state === 'running')) await processRow(row);
       if (writings.scheduleAutomatic({ summaries: automatic, metadata: automaticMetadata })) notify();
       await cancelSuperseded();
       const pending = writings.pending();
-      const available = Math.max(0, 5 - pending.filter(row => row.state === 'running' && automaticSummary(row)).length - writings.cancellingSummaryCount());
-      // Cap legacy queued batches as well as newly admitted periodic batches.
-      await parallel(pending.filter(row => row.state === 'pending' && automaticSummary(row) && writings.automationSettings().session_summary_enabled).slice(0, available));
-      for (const row of pending.filter(row => row.state === 'pending' && !automaticSummary(row)
-        && (row.source !== 'automatic' || row.format !== 'work-item-metadata' || writings.automationSettings().work_summary_enabled))) await processRow(row);
+      if (pending.some(row => row.state === 'running') || writings.cancellations().length) return;
+      const next = pending.find(row => row.state === 'pending'
+        && (!automaticSummary(row) || writings.automationSettings().session_summary_enabled)
+        && (row.source !== 'automatic' || row.format !== 'work-item-metadata' || writings.automationSettings().work_summary_enabled));
+      if (next) await processRow(next);
     } finally { busy = false; }
   }
   return { tick };

@@ -158,7 +158,7 @@ test('new prompt/output invalidate only captured inputs; old summary remains vis
   const old = (await h.manager(`/items/${item.id}`)).sessions[0].summary.text;
   await fixture(h, { delayMs: 1300 });
   await rewriteItem(h, item, 'live-item-rewrite'); await rewriteSession(h, sid, 'live-session-rewrite');
-  const run = await running(h, 'live-session-rewrite');
+  const run = await running(h, 'live-item-rewrite');
   await h.ingest(pair('live-writing', '09:10:00', '09:12:00', 'next', { text: '새로운 요구사항' }));
   assert.equal((await finished(h, 'live-item-rewrite')).state, 'superseded');
   assert.equal((await finished(h, 'live-session-rewrite')).state, 'superseded');

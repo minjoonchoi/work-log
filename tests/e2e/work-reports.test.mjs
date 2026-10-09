@@ -212,7 +212,7 @@ test('completed historical reports remain unchanged while retired pending and ru
   const userRun = await h.run({ task: 'session.summarize', internal: true, input: { title: '별도 작업', events: [{ kind: 'input', event_at: '2026-09-17T00:00:00Z', text: '별도 기록' }] }, fixture: { delayMs: 1000 } });
   const running = await create(h, 'retired-running-report'), normal = await create(h, 'preserved-normal-report');
   const [runningDetail] = await eventually(async () => Promise.all([running, normal].map(report => h.manager(`/reports/${report.id}`))),
-    rows => rows.every(value => value.report.state === 'running'), 15000);
+    rows => rows[0].report.state === 'running' && rows[1].report.state === 'pending', 15000);
   const queued = await create(h, 'retired-queued-report');
   await h.stop('manager');
   const db = new DatabaseSync(path.join(h.dir, 'memory.sqlite'));

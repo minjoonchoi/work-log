@@ -1,3 +1,4 @@
+import { runWritingProcess } from './writing-process.mjs';
 import { agentCLI } from './agent-cli.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,12 +40,12 @@ export function commandFor(engine, context) {
     command: agentCLI('codex').command, args: ['exec', '--json', '--model', execution.model,
       '-c', `model_reasoning_effort="${execution.effort}"`, '--dangerously-bypass-approvals-and-sandbox',
       ...(policy?.mode === 'direct' ? codexDirectArguments() : codexWorkerArguments()),
-      '--output-schema', schemaPath, '-o', outputPath, '-C', cwd, '--skip-git-repo-check', '-']
+      ...(context.plainText ? [] : ['--output-schema', schemaPath]), '-o', outputPath, '-C', cwd, '--skip-git-repo-check', '-']
   };
   if (engine === 'claude') return {
     command: agentCLI('claude').command, args: ['-p', '--model', execution.model, ...(execution.effort == null ? [] : ['--effort', execution.effort]),
       '--output-format', 'stream-json', '--verbose', ...(policy ? ['--max-turns', String(policy.max_model_turns)] : []),
-      '--json-schema', fs.readFileSync(schemaPath, 'utf8'),
+      ...(context.plainText ? [] : ['--json-schema', fs.readFileSync(schemaPath, 'utf8')]),
       '--allow-dangerously-skip-permissions', '--permission-mode', 'bypassPermissions',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
       '--disallowedTools', 'AskUserQuestion', 'Agent', 'Task', 'mcp__*',
@@ -65,12 +66,25 @@ export function execute(context) {
   atomic(path.join(attemptDir, 'prompt.txt'), redact(prompt));
   const { command, args } = commandFor(engine, { ...context, outputPath, schemaPath });
   const allowed = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM', 'CODEX_HOME',
+    'CLAUDE_CODE_USE_BEDROCK', 'AWS_PROFILE', 'AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_CONFIG_FILE', 'AWS_SHARED_CREDENTIALS_FILE', 'AWS_BEARER_TOKEN_BEDROCK',
     'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'];
   const env = Object.fromEntries(allowed.filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]]));
   if (['codex', 'claude'].includes(engine)) env.PATH = agentCLI(engine).path;
   Object.assign(env, { HARNESS_DATA_DIR: context.dataDir, WORKLOG_TRACKING_DISABLED: '1', HARNESS_WORKER: '1', HARNESS_PARENT: json(parent),
     HARNESS_ATTEMPT_ID: parent.task_id, HARNESS_ENGINE: engine, HARNESS_STAGE: stage,
     HARNESS_TEST_MODE: process.env.HARNESS_TEST_MODE || '' });
+  if (context.plainText && engine !== 'fixture') {
+    const worker = runWritingProcess({ command, args, engine, env, cwd, prompt, attemptDir, limits, execution, onSpawn });
+    return { cancel: worker.cancel, promise: worker.promise.then(({ ok, text, observation }) => {
+      const observed = { ...observation, engine, model: execution.model, effort: execution.effort,
+        worker_policy: workerPolicy, permission_mode: 'text-only', cli_version: null };
+      atomic(path.join(attemptDir, 'process.json'), json(observed));
+      if (!ok) return { ok: false, observation: observed };
+      const result = { status: 'done', result: { content: redact(text) } };
+      atomic(outputPath, json(result));
+      return { ok: true, result, observation: observed };
+    }) };
+  }
   if (!versions.has(command)) {
     // Version probes belong to the same headless worker and inherit its hook guard.
     const check = spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 2500, env });
