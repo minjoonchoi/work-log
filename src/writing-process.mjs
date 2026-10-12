@@ -110,7 +110,7 @@ class WritingProcess {
           context.onSpawn?.(this.child.pid);
           if (this.engine === 'codex') {
             const started = await this.rpc('thread/start', { model: context.execution.model, cwd: context.cwd, ephemeral: true,
-              approvalPolicy: 'never', sandbox: 'readOnly', config: { model_reasoning_effort: context.execution.effort },
+              approvalPolicy: 'never', sandbox: 'read-only', config: { model_reasoning_effort: context.execution.effort },
               developerInstructions: '각 요청의 입력 자료만 사용하여 최종 텍스트를 작성하세요. 도구 호출은 금지합니다.' });
             task.threadId = started.thread.id;
             if (task.finishing) return;

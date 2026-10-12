@@ -40,7 +40,12 @@ rl.createInterface({input:process.stdin}).on('line',line=>{
  const msg=JSON.parse(line);
  if(!codex){result(msg.message.content);return;}
  if(msg.method==='initialize')emit({id:msg.id,result:{}});
- if(msg.method==='thread/start')emit({id:msg.id,result:{thread:{id:'thread-'+(index+1)}}});
+ if(msg.method==='thread/start'){
+  if(msg.params.sandbox!=='read-only'){
+   emit({id:msg.id,error:{code:-32600,message:'Invalid request: unsupported sandbox value'}});return;
+  }
+  emit({id:msg.id,result:{thread:{id:'thread-'+(index+1)}}});
+ }
  if(msg.method==='turn/start'){
   if(msg.params.outputSchema)process.exit(9);
   emit({id:msg.id,result:{turn:{id:'turn'}}});result(msg.params.input[0].text,msg.params.threadId);
