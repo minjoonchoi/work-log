@@ -217,3 +217,27 @@ test('linked existing issue receives closed session worklogs; merged issues keep
   assert.equal(issue.fields.status.id, '10000'); assert.equal(other.fields.status.id, '3');
   assert.equal(f.state.issues.length, 2);
 });
+
+
+test('Sync appends only current item sessions and preserves pre-existing Jira worklogs', async t => {
+  const { h, f, item } = await setup(t), issue = f.addIssue({}, 'TEAM-90');
+  const historical = { id: '90', issueId: issue.id, started: '2026-09-01T09:00:00.000+0000', timeSpentSeconds: 3600,
+    comment: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: '기존 업무 기록' }] }] }, properties: [] };
+  f.state.worklogs.push(structuredClone(historical));
+  await h.ingest(pair('unrelated-item', '10:00:00', '10:05:00', 'first', { text: '별도 업무' }));
+  await connect(h, item, issue);
+  const sid = (await detail(h, item)).sessions[0].id;
+  await h.manager(`/sessions/${sid}/summary/regenerate`, { method: 'POST', body: { operation_id: 'summary-before-append-sync' } });
+  await eventually(() => h.manager('/writing/summary-before-append-sync'), row => row.state === 'completed', 20000);
+  const sync = () => h.manager('/jira-links/link-existing-issue/worklogs/sync', { method: 'POST', body: {} });
+  await sync();
+  await eventually(() => detail(h, item), d => d.sessions[0].worklog?.state === 'synced', 20000);
+  await sync(); await sync();
+  assert.equal(f.state.worklogs.length, 2);
+  assert.deepEqual(f.state.worklogs[0], historical);
+  assert.equal(f.state.worklogs[1].properties[0].value.session_id, sid);
+  assert.equal(f.state.worklogs[1].timeSpentSeconds, 300);
+  assert.equal(f.state.worklogs[1].started, '2026-09-17T09:00:00.000+0000');
+  assert.equal(f.state.calls.filter(c => c.method === 'POST' && c.path.endsWith('/worklog')).length, 1);
+  assert.ok(!f.state.calls.some(c => ['PUT', 'DELETE'].includes(c.method) && c.path.includes('/worklog')));
+});

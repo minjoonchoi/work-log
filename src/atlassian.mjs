@@ -652,9 +652,10 @@ export class AtlassianClient {
       assert(/^\d+$/.test(row.worklog_id), '업무 로그 ID를 확인하세요.');
       const current = await this.request(`${base}/${row.worklog_id}?expand=properties`);
       assert(current.properties?.some(p => p.key === 'work-log' && p.value?.operation_id === row.operation_id), '기존 업무 로그의 출처를 확인할 수 없습니다.', 409);
+      return current; // Never rewrite an already published worklog.
     }
-    const result = await this.request(`${base}${row.worklog_id ? `/${row.worklog_id}` : ''}?adjustEstimate=leave&notifyUsers=false`, {
-      method: row.worklog_id ? 'PUT' : 'POST', beforeSend, body: {
+    const result = await this.request(`${base}?adjustEstimate=leave&notifyUsers=false`, {
+      method: 'POST', beforeSend, body: {
         started: new Date(payload.started).toISOString().replace('Z', '+0000'), timeSpentSeconds: payload.seconds,
         comment: plainTextADF(payload.comment), properties: [{ key: 'work-log', value: { operation_id: row.operation_id, session_id: row.session_id, source_digest: row.source_digest } }]
       }

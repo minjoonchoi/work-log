@@ -150,6 +150,11 @@ export function integrationStore(store) {
     const payload = { started: session.started, seconds: session.seconds, comment: text };
     const source = digest(json(payload)), current = one('SELECT * FROM jira_worklogs WHERE session_id=?', session.id);
     if (current && ['sending', 'unknown'].includes(current.state)) return current;
+    // Published worklogs are immutable, including updates queued by older versions.
+    if (current?.worklog_id || current?.state === 'synced') {
+      if (current.state !== 'synced') finishWorklog(session.id, 'synced', current.worklog_id);
+      return one('SELECT * FROM jira_worklogs WHERE session_id=?', session.id);
+    }
     if (current?.source_digest === source && ['synced', 'failed'].includes(current.state)) return current;
     // Preserve the original issue when work items with multiple Jira tickets are merged later.
     exec(`INSERT INTO jira_worklogs VALUES(?,?,'pending',?,?,NULL,?,NULL,?)

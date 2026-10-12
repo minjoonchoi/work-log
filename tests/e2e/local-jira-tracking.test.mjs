@@ -81,11 +81,13 @@ test('linking an existing issue later backfills each closed session once and reg
   await h.manager(`/sessions/${closed[0].id}/summary/regenerate`, post({ operation_id: 'rewrite-existing-worklog' }));
   assert.equal((await finished(h, 'rewrite-existing-worklog')).state, 'completed');
   current = await eventually(() => detail(h, before.item.id), value => value.sessions.find(session => session.id === closed[0].id)?.worklog?.state === 'synced'
-    && f.state.worklogs.some(worklog => marker(worklog).session_id === closed[0].id && adfText(worklog.comment).includes('작업 기록')), 15000);
+    && value.sessions.find(session => session.id === closed[0].id)?.summary.text.includes('작업 기록'), 15000);
+  await pause(1100);
+  assert.deepEqual(f.state.worklogs, original);
   const revised = f.state.worklogs.find(worklog => marker(worklog).session_id === closed[0].id), previous = original.find(worklog => marker(worklog).session_id === closed[0].id);
   assert.equal(revised.id, previous.id); assert.equal(marker(revised).operation_id, marker(previous).operation_id);
   assert.equal(revised.started, previous.started); assert.equal(revised.timeSpentSeconds, previous.timeSpentSeconds); assert.equal(logs(f).length, 2);
-  assert.ok(f.state.calls.some(call => call.method === 'PUT' && call.path.endsWith(`/worklog/${previous.id}`)));
+  assert.ok(!f.state.calls.some(call => ['PUT', 'DELETE'].includes(call.method) && call.path.includes('/worklog/')));
   f.state.worklogFailure = 403;
   await h.ingest(pair('late-existing', '10:30:00', '10:35:00', 'turn-3', { text: '연결 후 새 세션' }));
   current = await eventually(() => detail(h, before.item.id), value => value.sessions.some(session => session.worklog?.state === 'failed'), 20000);
@@ -140,7 +142,8 @@ test('merging linked work preserves each agent session original Jira issue acros
   const old = structuredClone(f.state.worklogs.find(worklog => marker(worklog).session_id === fromB.id));
   await h.manager(`/sessions/${fromB.id}/summary/regenerate`, post({ operation_id: 'rewrite-after-local-merge' }));
   assert.equal((await finished(h, 'rewrite-after-local-merge')).state, 'completed');
-  await eventually(() => f.state.worklogs.find(worklog => worklog.id === old.id), row => adfText(row.comment).includes('작업 기록'), 15000);
+  await pause(1100);
+  assert.deepEqual(f.state.worklogs.find(worklog => worklog.id === old.id), old);
   const updated = f.state.worklogs.find(worklog => worklog.id === old.id);
   assert.equal(updated.issueId, issueB.id); assert.equal(marker(updated).operation_id, marker(old).operation_id);
   assert.equal(f.state.worklogs.length, 4); assert.equal(logs(f).length, 4); assert.equal(issues(f).length, 0);

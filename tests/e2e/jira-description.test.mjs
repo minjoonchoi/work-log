@@ -136,10 +136,12 @@ test('worklog comments keep literal headings, bullets, links and exact line brea
     payload: JSON.stringify({ comment, started: '2026-09-17T09:00:00Z', seconds: 300 }) };
   const written = await client.writeWorklog({ cloud_id: 'cloud-test', id: issue.id }, row);
   assert.equal(adfText(f.state.worklogs[0].comment), comment);
-  await client.writeWorklog({ cloud_id: 'cloud-test', id: issue.id }, { ...row, worklog_id: written.id });
+  await client.writeWorklog({ cloud_id: 'cloud-test', id: issue.id }, { ...row, worklog_id: written.id, payload: JSON.stringify({ comment: '재요약된 내용', started: '2026-09-18T09:00:00Z', seconds: 600 }) });
   assert.equal(adfText(f.state.worklogs[0].comment), comment);
   assert.ok(nodes(f.state.worklogs[0].comment).every(node => !node.marks?.length && node.type !== 'heading'));
   assert.equal(f.state.worklogs.length, 1);
+  assert.equal(f.state.worklogs[0].timeSpentSeconds, 300);
+  assert.ok(!f.state.calls.some(c => ['PUT', 'DELETE'].includes(c.method) && c.path.includes('/worklog')));
 });
 
 test('issue update checks write scopes, preserves known REST failures and never retries an unconfirmed write', async t => {

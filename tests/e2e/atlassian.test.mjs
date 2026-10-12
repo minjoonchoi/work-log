@@ -60,7 +60,7 @@ test('hook item is created locally; Jira is manual, preserves exact metadata, re
   assert.equal((await h.manager('/integrations/atlassian/jira-issue?cloud_id=cloud-test&key=TEAM-1')).key, 'TEAM-1');
 });
 
-test('20-minute boundary → structured summary job → exact comment/start/time worklog; late output updates and restart deduplicates', async t => {
+test('20-minute boundary → structured summary job → exact comment/start/time worklog; late output preserves remote history and restart deduplicates', async t => {
   const { h, f } = await setup(t); await authorize(h);
   await h.ingest(pair('summary-agent', '09:00:00', '09:05:00', 'first', { text: '요구사항을 정리했습니다.' }));
   const item = (await h.manager('/items'))[0]; await createIssue(h, item);
@@ -70,7 +70,7 @@ test('20-minute boundary → structured summary job → exact comment/start/time
   assert.equal(detail.sessions.length, 2); assert.equal((await h.manager('/items')).length, 1);
   assert.equal(log.timeSpentSeconds, 300); assert.equal(log.started, '2026-09-17T09:00:00.000+0000');
   assert.equal(adfText(log.comment), closed.summary.text); assert.ok(closed.summary.text.split('\n').length <= 6);
-  assert.equal(detail.runs.filter(r => r.internal).length, 1);
+  assert.ok(detail.runs.some(r => r.internal && r.id === closed.summary.run_id));
   const posts = () => f.state.calls.filter(c => c.method === 'POST' && c.path.endsWith('/worklog')).length;
   assert.equal(posts(), 1);
   await h.stop('manager'); await h.start('manager');
@@ -79,7 +79,8 @@ test('20-minute boundary → structured summary job → exact comment/start/time
   await h.ingest(pair('summary-agent', '09:27:00', '09:28:00', 'refresh-trigger'));
   detail = await eventually(() => h.manager(`/items/${item.id}`), d => d.sessions[0]?.worklog?.state === 'synced' && d.sessions[0]?.summary?.text?.includes('늦게'), 20000);
   assert.equal(f.state.worklogs.length, 1); assert.equal(posts(), 1);
-  assert.ok(f.state.calls.some(c => c.method === 'PUT' && c.path.includes('/worklog/100')));
+  assert.deepEqual(f.state.worklogs[0], log);
+  assert.ok(!f.state.calls.some(c => ['PUT', 'DELETE'].includes(c.method) && c.path.includes('/worklog/100')));
   assert.equal(f.state.worklogs[0].timeSpentSeconds, 300);
   assert.equal(f.state.calls.find(c => c.path.endsWith('/worklog') && c.method === 'POST').query.adjustEstimate, 'leave');
 });

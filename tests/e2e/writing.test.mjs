@@ -224,7 +224,7 @@ test('tampered final artifact cannot overwrite metadata even when runtime report
   assert.equal((await h.manager(`/items/${item.id}`)).item.version, item.version);
 });
 
-test('on-demand summaries wait for closure; later rewrites PUT the same Jira worklog with unchanged time', async t => {
+test('on-demand summaries wait for closure; later rewrites preserve the published Jira worklog', async t => {
   const h = new Harness(), f = await atlFixture(h);
   t.after(async () => { await h.close(); await f.close(); });
   await h.start('runtime'); await h.start('manager'); await authorize(h);
@@ -241,9 +241,10 @@ test('on-demand summaries wait for closure; later rewrites PUT the same Jira wor
   const detail = await eventually(() => h.manager(`/items/${item.id}`), d => d.sessions[0].worklog?.state === 'synced' && d.sessions[0].summary.text.includes('작업 기록'));
   assert.equal(f.state.worklogs.length, 1); assert.equal(f.state.worklogs[0].id, log.id);
   assert.equal(f.state.worklogs[0].started, log.started); assert.equal(f.state.worklogs[0].timeSpentSeconds, log.timeSpentSeconds);
-  assert.equal(adfText(f.state.worklogs[0].comment), detail.sessions[0].summary.text);
+  assert.deepEqual(f.state.worklogs[0], log);
+  assert.notEqual(adfText(log.comment), detail.sessions[0].summary.text);
   assert.equal(f.state.calls.filter(c => c.method === 'POST' && c.path.endsWith('/worklog')).length, 1);
-  assert.ok(f.state.calls.some(c => c.method === 'PUT' && c.path.includes('/worklog/')));
+  assert.ok(!f.state.calls.some(c => ['PUT', 'DELETE'].includes(c.method) && c.path.includes('/worklog/')));
   await rewriteItem(h, detail.item, 'jira-local-metadata'); await finished(h, 'jira-local-metadata');
   assert.equal(f.state.issues[0].fields.summary, item.title); // Creating a ticket is the only authorized metadata write.
 });

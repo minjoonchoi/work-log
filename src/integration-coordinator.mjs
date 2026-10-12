@@ -31,8 +31,7 @@ export function integrationCoordinator({ integrations, client, notify, writings,
           try {
             const found = await client.findWorklog(link.issue, row.operation_id);
             if (found) {
-              const marker = found.properties.find(p => p.key === 'work-log').value;
-              integrations.finishWorklog(session.id, marker.source_digest === row.source_digest ? 'synced' : 'pending', found.id);
+              integrations.finishWorklog(session.id, 'synced', found.id);
             } else integrations.finishWorklog(session.id, 'unknown', null, '전송 결과가 불명확합니다. Jira 확인 전에는 중복 생성하지 않습니다.');
           } catch (e) { integrations.finishWorklog(session.id, 'unknown', null, e.message); }
           notify(); continue;
