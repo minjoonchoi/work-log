@@ -1,3 +1,4 @@
+import { sessionActionsUI } from './session-actions.js';
 import { detailResize } from './detail-resize.js';
 import { showListSkeleton, finishListLoading } from './loading.js';
 import { integrationUI } from './integrations.js';
@@ -86,6 +87,7 @@ function modal(html) {
 const integrations = integrationUI({ api, esc, modal, toast, absoluteTime, refresh: async id => { await openDetail(id, undefined, true, true); await load(); } });
 const agentConnections = agentConnectionsUI({ api, esc, modal, showAtlassian: integrations.showSettings });
 const writing = writingUI({ api, esc, toast, absoluteTime, refresh: async id => { await openDetail(id, undefined, true); await load(); } });
+const sessionActions = sessionActionsUI({ api, esc, modal, toast, absoluteTime, refresh: async id => { await openDetail(id, undefined, true, true); await load(true); } });
 const history = historyUI({ api, esc, eventHTML, invalidated: scheduleRefresh });
 const executionSettings = executionSettingsUI({ api, esc, modal, toast, showConnections: agentConnections.showSettings });
 const automationSettings = automationSettingsUI({ api, esc, modal, toast });
@@ -395,6 +397,7 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
   const previousResume = refresh && state.detail?.item.id === data.item.id ? panel.querySelector('#item-resume-choice')?.value : null;
   state.detail = data;
   history.configure(data);
+  sessionActions.configure(data);
   const { item } = data, runs = data.runs.filter(r => !r.internal);
   const sessions = [...data.sessions].reverse();
   const resumeChoices = [...new Map(sessions.filter(s => s.resume).map(s => [`${s.engine}:${s.resume.session_id}`, s])).values()];
@@ -412,16 +415,16 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
     ${item.activities?.length > 1 ? `<p class="help">함께 기록된 상태: ${item.activities.slice(1).map(a => esc(statusLabels[a])).join(' · ')}</p>` : ''}
     ${item.aliases.length ? `<p>병합된 업무 ${item.aliases.length}개 · 원본 세션 유지</p>` : ''}
     ${integrations.jiraHTML(data)}
-    <section class="detail-section"><h3>세션 이력 <small>${sessions.length}</small></h3><div class="history-toolbar"><span id="history-live">${liveStatus()}</span><span>발생 시각 · 최신순</span></div>${sessions.map(s => {
+    <section class="detail-section"><h3>세션 이력 <small>${sessions.length}</small></h3>${sessionActions.toolbar()}<div class="history-toolbar"><span id="history-live">${liveStatus()}</span><span>발생 시각 · 최신순</span></div>${sessions.map(s => {
       const results = runs.filter(r => r.session_id === s.id).sort((a, b) => b.created_at.localeCompare(a.created_at));
       const pendingLabel = results.some(r => r.status === 'running') ? '작업 실행 중' : results.some(r => r.status === 'pending') ? '실행 대기' : s.stale_pending ? '응답 종료 미확인' : s.pending ? '작업 중' : '';
-      return `<details class="session-card" data-session-id="${esc(s.id)}" ${s.id === sessionId ? 'open' : ''}><summary><span class="session-time">${dateLabel(s.start_at)} ${time(s.start_at)} → ${time(s.end_at)}${pendingLabel ? ` · ${pendingLabel}` : ''}${results.length ? `<span class="session-result-count">작업 ${results.length}</span>` : ''}</span>${writing.sessionHeadingHTML(s)}</summary>
+      return `<details class="session-card" data-session-id="${esc(s.id)}" ${s.id === sessionId ? 'open' : ''}><summary>${sessionActions.checkbox(s)}<span class="session-time">${dateLabel(s.start_at)} ${time(s.start_at)} → ${time(s.end_at)}${pendingLabel ? ` · ${pendingLabel}` : ''}${results.length ? `<span class="session-result-count">작업 ${results.length}</span>` : ''}</span>${writing.sessionHeadingHTML(s)}</summary>
         <small class="session-source" title="${esc(s.agent_session_id)}">${esc(s.engine === 'codex' ? 'Codex' : s.engine === 'claude' ? 'Claude' : '하네스')} 대화</small>
 
         ${writing.sessionHTML(s)}${integrations.sessionHTML(s, data)}
         ${results.length ? `<details class="session-results" data-results-session="${esc(s.id)}"><summary>연결된 작업 ${results.length}개</summary>${results.map(runHTML).join('')}</details>` : ''}
         ${history.html(s.id)}</details>`;
-    }).join('') || '<small>첫 입력을 기다리고 있습니다.</small>'}</section>
+    }).join('') || '<small>표시할 세션이 없습니다. 삭제한 세션은 위 버튼에서 복원할 수 있습니다.</small>'}</section>
     ${unlinkedRuns.length ? `<details class="detail-section unlinked-results" ${unlinkedResultsOpen ? 'open' : ''}><summary>세션 연결 대기 · 작업 ${unlinkedRuns.length}개</summary><p class="help">원본 입력을 확인하면 해당 세션에 표시합니다.</p>${unlinkedRuns.map(runHTML).join('')}</details>` : ''}
     ${data.unlinked_history.count ? `<section class="detail-section"><h3>연결 미확인 출력 <small>${data.unlinked_history.count}건</small></h3>${history.html(null)}</section>` : ''}`;
   for (const node of $('#detail').querySelectorAll('[data-session-id]')) if (expanded.includes(node.dataset.sessionId)) node.open = true;
@@ -448,6 +451,7 @@ async function openDetail(id, sessionId, refresh = false, force = false) {
   };
   integrations.bindDetail(data);
   writing.bindDetail(data);
+  sessionActions.bind(data);
   itemTags.bindDetail(item);
   if (sessionId && !refresh) {
     const selectedSession = [...panel.querySelectorAll('[data-session-id]')].find(node => node.dataset.sessionId === sessionId);

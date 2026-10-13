@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS work_item_sessions (
  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, work_item_id TEXT NOT NULL, first_event_id TEXT NOT NULL,
  start_at TEXT NOT NULL, end_at TEXT NOT NULL, pending INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS session_overrides (
+ session_id TEXT PRIMARY KEY, work_item_id TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS session_pinned_boundaries (first_event_id TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS session_operations (
+ operation_id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS event_links (event_id TEXT PRIMARY KEY, session_id TEXT, resolution TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS event_link_session ON event_links(session_id,event_id);
 CREATE TABLE IF NOT EXISTS history_revisions (agent_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0);
@@ -104,6 +111,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
   }
   const isDeleted = item => !!one('SELECT deleted_at FROM work_item_deletions WHERE work_item_id=?', canonical(item))?.deleted_at;
   const visibilityRevision = item => one('SELECT revision FROM work_item_deletions WHERE work_item_id=?', canonical(item))?.revision || 0;
+  const isSessionDeleted = sid => !!one('SELECT deleted FROM session_overrides WHERE session_id=?', sid)?.deleted;
   function assertVisible(item) {
     assert(one('SELECT id FROM work_items WHERE id=?', canonical(item)) && !isDeleted(item), '업무를 찾을 수 없습니다.', 404);
   }
@@ -228,6 +236,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
       const key = JSON.parse(row.payload).turn_id; counts.set(key, (counts.get(key) || 0) + 1);
     }
     const turns = new Map(), windows = new Map();
+    const pinned = new Set(all('SELECT p.first_event_id FROM session_pinned_boundaries p JOIN events e ON e.id=p.first_event_id WHERE e.agent_id=?', agentId).map(r => r.first_event_id));
     const summaryBoundaries = new Map(all('SELECT session_id,completed_at FROM summary_window_boundaries WHERE agent_id=?', agentId).map(row => [row.session_id, row.completed_at]));
     let current;
     const activityKinds = new Set(['input', 'output', 'tool.started', 'tool.finished', 'turn.interrupted', 'turn.failed']);
@@ -237,7 +246,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
       // Session windows describe observed time, independently of turn matching.
       // Lifecycle notifications alone cannot start or extend an activity window.
       if (activityKinds.has(e.kind) && (current || e.kind === 'input')) {
-        if (!current || Date.parse(e.event_at) - Date.parse(windows.get(current).end) >= 1200000
+        if (!current || pinned.has(row.id) || Date.parse(e.event_at) - Date.parse(windows.get(current).end) >= 1200000
           || (e.kind === 'input' && summaryBoundaries.has(current)
             && Date.parse(e.event_at) >= Date.parse(summaryBoundaries.get(current)))) {
           const owner = e.work_item_id || (current ? windows.get(current).owner : agent.work_item_id);
@@ -286,7 +295,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
       exec(`INSERT INTO work_item_sessions VALUES(?,?,?,?,?,?,?,1)
         ON CONFLICT(id) DO UPDATE SET work_item_id=excluded.work_item_id,start_at=excluded.start_at,
         end_at=excluded.end_at,pending=excluded.pending,active=1`,
-      w.id, agentId, w.owner, w.first, w.start, w.end, w.pending.size > 0 ? 1 : 0);
+      w.id, agentId, one('SELECT work_item_id FROM session_overrides WHERE session_id=?', w.id)?.work_item_id || w.owner, w.first, w.start, w.end, w.pending.size > 0 ? 1 : 0);
     }
     return changedInputTurns(previous, currentLinks);
   }
@@ -500,7 +509,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
         return { ...s, original_work_item_id: s.work_item_id, work_item_id: canonical(s.work_item_id), pending: !!s.pending,
           stale_pending: !!s.pending && !executing && clock() - Date.parse(lastActivity) >= 1200000 };
       })
-      .filter(s => (includeDeleted || !isDeleted(s.work_item_id)) && (!itemId || s.work_item_id === canonical(itemId)));
+      .filter(s => !isSessionDeleted(s.id) && (includeDeleted || !isDeleted(s.work_item_id)) && (!itemId || s.work_item_id === canonical(itemId)));
   }
   function sessionEntries({ q = '' } = {}, summaries = new Map()) {
     assert(typeof q === 'string' && q.length <= 500, '세션 검색어는 500자 이하여야 합니다.');
@@ -575,7 +584,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
     assertVisible(resolved);
     if (sessionId) {
       const session = one('SELECT * FROM work_item_sessions WHERE id=?', sessionId);
-      assert(session && canonical(session.work_item_id) === resolved, '세션을 찾을 수 없습니다.', 404);
+      assert(session && !isSessionDeleted(session.id) && canonical(session.work_item_id) === resolved, '세션을 찾을 수 없습니다.', 404);
       assert(session.active, '세션 경계가 변경되었습니다. 이력을 다시 불러오세요.', 409);
       const revision = one('SELECT revision FROM history_revisions WHERE agent_id=?', session.agent_id)?.revision || 0;
       return { clause: "e.agent_id=? AND l.session_id=? AND e.kind IN ('input','output','progress')", args: [session.agent_id, sessionId],
@@ -626,6 +635,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
   }
   function sessionMessages(sessionId) {
     const session = one('SELECT work_item_id FROM work_item_sessions WHERE id=?', sessionId);
+    assert(!isSessionDeleted(sessionId), '삭제된 세션입니다.', 404);
     if (session) assertVisible(session.work_item_id);
     return all(`SELECT e.*,l.session_id,l.resolution ${historyFrom} WHERE l.session_id=?
       AND json_extract(e.payload,'$.role')='user' AND e.kind IN ('input','output','progress','turn.failed','turn.interrupted')
@@ -705,6 +715,52 @@ export function managerStore(dir, { clock = Date.now } = {}) {
       return detail(item.id);
     });
   }
+  function deletedSessions(itemId) {
+    assertVisible(itemId);
+    return all(`SELECT s.* FROM work_item_sessions s JOIN session_overrides o ON o.session_id=s.id
+      WHERE o.deleted=1 AND s.active=1 ORDER BY s.start_at DESC`).filter(s => canonical(s.work_item_id) === canonical(itemId));
+  }
+  function changeSessions(action, input) {
+    assert(['move', 'delete', 'restore'].includes(action), '세션 작업을 확인하세요.');
+    assert(input && Object.keys(input).every(k => ['item_id', 'session_ids', 'target_id', 'version', 'operation_id'].includes(k)), '세션 변경 요청을 확인하세요.');
+    const { item_id, session_ids, target_id, version, operation_id } = input;
+    assert(typeof item_id === 'string' && Number.isSafeInteger(version), '업무와 버전이 필요합니다.');
+    assert(Array.isArray(session_ids) && session_ids.length > 0 && session_ids.length <= 500
+      && session_ids.every(id => typeof id === 'string' && id.length <= 200) && new Set(session_ids).size === session_ids.length, '세션을 1~500개 선택하세요.');
+    assert(typeof operation_id === 'string' && /^[a-zA-Z0-9-]{8,80}$/.test(operation_id), '요청 식별자가 필요합니다.');
+    assert(action === 'move' ? typeof target_id === 'string' : target_id === undefined, '이동할 업무를 확인하세요.');
+    const request = json({ action, item_id, session_ids: [...session_ids].sort(), target_id, version });
+    return transaction(db, () => {
+      const prior = one('SELECT * FROM session_operations WHERE operation_id=?', operation_id);
+      if (prior) { assert(prior.request === request, '같은 요청 식별자의 내용이 다릅니다.', 409); return { ...JSON.parse(prior.result), repeated: true }; }
+      assertVisible(item_id);
+      assert(canonical(item_id) === item_id && one('SELECT version FROM work_items WHERE id=?', item_id)?.version === version, '업무가 변경되었습니다. 다시 확인하세요.', 409);
+      const target = action === 'move' ? canonical(target_id) : item_id;
+      assertVisible(target);
+      assert(action !== 'move' || (target !== item_id && target === target_id), '다른 업무를 선택하세요.', 409);
+      const sessions = session_ids.map(id => {
+        const session = one('SELECT * FROM work_item_sessions WHERE id=?', id);
+        assert(session?.active && canonical(session.work_item_id) === item_id && isSessionDeleted(id) === (action === 'restore'), '선택한 세션이 변경되었습니다. 다시 확인하세요.', 409);
+        return session;
+      });
+      for (const agent of new Set(sessions.map(s => s.agent_id))) {
+        // Keep edited windows stable even when late records would normally merge them.
+        exec('INSERT OR IGNORE INTO session_pinned_boundaries SELECT first_event_id FROM work_item_sessions WHERE agent_id=? AND active=1', agent);
+        exec('INSERT INTO history_revisions VALUES(?,1) ON CONFLICT(agent_id) DO UPDATE SET revision=revision+1', agent);
+      }
+      for (const session of sessions) {
+        exec(`INSERT INTO session_overrides VALUES(?,?,?) ON CONFLICT(session_id) DO UPDATE SET work_item_id=excluded.work_item_id,deleted=excluded.deleted`, session.id, target, Number(action === 'delete'));
+        if (action === 'move') exec('UPDATE work_item_sessions SET work_item_id=? WHERE id=?', target, session.id);
+      }
+      for (const item of new Set([item_id, target])) {
+        exec('UPDATE work_items SET version=version+1 WHERE id=?', item);
+        exec(`INSERT INTO work_item_deletions VALUES(?,NULL,?,1) ON CONFLICT(work_item_id) DO UPDATE SET revision=revision+1`, item, operation_id);
+      }
+      const result = { item_id, target_id: target, session_ids, action };
+      exec('INSERT INTO session_operations VALUES(?,?,?)', operation_id, request, json(result));
+      return { ...result, repeated: false };
+    });
+  }
   function setItemVisibility(action, input) {
     assert(input && Object.keys(input).every(key => ['ids', 'operation_id', 'versions'].includes(key)), '업무 삭제·복원 요청을 확인하세요.');
     const { ids, operation_id, versions } = input;
@@ -766,7 +822,7 @@ export function managerStore(dir, { clock = Date.now } = {}) {
     }
     return [...grouped.values()].flat();
   }
-  return { db, ingestMany, heldSessions, heldDetail, promoteHeld, agentContext, items, quickOverview, detail, history, runEvents, sessionMessages, merge, edit, tagList, editTags, calendar, canonical, sessionList, sessionEntries, isDeleted, visibilityRevision, deleteItems, restoreItems, storedRuns: runs,
+  return { db, changeSessions, deletedSessions, isSessionDeleted, ingestMany, heldSessions, heldDetail, promoteHeld, agentContext, items, quickOverview, detail, history, runEvents, sessionMessages, merge, edit, tagList, editTags, calendar, canonical, sessionList, sessionEntries, isDeleted, visibilityRevision, deleteItems, restoreItems, storedRuns: runs,
     cursor: source => one('SELECT value FROM cursors WHERE source=?', source)?.value || '0',
     stats: () => ({ events: one('SELECT COUNT(*) AS n FROM events').n, unresolved: one("SELECT COUNT(*) AS n FROM event_links l JOIN events e ON e.id=l.event_id WHERE l.resolution='unresolved' AND e.kind='output'").n }) };
 }

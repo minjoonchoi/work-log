@@ -130,7 +130,8 @@ export function integrationStore(store) {
   }
   function isSessionCurrent(session) {
     const current = one('SELECT work_item_id,active FROM work_item_sessions WHERE id=?', session.id);
-    return !!current?.active && !store.isDeleted(current.work_item_id)
+    return !!current?.active && !store.isSessionDeleted(session.id) && !store.isDeleted(current.work_item_id)
+      && (session.work_item_id === undefined || store.canonical(current.work_item_id) === store.canonical(session.work_item_id))
       && (session.visibility_revision === undefined || store.visibilityRevision(current.work_item_id) === session.visibility_revision);
   }
   function ensureSummary(session) {
@@ -177,7 +178,7 @@ export function integrationStore(store) {
     invalidateOpenWorklogs: closedIds => {
       let changed = false;
       const rows = all("SELECT w.*,s.agent_id,s.work_item_id FROM jira_worklogs w LEFT JOIN work_item_sessions s ON s.id=w.session_id WHERE w.state!='needs_review'")
-        .filter(row => !row.work_item_id || !store.isDeleted(row.work_item_id));
+        .filter(row => !store.isSessionDeleted(row.session_id) && (!row.work_item_id || !store.isDeleted(row.work_item_id)));
       const affectedAgents = new Set(rows.filter(r => !closedIds.has(r.session_id)).map(r => r.agent_id));
       // A collapsed window may now overlap another already-published worklog. Freeze both;
       // never expand one log while silently retaining the other log's counted time.

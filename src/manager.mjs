@@ -157,6 +157,7 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
   publicHandler: async (req, res, url) => {
     const routes = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/loading.js': ['loading.js', 'text/javascript'], '/history.js': ['history.js', 'text/javascript'], '/integrations.js': ['integrations.js', 'text/javascript'], '/jira.js': ['jira.js', 'text/javascript'], '/writing.js': ['writing.js', 'text/javascript'], '/execution-settings.js': ['execution-settings.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
       '/icons.css': ['icons.css', 'text/css'],
+      '/session-actions.js': ['session-actions.js', 'text/javascript'],
       '/detail-resize.js': ['detail-resize.js', 'text/javascript'],
       '/calendar-selection.js': ['calendar-selection.js', 'text/javascript'],
       '/held-sessions.js': ['held-sessions.js', 'text/javascript'],
@@ -277,6 +278,12 @@ const { server, endpoint } = await serve({ dir, role: 'manager', port: Number(pr
       const data = await body(req); assert(Array.isArray(data.events) && data.events.length <= 500, '이벤트 배열이 필요합니다.');
       const result = store.ingestMany(data.events); if (result.inserted) notify(); return result;
     }
+    if (req.method === 'POST' && /^\/api\/sessions\/(move|delete|restore)$/.test(p)) {
+      const result = store.changeSessions(p.split('/').at(-1), await body(req));
+      if (!result.repeated) notify(); return result;
+    }
+    const deletedSessionsMatch = p.match(/^\/api\/items\/([^/]+)\/deleted-sessions$/);
+    if (req.method === 'GET' && deletedSessionsMatch) return store.deletedSessions(deletedSessionsMatch[1]);
     if (req.method === 'POST' && p === '/api/merge') {
       const result = store.merge(await body(req)); if (!result.repeated) notify(); return result;
     }

@@ -54,6 +54,7 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
       JOIN agent_sessions a ON a.id=e.agent_id JOIN event_links l ON l.event_id=e.id
       JOIN work_item_sessions s ON s.id=l.session_id
       WHERE a.role='user' AND a.engine IN ('claude','codex') AND e.kind='output' AND l.resolution='matched' AND s.active=1
+      AND NOT EXISTS (SELECT 1 FROM session_overrides o WHERE o.session_id=s.id AND o.deleted=1)
       AND json_extract(e.payload,'$.source')='system_hook'`).all()) {
       const event = JSON.parse(row.payload);
       // The original window owner, not the agent's initial item, decides ownership after an explicit split.
@@ -152,7 +153,7 @@ export function writingStore(store, integrations, { clock = Date.now } = {}) {
         { legacyOpenSummaries: row.format === 'work-item-metadata' && !row.snapshot.metadata_source_policy });
       return current.source_digest === row.snapshot.source_digest && current.base_version === row.snapshot.base_version
         && current.visibility_revision === (row.snapshot.visibility_revision || 0)
-        && (row.format !== 'work-item-metadata' || current.work_item_id === row.snapshot.work_item_id);
+        && current.work_item_id === row.snapshot.work_item_id;
     } catch { return false; }
   }
   function summaryState(row, state, result, message) {
