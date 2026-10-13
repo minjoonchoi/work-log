@@ -16,25 +16,48 @@ export function sessionActionsUI({ api, esc, modal, toast, refresh, absoluteTime
       if (action === 'restore') deleted = await api(`/items/${item.id}/deleted-sessions`);
       const verb = { move: '이동', delete: '삭제', restore: '복원' }[action];
       modal(`<h2>세션 ${verb}</h2><p>${action === 'delete' ? '선택한 세션을 업무·캘린더·자동 요약에서 제외합니다. 삭제한 세션에서 복원할 수 있습니다.' : action === 'move' ? '선택한 세션의 원문과 요약을 다른 업무로 이동합니다. 이후 새 세션의 수집 업무는 바뀌지 않습니다.' : '복원할 세션을 선택하세요.'}</p><p class="help">이미 전송된 Jira 업무 로그는 그대로 유지됩니다.</p>
-        ${action === 'move' ? `<label for="session-target-search">업무 검색</label><input id="session-target-search" type="search" placeholder="업무 제목으로 검색"><label for="session-target">이동할 업무</label><select id="session-target" size="6"></select>` : action === 'restore' ? `<div class="deleted-session-list">${deleted.map(s => `<label><input type="checkbox" data-restore-session="${esc(s.id)}"> ${esc(absoluteTime(s.start_at))} → ${esc(absoluteTime(s.end_at))}</label>`).join('') || '<p>삭제한 세션이 없습니다.</p>'}</div>` : `<p>${ids.length}개 세션 선택</p>`}
-        <p id="session-action-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button data-close>취소</button><button id="confirm-session-action" class="primary">${verb}</button></div>`);
+        ${action === 'move' ? `<label for="session-target-search">업무 검색</label><input id="session-target-search" type="search" placeholder="업무 제목으로 검색"><label for="session-target">이동할 업무</label><select id="session-target" size="6"></select><p id="session-move-preview" role="status"></p>` : action === 'restore' ? `<div class="deleted-session-list">${deleted.map(s => `<label><input type="checkbox" data-restore-session="${esc(s.id)}"> ${esc(absoluteTime(s.start_at))} → ${esc(absoluteTime(s.end_at))}</label>`).join('') || '<p>삭제한 세션이 없습니다.</p>'}</div>` : `<p>${ids.length}개 세션 선택</p>`}
+        <p id="session-action-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button data-close>취소</button><button id="reload-session-action" class="secondary" hidden>최신 내용 다시 확인</button><button id="confirm-session-action" class="primary">${verb}</button></div>`);
       const root = document.querySelector('#modal-content'), confirm = root.querySelector('#confirm-session-action');
       const operation = crypto.randomUUID();
       if (action === 'move') {
         const select = root.querySelector('#session-target'), search = root.querySelector('#session-target-search');
+        const update = () => {
+          confirm.disabled = !select.value;
+          const target = choices.find(i => i.id === select.value);
+          root.querySelector('#session-move-preview').textContent = target ? `${ids.length}개 세션 → ${target.title}` : `${ids.length}개 세션 · 이동할 업무를 직접 선택하세요.`;
+        };
         const paint = () => {
           const previous = select.value, matches = choices.filter(i => i.title.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()));
           select.innerHTML = matches.map(i => `<option value="${esc(i.id)}">${esc(i.title)}</option>`).join('');
           if (matches.some(i => i.id === previous)) select.value = previous;
-          else if (matches.length) select.value = matches[0].id;
-          confirm.disabled = !select.value;
+          else select.selectedIndex = -1;
+          update();
         };
-        search.oninput = paint; select.onchange = () => { confirm.disabled = !select.value; }; paint();
+        search.oninput = paint; select.onchange = update; paint();
       }
       if (action === 'restore') {
         const update = () => { confirm.disabled = !root.querySelector('[data-restore-session]:checked'); };
         root.querySelectorAll('[data-restore-session]').forEach(input => { input.onchange = update; }); update();
       }
+      const reload = root.querySelector('#reload-session-action');
+      reload.onclick = async () => {
+        reload.disabled = true;
+        try {
+          const fresh = await api(`/items/${item.id}?view=summary`);
+          if (!reload.isConnected) return;
+          configure(fresh);
+          await refresh(item.id);
+          if (!reload.isConnected || !document.querySelector('#modal').open) return;
+          if (action !== 'restore' && !selected.size) {
+            document.querySelector('#modal').close(); toast('선택했던 세션이 변경되었습니다. 세션을 다시 선택하세요.'); return;
+          }
+          await show(fresh, action);
+        } catch (error) {
+          if (!reload.isConnected) return;
+          root.querySelector('#session-action-error').textContent = error.message; reload.disabled = false;
+        }
+      };
       let request;
       confirm.onclick = async () => {
         request ||= { item_id: item.id, version: item.version, operation_id: operation,
@@ -43,14 +66,19 @@ export function sessionActionsUI({ api, esc, modal, toast, refresh, absoluteTime
         confirm.disabled = true;
         root.querySelectorAll('input,select').forEach(control => { control.disabled = true; });
         try {
-          await api(`/sessions/${action}`, { method: 'POST', body: request }); selected.clear();
-          if (confirm.isConnected) document.querySelector('#modal').close();
-          toast(`${request.session_ids.length}개 세션을 ${verb}했습니다.`); await refresh(item.id);
+          await api(`/sessions/${action}`, { method: 'POST', body: request });
         } catch (error) {
           if (!confirm.isConnected) return;
           const message = root.querySelector('#session-action-error'); message.hidden = false; message.textContent = error.message;
-          confirm.disabled = false;
+          if (error.status === 409) {
+            reload.hidden = false; confirm.disabled = true;
+          } else { confirm.disabled = false; confirm.textContent = '다시 시도'; }
+          return;
         }
+        selected.clear();
+        if (confirm.isConnected) document.querySelector('#modal').close();
+        toast(`${request.session_ids.length}개 세션을 ${verb}했습니다.`);
+        try { await refresh(item.id); } catch { toast(`${verb}은 완료됐지만 화면을 갱신하지 못했습니다. 새로고침해 주세요.`); }
       };
     } catch (error) { toast(error.message); }
   }
