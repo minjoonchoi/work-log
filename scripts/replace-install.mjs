@@ -2,12 +2,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { assert, atomic, digest } from '../src/shared.mjs';
-import { canonical, inventory, matches, safePath, safeInstallationPath, saveManifest, stat, validateManifest } from './install-state.mjs';
+import { canonical, inventory, matches, safePath, safeInstallationPath, saveManifest, stat, validateManifest, selectAppLocation } from './install-state.mjs';
 import { missingService, ownedService, stopOwnedServices } from './service-control.mjs';
+
+function safeReplacementPath(loc, target, options) {
+  const relative = path.relative('/Applications', target);
+  if (loc.app === '/Applications/WorkLog.app' && /^\.worklog-(?:stage|reinstall)-[0-9a-f-]{36}-0(?:\/|$)/.test(relative))
+    return safePath('/Applications', target, options);
+  return safeInstallationPath(loc, target, options);
+}
 
 const options = { encoding: 'utf8', timeout: 15000 };
 const exactTree = (loc, tree, target = tree.path) => {
-  safeInstallationPath(loc, target);
+  safeReplacementPath(loc, target);
   assert(stat(target)?.isDirectory() && canonical(inventory(target)) === canonical(tree.entries),
     `기존 설치가 변경되었습니다. 수정·추가 파일을 보존합니다: ${target}`);
 };
@@ -36,18 +43,21 @@ function startServices(loc, receipt, launchctl, selected = receipt.files) {
 function transaction(loc, receipt) {
   const change = receipt.replacement;
   assert(change && /^[0-9a-f-]{36}$/.test(change.id) && ['pending', 'restored', 'committed'].includes(change.phase), '재설치 복구 기록을 확인하세요.');
-  const previous = validateManifest(loc, change.previous);
+  const previousLoc = { ...loc };
+  selectAppLocation(previousLoc, change.previous.app_location ?? path.join(loc.home, 'Applications/WorkLog.app'));
+  const previous = validateManifest(previousLoc, change.previous);
   assert(!previous.replacement && previous.state === 'installed' && previous.id === receipt.id && previous.version === receipt.version,
     '재설치의 이전 소유 기록이 일치하지 않습니다.');
   return { previous, paths: receipt.trees.map((tree, i) => ({
     target: tree.path,
-    backup: path.join(path.dirname(tree.path), `.worklog-reinstall-${change.id}-${i}`),
+    original: previous.trees[i].path,
+    backup: path.join(path.dirname(previous.trees[i].path), `.worklog-reinstall-${change.id}-${i}`),
     stage: path.join(path.dirname(tree.path), `.worklog-stage-${change.id}-${i}`)
   })) };
 }
 
 function remainingOwned(loc, tree, file) {
-  safePath(loc.home, file);
+  safeReplacementPath(loc, file);
   const expected = new Map(tree.entries.map(entry => [entry.relative, entry]));
   const remaining = stat(file) ? inventory(file) : [];
   assert(remaining.every(entry => canonical(entry) === canonical(expected.get(entry.relative))),
@@ -60,7 +70,7 @@ function removeExact(loc, tree, file) {
   // modified/added entries are never authorization to delete user data.
   for (const entry of remainingOwned(loc, tree, file).reverse()) {
     const target = path.join(file, entry.relative);
-    safePath(loc.home, target, { symlink: entry.kind === 'symlink' });
+    safeReplacementPath(loc, target, { symlink: entry.kind === 'symlink' });
     assert(matches(target, entry), `정리 도중 파일이 변경되었습니다: ${target}`);
     if (entry.kind === 'directory') fs.rmdirSync(target); else fs.unlinkSync(target);
   }
@@ -99,17 +109,20 @@ export function recoverReplacement(loc, receipt, { activate, launchctl, stopTime
   assert(!blocked.length, blocked.map(row => row.reason).join('\n'));
   // Validate the entire rollback before touching any replacement files.
   for (const [i, entry] of paths.entries()) {
-    safePath(loc.home, entry.backup); safePath(loc.home, entry.stage);
+    safeReplacementPath(loc, entry.backup); safeReplacementPath(loc, entry.stage);
     if (stat(entry.backup)) {
       exactTree(loc, previous.trees[i], entry.backup);
       remainingOwned(loc, receipt.trees[i], entry.target);
-    } else exactTree(loc, previous.trees[i], entry.target);
+    } else {
+      exactTree(loc, previous.trees[i], entry.original);
+      if (entry.original !== entry.target) assert(!stat(entry.target), '이전 경로 복구 중 새 설치 위치에 파일이 있어 보존합니다.');
+    }
     remainingOwned(loc, receipt.trees[i], entry.stage);
   }
   for (const [i, entry] of paths.entries()) {
     if (stat(entry.backup)) {
       removeExact(loc, receipt.trees[i], entry.target);
-      fs.renameSync(entry.backup, entry.target);
+      fs.renameSync(entry.backup, entry.original);
     }
     removeExact(loc, receipt.trees[i], entry.stage);
   }
@@ -121,6 +134,7 @@ export function recoverReplacement(loc, receipt, { activate, launchctl, stopTime
   const restored = structuredClone(previous);
   for (const file of restored.files) if (file.activation !== 'not_started') file.activation = 'stopped';
   restored.replacement = { ...receipt.replacement, phase: 'restored' };
+  loc.app = previous.trees[0].path;
   saveManifest(loc, restored);
   if (activate) startServices(loc, restored, launchctl, restored.files.filter(file => resume.some(old => old.label === file.label)));
   delete restored.replacement; saveManifest(loc, restored);
@@ -129,11 +143,15 @@ export function recoverReplacement(loc, receipt, { activate, launchctl, stopTime
 
 // Caller owns installation.lock; staged payloads are complete before services stop.
 export function replaceInstall(loc, previous, plan, staged, { activate, launchctl, stopTimeoutMs = 10000, onProgress }) {
-  assert(!previous.app_location, '드래그하여 설치한 앱은 설치 제거 후 새 앱으로 교체하세요. 업무 기록은 보존됩니다.');
-  intact(loc, previous);
+  const oldLoc = { ...loc, app: previous.trees[0].path };
+  intact(oldLoc, previous);
+  if (oldLoc.app !== loc.app) {
+    safeInstallationPath(loc, loc.app);
+    assert(!stat(loc.app), `이전할 위치에 이미 앱이 있습니다. 덮어쓰지 않습니다: ${loc.app}`);
+  }
   assert(plan.runtimeRoot === previous.trees[1].path && plan.installationId === previous.id, '재설치 대상이 변경되었습니다. 다시 실행하세요.');
-  const receipt = { ...structuredClone(previous), build_id: plan.buildId, state: 'reinstalling', updated_at: new Date().toISOString(),
-    trees: previous.trees.map((tree, i) => ({ path: tree.path, entries: inventory(staged[i]) })),
+  const receipt = { ...structuredClone(previous), app_location: loc.app, build_id: plan.buildId, state: 'reinstalling', updated_at: new Date().toISOString(),
+    trees: previous.trees.map((tree, i) => ({ path: i === 0 ? loc.app : tree.path, entries: inventory(staged[i]) })),
     files: plan.files.map(file => ({ path: file.target, label: file.label, argv: file.argv, content: file.content,
       digest: digest(file.content), mode: 0o600, activation: 'not_started' })),
     replacement: { id: crypto.randomUUID(), phase: 'pending', previous: structuredClone(previous) } };
@@ -142,7 +160,7 @@ export function replaceInstall(loc, previous, plan, staged, { activate, launchct
   try {
     onProgress('기존 연결을 유지하며 새 설치 파일을 준비합니다.');
     for (const [i, entry] of paths.entries()) {
-      safePath(loc.home, entry.stage); safePath(loc.home, entry.backup);
+      safeReplacementPath(loc, entry.stage); safeReplacementPath(loc, entry.backup);
       assert(!stat(entry.stage) && !stat(entry.backup), '재설치 임시 경로가 이미 존재합니다.');
       // Stage alongside each target so the swap/rollback uses same-filesystem rename.
       fs.mkdirSync(entry.stage); prepared.push(entry.stage);
@@ -151,14 +169,15 @@ export function replaceInstall(loc, previous, plan, staged, { activate, launchct
     }
     onProgress('WorkLog 서비스의 종료를 확인합니다.');
     stopAttempted = true;
-    const blocked = stopOwnedServices(loc, previous, { deactivate: activate, launchctl, timeoutMs: stopTimeoutMs });
+    const blocked = stopOwnedServices(oldLoc, previous, { deactivate: activate, launchctl, timeoutMs: stopTimeoutMs });
     if (blocked.length) throw new Error(blocked.map(row => row.reason).join('\n'));
-    intact(loc, previous);
+    intact(oldLoc, previous);
     saveManifest(loc, receipt); journaled = true;
     onProgress('앱과 실행 파일을 교체합니다. 업무 데이터와 에이전트 연결은 유지합니다.');
     for (const [i, entry] of paths.entries()) {
-      exactTree(loc, previous.trees[i], entry.target);
-      fs.renameSync(entry.target, entry.backup);
+      exactTree(oldLoc, previous.trees[i], entry.original);
+      if (entry.original !== entry.target) assert(!stat(entry.target), `설치 대상이 변경되었습니다: ${entry.target}`);
+      fs.renameSync(entry.original, entry.backup);
       fs.renameSync(entry.stage, entry.target);
     }
     for (const old of previous.files.filter(old => !receipt.files.some(file => file.label === old.label))) {

@@ -7,7 +7,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let confirmation = NSAlert()
         confirmation.messageText = "WorkLog 설치"
-        confirmation.informativeText = "사용자 Applications 폴더에 WorkLog와 실행 서비스를 설치합니다. 기존 업무 기록은 유지됩니다. 에이전트와 Jira 연결은 설치 후 앱에서 설정하세요."
+        confirmation.informativeText = "/Applications 폴더에 WorkLog와 실행 서비스를 설치합니다. 기존 업무 기록은 유지됩니다. 에이전트와 Jira 연결은 설치 후 앱에서 설정하세요."
         confirmation.addButton(withTitle: "설치")
         confirmation.addButton(withTitle: "취소")
         guard confirmation.runModal() == .alertFirstButtonReturn else { NSApp.terminate(nil); return }
@@ -49,7 +49,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: success ? "WorkLog 열기" : "닫기")
         if success { alert.addButton(withTitle: "닫기") }
         if alert.runModal() == .alertFirstButtonReturn && success {
-            NSWorkspace.shared.open(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/WorkLog.app"))
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/WorkLog.app"))
         }
         NSApp.terminate(nil)
     }

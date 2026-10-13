@@ -1,6 +1,6 @@
 # 설치 소유권과 에이전트 연결
 
-`make install`은 의존성 설치·임시 macOS 앱 빌드·사용자 설치를 수행한다. 설치 대상은 현재 사용자의 `~/Applications/WorkLog.app`, WorkLog 전용 LaunchAgent 3개와 고정 실행 파일이다. Claude/Codex의 설정·훅·스킬 연결은 설치하지 않는다. GUI의 **연결 설정**에서 엔진별로 명시적으로 연결한다. `make uninstall`은 설치 소유 기록을 확인해 앱·서비스와 이후 GUI에서 만든 WorkLog 연결을 제거한다. `make install-plan`, `make uninstall-plan`은 사용자 설정을 바꾸지 않고 대상을 출력한다. ZIP에도 각각의 설치·제거 명령이 포함된다.
+`make install`은 의존성 설치·임시 macOS 앱 빌드·앱 설치를 수행한다. 설치 대상은 `/Applications/WorkLog.app`, 현재 사용자의 WorkLog 전용 LaunchAgent 1개와 고정 실행 파일이다. Claude/Codex의 설정·훅·스킬 연결은 설치하지 않는다. GUI의 **연결 설정**에서 엔진별로 명시적으로 연결한다. `make uninstall`은 설치 소유 기록을 확인해 앱·서비스와 이후 GUI에서 만든 WorkLog 연결을 제거한다. `make install-plan`, `make uninstall-plan`은 사용자 설정을 바꾸지 않고 대상을 출력한다. ZIP에도 각각의 설치·제거 명령이 포함된다.
 
 기본 출력은 한국어 단계 안내와 최종 결과다. 자동화는 다음과 같이 `--json`을 전달한다.
 
@@ -127,7 +127,7 @@ GUI의 탐색·설정·캘린더 이동·빠른 패널 아이콘은 정적 inlin
 
 ### Finder 드래그 설치와 UI 제거
 
-DMG의 `Applications` 바로가기는 `/Applications`를 가리킨다. 첫 실행은 해당 위치의 앱을 복사하지 않고 채택하고, 사용자 홈 안에 런타임·LaunchAgent·소유 기록을 만든다. `app_location`은 `/Applications/WorkLog.app` 또는 해당 사용자의 `~/Applications/WorkLog.app`만 허용한다. 전역 앱 내부 접근은 별도 `safeInstallationPath`로 검사하고, 설정·런타임 경로는 기존 홈 경계를 유지한다. 전역 Applications 디렉터리는 생성·정리 소유 대상에 포함하지 않는다. 업데이트는 같은 설치 경로에 앱을 대치하며 설치 제거를 요구하지 않는다. 사용자 Applications와 시스템 Applications는 별도 경로이므로 기존 설치 폴더를 유지한다.
+DMG의 `Applications` 바로가기는 `/Applications`를 가리킨다. 첫 실행은 해당 위치의 앱을 복사하지 않고 채택하고, 사용자 홈 안에 런타임·LaunchAgent·소유 기록을 만든다. `app_location`은 `/Applications/WorkLog.app` 또는 해당 사용자의 `~/Applications/WorkLog.app`만 허용한다. 전역 앱 내부 접근은 별도 `safeInstallationPath`로 검사하고, 설정·런타임 경로는 기존 홈 경계를 유지한다. 전역 Applications 디렉터리는 생성·정리 소유 대상에 포함하지 않는다. 업데이트는 같은 설치 경로에 앱을 대치하며 설치 제거를 요구하지 않는다. `make install`은 이전 사용자 Applications 설치를 소유 기록 검증 후 `/Applications`로 이전한다. 기존 업무 데이터와 연결은 유지하고 서비스의 앱 경로를 갱신한다. 이전 실패 시 원래 경로와 서비스 설정으로 복구한다. 대상에 다른 앱이 있으면 덮어쓰지 않는다. 명시적인 다른 홈(`--home-dir`)은 격리 설치용으로 해당 홈의 Applications를 사용한다.
 
 제거 UI는 임시 위치로 복사한 별도 도우미 앱에서 실행한다. 기본 제거는 WorkLog 소유 훅·스킬·서비스·앱만 제거한다. 사용자가 `연결 정보도 모두 삭제`를 체크하면 서비스 종료 확인 후 현재 데이터 디렉터리 해시에 대응하는 `local.worklog.atlassian`의 `oauth-*`, `client-*` Keychain 항목 두 개, `integrations/atlassian.json`, 로컬 API 인증 토큰·endpoint 파일, WorkLog 형식의 연결 설정 백업도 제거한다. 다른 CLI의 로그인, 사용자 인증서 원본, 업무 DB와 동기화 이력은 보존한다. Keychain/파일 정리에 실패하면 상세 원인과 재시도 가능한 앱을 남기고, 선택한 정리 의도는 소유 기록에 유지한다. 실패 후 앱 메뉴에서 제거를 다시 실행할 수 있다.
 

@@ -11,14 +11,14 @@ import { ROOT, atomic, assert, digest } from '../src/shared.mjs';
 import { createInstallReporter } from './install-output.mjs';
 import { intact, replaceInstall, recoverReplacement } from './replace-install.mjs';
 import { OWNER, quote, locations, stat, safePath, locked, readManifest, saveManifest, recordDirectories,
-  inventory, selectAppLocation, safeInstallationPath } from './install-state.mjs';
+  inventory, selectAppLocation, safeInstallationPath, defaultAppLocation } from './install-state.mjs';
 
 const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const plist = object => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>${Object.entries(object).map(([k, v]) => `<key>${xml(k)}</key>${typeof v === 'boolean' ? `<${v}/>` : Array.isArray(v) ? `<array>${v.map(s => `<string>${xml(s)}</string>`).join('')}</array>` : typeof v === 'object' ? `<dict>${Object.entries(v).map(([a, b]) => `<key>${xml(a)}</key>${typeof b === 'boolean' ? `<${b}/>` : `<string>${xml(b)}</string>`}`).join('')}</dict>` : `<string>${xml(v)}</string>`}`).join('')}</dict></plist>`;
 
 export function prepareInstall({ output, homeDir = os.homedir(), sourceApp, adopt = false }) {
   const loc = locations(homeDir), current = readManifest(loc);
-  if (!adopt && current?.state === 'uninstalled') selectAppLocation(loc, path.join(loc.home, 'Applications/WorkLog.app'));
+  if (!adopt) selectAppLocation(loc, defaultAppLocation(loc.home));
   if (adopt) {
     sourceApp = path.resolve(sourceApp);
     assert(!current || current.state === 'uninstalled' || current.trees[0].path === sourceApp, '기존 WorkLog의 설치 제거 메뉴로 이전 앱을 제거한 뒤 다시 실행하세요. 업무 기록은 보존됩니다.');
@@ -66,7 +66,7 @@ function applyInstallCore(plan, { homeDir = plan.homeDir, activate = true, launc
   return locked(homeDir, loc => {
     onProgress('설치 경로와 기존 소유 기록을 확인합니다.');
     const previous = readManifest(loc);
-    if (!plan.adopt && previous?.state === 'uninstalled') selectAppLocation(loc, path.join(loc.home, 'Applications/WorkLog.app'));
+    if (!plan.adopt) selectAppLocation(loc, defaultAppLocation(loc.home));
     if (plan.adopt) {
       assert(plan.sourceApp === plan.targetApp, '드래그 설치 원본과 대상이 다릅니다.');
       assert(!previous || previous.state === 'uninstalled' || previous.trees[0].path === plan.sourceApp, '기존 설치를 먼저 제거하세요. 업무 기록은 보존됩니다.');
@@ -80,13 +80,13 @@ function applyInstallCore(plan, { homeDir = plan.homeDir, activate = true, launc
     const freshData = !previous && !fs.readdirSync(loc.data).some(name => name !== 'installation.lock');
     assert(!previous?.replacement, '중단된 재설치가 있습니다. make install로 복구한 뒤 다시 실행하세요.');
     if (previous?.state === 'installed') {
-      intact(loc, previous);
-      if (!reinstall || plan.adopt) return { status: 'already_installed', installed: loc.app, installation_id: previous.id, manifest: loc.manifest, note: '기존 설치를 유지했습니다. make install로 최신 소스를 재설치할 수 있습니다.' };
+      intact({ ...loc, app: previous.trees[0].path }, previous);
+      if (!reinstall || plan.adopt) return { status: 'already_installed', installed: previous.trees[0].path, installation_id: previous.id, manifest: loc.manifest, note: '기존 설치를 유지했습니다. make install로 최신 소스를 재설치할 수 있습니다.' };
     }
     assert(!previous || ['uninstalled', 'installed'].includes(previous.state), '이전 설치 또는 제거가 미완료입니다. uninstall 결과를 먼저 확인하세요.');
     assert(!activate || loc.home === path.resolve(os.homedir()) || launchctl !== spawnSync, '다른 홈에는 서비스를 활성화할 수 없습니다. --no-activate를 사용하세요.');
     if (previous?.state !== 'installed') for (const target of [...(plan.adopt ? [] : [loc.app]), plan.runtimeRoot, ...plan.files.map(f => f.target)]) {
-      safePath(loc.home, target, { symlink: true });
+      safeInstallationPath(loc, target, { symlink: true });
       assert(!stat(target), `이미 설치되었거나 사용자가 소유한 경로가 있습니다. 덮어쓰지 않습니다: ${target}`);
     }
     if (activate && previous?.state !== 'installed') for (const file of plan.files) {
@@ -96,6 +96,11 @@ function applyInstallCore(plan, { homeDir = plan.homeDir, activate = true, launc
     }
     for (const file of ['Contents/MacOS/node', 'Contents/MacOS/WorkLogKeychain', ...plan.skills.map(s => `Contents/Resources/harness/skills/${s}/SKILL.md`)])
       assert(fs.existsSync(path.join(plan.sourceApp, file)), `최신 macOS 앱을 먼저 빌드하세요: ${file}`);
+    if (!plan.adopt && loc.app === '/Applications/WorkLog.app') {
+      safeInstallationPath(loc, loc.app);
+      try { fs.accessSync('/Applications', fs.constants.W_OK); }
+      catch { throw new Error('/Applications에 쓰기 권한이 없습니다. Finder에서 DMG의 WorkLog를 Applications로 복사하고 실행하세요.'); }
+    }
     const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-install-stage-'));
     let receipt;
     try {
@@ -121,17 +126,17 @@ function applyInstallCore(plan, { homeDir = plan.homeDir, activate = true, launc
         fs.writeFileSync(packageFile, JSON.stringify({ version: 1, revision: 0, installed: [] }, null, 2), { flag: 'wx', mode: 0o600 });
       }
       const backupDir = path.join(loc.data, 'install-backups', plan.installationId);
-      receipt = { build_id: plan.buildId, ...(plan.adopt ? { app_location: loc.app } : {}), format: 2, owner: OWNER, id: plan.installationId, home: loc.home, version: plan.version, skills: plan.skills, state: 'installing', created_at: new Date().toISOString(),
+      receipt = { build_id: plan.buildId, app_location: loc.app, format: 2, owner: OWNER, id: plan.installationId, home: loc.home, version: plan.version, skills: plan.skills, state: 'installing', created_at: new Date().toISOString(),
         trees: [{ path: loc.app, entries: inventory(stagedApp) }, { path: plan.runtimeRoot, entries: inventory(stagedRuntime) }],
         files: plan.files.map(f => ({ path: f.target, label: f.label, argv: f.argv, content: f.content, digest: digest(f.content), mode: 0o600, activation: 'not_started' })),
         links: [], hooks: [], created_directories: [], created_configs: [], backup_dir: backupDir };
-      recordDirectories(loc, receipt, [...(plan.adopt ? [] : [loc.app]), ...receipt.files.map(f => f.path)]);
+      recordDirectories(loc, receipt, [...(plan.adopt || !loc.app.startsWith(`${loc.home}/`) ? [] : [loc.app]), ...receipt.files.map(f => f.path)]);
       saveManifest(loc, receipt); // Persist exact ownership before the first shared configuration write.
       readManifest(loc); // Validate the same boundaries used by the uninstaller.
       onProgress('앱과 백그라운드 서비스 설정을 설치합니다.');
       for (const [i, source] of [stagedApp, stagedRuntime].entries()) {
         if (plan.adopt && i === 0) continue;
-        const target = receipt.trees[i].path; safePath(loc.home, target); assert(!stat(target), `설치 대상이 변경되었습니다: ${target}`);
+        const target = receipt.trees[i].path; safeInstallationPath(loc, target); assert(!stat(target), `설치 대상이 변경되었습니다: ${target}`);
         fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
         fs.cpSync(source, target, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });
       }

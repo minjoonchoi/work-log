@@ -8,7 +8,7 @@ import { ROOT, assert } from '../src/shared.mjs';
 import { createInstallReporter } from './install-output.mjs';
 import { buildMac } from './build-mac.mjs';
 import { prepareInstall, applyInstall, checkInstallation } from './install.mjs';
-import { readManifest, locked, safePath, stat, inventory, canonical } from './install-state.mjs';
+import { readManifest, locked, safePath, safeInstallationPath, stat, inventory, canonical } from './install-state.mjs';
 
 // Recognized WorkLog build bundles are disposable, including older dist versions.
 // Unrecognized or linked paths are preserved; the installed app is verified first.
@@ -22,7 +22,7 @@ export function cleanBuildCopies({ homeDir, projectRoot = ROOT, sourceApp } = {}
     locked(homeDir, loc => {
       const receipt = readManifest(loc);
       assert(receipt?.state === 'installed', '완료된 설치 소유 기록을 확인할 수 없습니다.');
-      safePath(loc.home, loc.app);
+      safeInstallationPath(loc, loc.app);
       const expected = canonical(receipt.trees[0].entries);
       assert(canonical(inventory(loc.app)) === expected, '설치본 전체 내용이 소유 기록과 다릅니다.');
       const outputApps = new Set();

@@ -9,9 +9,12 @@ export const quote = s => `'${s.replaceAll("'", "'\\''")}'`;
 export const canonical = value => JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v)
   ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
 export const stat = file => { try { return fs.lstatSync(file); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
+// An explicit alternate home is an isolated installation sandbox.
+export const defaultAppLocation = home => path.resolve(home) === path.resolve(os.userInfo().homedir)
+  ? '/Applications/WorkLog.app' : path.join(path.resolve(home), 'Applications/WorkLog.app');
 export function locations(homeDir = os.homedir()) {
   const home = path.resolve(homeDir), data = path.join(home, 'Library/Application Support/WorkLog');
-  return { home, data, manifest: path.join(data, 'installation.json'), app: path.join(home, 'Applications/WorkLog.app'),
+  return { home, data, manifest: path.join(data, 'installation.json'), app: defaultAppLocation(home),
     configs: { claude: path.join(home, '.claude/settings.json'), codex: path.join(home, '.codex/hooks.json') },
     agents: ['runtime', 'manager', 'gui'].map(role => ({ label: `local.worklog.${role}`, path: path.join(home, `Library/LaunchAgents/local.worklog.${role}.plist`) })) };
 }
@@ -73,7 +76,7 @@ export function readManifest(loc) {
   safePath(loc.home, loc.manifest);
   if (!stat(loc.manifest)) return null;
   const m = JSON.parse(fs.readFileSync(loc.manifest, 'utf8'));
-  if (m.app_location !== undefined) selectAppLocation(loc, m.app_location);
+  selectAppLocation(loc, m.app_location ?? path.join(loc.home, 'Applications/WorkLog.app'));
   return validateManifest(loc, m);
 }
 
@@ -111,7 +114,7 @@ export function validateManifest(loc, m) {
       && [hookCommand(loc, runtime, m.id, h.engine), legacyHookCommand(loc, runtime, m.id, h.engine)].includes(entry.hook.command), '훅 소유 식별자가 다릅니다.');
   }
   if (m.format === 2) {
-    const permittedDirs = new Set([...(loc.app.startsWith(`${loc.home}/`) ? [loc.app] : []), ...loc.agents.map(f => f.path), ...Object.values(loc.configs), ...links.map(l => l.path)]
+    const permittedDirs = new Set([path.join(loc.home, 'Applications/WorkLog.app'), ...loc.agents.map(f => f.path), ...Object.values(loc.configs), ...links.map(l => l.path)]
       .flatMap(target => parentPaths(loc.home, target)));
     assert(Array.isArray(m.created_directories) && new Set(m.created_directories).size === m.created_directories.length
       && m.created_directories.every(dir => permittedDirs.has(dir)), '생성한 디렉터리 소유 경로가 다릅니다.');
