@@ -71,6 +71,10 @@ function formatResult(operation, result) {
       for (const row of result.preserved) lines.push(`    - ${row.path}\n      사유: ${row.reason}`);
       lines.push('  보존 사유를 확인한 뒤 make uninstall을 다시 실행하세요.');
     }
+    if (result.leftover_apps?.length) {
+      lines.push('  이전 전역 앱은 남겨두었습니다 (제거 작업은 완료):');
+      for (const row of result.leftover_apps) lines.push(`    - ${row.path}\n      사유: ${row.reason}`);
+    }
     field('보관 데이터', result.data_root);
     if (result.preserve?.length) field('보존할 데이터', result.preserve.join(' · '));
     if (result.note) lines.push(`  ${result.note}`);

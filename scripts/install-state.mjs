@@ -85,7 +85,8 @@ export function validateManifest(loc, m) {
   assert(Array.isArray(m.skills) && m.skills.length > 0 && new Set(m.skills).size === m.skills.length
     && m.skills.every(s => s === 'work'), '요청 스킬 목록이 잘못되었습니다.');
   assert(Array.isArray(m.trees) && m.trees.length === 2 && m.trees[0].path === loc.app && m.trees[1].path === runtime, '설치 파일의 허용 경로가 다릅니다.');
-  for (const tree of m.trees) {
+  if (m.retired_app) assert(m.retired_app.path === '/Applications/WorkLog.app', '이전 앱 정리 경로가 다릅니다.');
+  for (const tree of [...m.trees, ...(m.retired_app ? [m.retired_app] : [])]) {
     assert(Array.isArray(tree.entries), '설치 파일 목록이 없습니다.');
     for (const entry of tree.entries) {
       assert(typeof entry.relative === 'string' && !path.isAbsolute(entry.relative) && !entry.relative.split(/[\\/]/).includes('..'), '설치 파일 경로가 잘못되었습니다.');

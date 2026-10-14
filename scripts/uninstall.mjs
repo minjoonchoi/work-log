@@ -43,15 +43,38 @@ function removeTrees(loc, receipt, removed, preserved) {
   }
 }
 
+// Only the retired global app is optional cleanup; failure must not invalidate
+// removal of the active per-user installation or touch its database.
+function removeGlobalCopy(loc, receipt, removed) {
+  const app = '/Applications/WorkLog.app';
+  if (loc.app === app || path.resolve(loc.home) !== path.resolve(os.userInfo().homedir)) return [];
+  try {
+    safePath('/Applications', app);
+    if (!stat(app)) return [];
+    const plist = path.join(app, 'Contents/Info.plist');
+    const pkg = path.join(app, 'Contents/Resources/harness/package.json');
+    safePath('/Applications', plist); safePath('/Applications', pkg);
+    assert(/<key>CFBundleIdentifier<\/key>\s*<string>local\.worklog\.harness<\/string>/.test(fs.readFileSync(plist, 'utf8'))
+      && JSON.parse(fs.readFileSync(pkg, 'utf8')).name === 'work-log', 'WorkLog 앱인지 확인되지 않아 보존했습니다.');
+    const tree = receipt.retired_app || { path: app, entries: inventory(app) };
+    const failures = [];
+    removeTrees({ ...loc, app }, { trees: [tree] }, removed, failures);
+    return failures;
+  } catch (error) { return [{ path: app, reason: error.message }]; }
+}
+
 export function applyUninstall({ homeDir = os.homedir(), deactivate = true, launchctl = spawnSync, stopTimeoutMs = 10000, purgeConnections = false, credentialRunner, onProgress = () => {} } = {}) {
   onProgress('제거할 항목과 설치 소유 기록을 확인합니다.');
   const initial = prepareUninstall({ homeDir });
-  if (['not_installed', 'unmanaged', 'uninstalled'].includes(initial.status)) return initial;
+  if (['not_installed', 'unmanaged'].includes(initial.status)) return initial;
   return locked(homeDir, loc => {
     const receipt = readManifest(loc); assert(receipt, '설치 기록이 변경되었습니다.');
     assert(!receipt.runtime_update, '중단된 앱 갱신이 있습니다. 앱을 다시 실행해 복구한 뒤 제거하세요.');
     assert(!receipt.replacement, '중단된 재설치가 있습니다. make install로 복구한 뒤 제거하세요.');
-    if (receipt.state === 'uninstalled') return { status: 'uninstalled', removed: [] };
+    if (receipt.state === 'uninstalled') {
+      const removed = [], leftover_apps = removeGlobalCopy(loc, receipt, removed);
+      return { status: 'uninstalled', removed, leftover_apps, data_root: loc.data };
+    }
     const removed = [], preserved = [];
     receipt.purge_connections = receipt.purge_connections === true || purgeConnections;
     receipt.state = 'uninstalling'; saveManifest(loc, receipt);
@@ -80,8 +103,9 @@ export function applyUninstall({ homeDir = os.homedir(), deactivate = true, laun
     }
     removeEmptyDirectories(loc, receipt, removed);
     receipt.state = preserved.length ? 'needs_attention' : 'uninstalled';
-    receipt.uninstall = { at: new Date().toISOString(), removed, preserved }; saveManifest(loc, receipt);
-    return { status: receipt.state, installation_id: receipt.id, removed, preserved, data_root: loc.data,
+    const leftover_apps = preserved.length ? [] : removeGlobalCopy(loc, receipt, removed);
+    receipt.uninstall = { at: new Date().toISOString(), removed, preserved, leftover_apps }; saveManifest(loc, receipt);
+    return { status: receipt.state, installation_id: receipt.id, removed, preserved, leftover_apps, data_root: loc.data,
       note: preserved.length ? '일부 항목을 제거하지 못했습니다. preserved의 원인을 확인하고 다시 시도하세요.' : receipt.purge_connections ? 'WorkLog의 로컬 연결 설정과 Keychain 자격증명을 제거했습니다. 업무 기록과 동기화 이력은 보존합니다.' : '업무 DB·산출물·로그·백업·Keychain 토큰은 보존합니다. 기존 사용자 설정은 보존하며 WorkLog가 만든 빈 설정·디렉터리만 정리합니다.' };
   });
 }

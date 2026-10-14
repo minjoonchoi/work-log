@@ -223,3 +223,5 @@ DMG를 열고 **WorkLog 설치.app 더블클릭 → 설치 → WorkLog 열기** 
 자동 요약은 사용자 지정 `HARNESS_CODEX_BIN`·`HARNESS_CLAUDE_BIN`을 우선하고, `PATH`, 사용자 홈의 `.local/bin`·`.npm-global/bin`·`.volta/bin`, Homebrew, nvm 설치 경로에서 CLI를 찾습니다. nvm은 `NVM_DIR` 또는 현재 사용자의 `~/.nvm`을 기준으로 설치된 버전을 탐색합니다. 특정 사용자명이나 Node 버전을 고정하지 않으며, 선택한 CLI와 Node의 실행 경로를 자식 프로세스에 전달합니다. 셸 설정 파일을 실행하거나 전역 PATH를 변경하지 않습니다.
 
 자동 작성은 모델에 JSON 스키마를 요구하지 않고 최종 텍스트를 저장합니다. 제목이 필요한 작업은 첫 줄을 제목으로, 나머지를 본문으로 사용합니다. CLI의 스트림 JSON은 통신용이며 모델의 structured output이 아닙니다. 같은 엔진·설정에서는 작업마다 subprocess를 생성하지 않습니다. 60초간 요청이 없거나 오류·취소가 발생하면 프로세스를 종료하고, 다음 요청에서 다시 시작합니다. 엔진 또는 Claude 모델 설정 변경 시에도 프로세스를 교체합니다.
+
+`make uninstall`은 사용자 설치본을 제거한 뒤 `/Applications/WorkLog.app`의 이전 WorkLog 앱도 확인해 정리합니다. 권한 부족이나 변경된 파일 때문에 전역 앱을 제거하지 못해도 사용자 설치 제거는 완료 처리하며 남은 경로를 표시합니다. 다시 실행하면 남은 전역 앱 정리를 재시도합니다. 업무 DB와 설정은 보존합니다.

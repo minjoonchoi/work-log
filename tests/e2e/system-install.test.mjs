@@ -18,6 +18,8 @@ function fixture(t, legacy = false) {
   for (const name of ['node', 'WorkLog', 'WorkLogKeychain']) fs.writeFileSync(path.join(sourceApp, 'Contents/MacOS', name), name, { mode: 0o755 });
   fs.mkdirSync(path.join(sourceApp, 'Contents/Resources/harness/skills/work'), { recursive: true });
   fs.writeFileSync(path.join(sourceApp, 'Contents/Resources/harness/skills/work/SKILL.md'), 'fixture');
+  fs.writeFileSync(path.join(sourceApp, 'Contents/Info.plist'), '<key>CFBundleIdentifier</key><string>local.worklog.harness</string>');
+  fs.writeFileSync(path.join(sourceApp, 'Contents/Resources/harness/package.json'), JSON.stringify({ name: 'work-log' }));
   const install = () => applyInstall(prepareInstall({ homeDir: home, sourceApp, output: path.join(root, 'plan') }), { activate: false, reinstall: true });
   // Map every system filesystem operation to this test's private directory.
   // Production path resolution and receipts still use the literal /Applications.
@@ -38,7 +40,7 @@ function fixture(t, legacy = false) {
     installDraggedApp('/Applications/WorkLog.app', { homeDir: home, activate: false });
   }
   readOnly = true;
-  return { root, home, sourceApp, install, app: path.join(home, 'Applications/WorkLog.app'), legacy: '/Applications/WorkLog.app', loc: () => locations(home) };
+  return { allowGlobalWrites: () => { readOnly = false; }, root, home, sourceApp, install, app: path.join(home, 'Applications/WorkLog.app'), legacy: '/Applications/WorkLog.app', loc: () => locations(home) };
 }
 
 test('fresh source installation, replacement, cleanup and uninstall use user Applications and preserve data', t => {
@@ -109,4 +111,39 @@ for (const phase of ['pending', 'committed']) test(`interrupted migration at ${p
   assert.equal(f.install().installed, f.app);
   assert.equal(readManifest(f.loc()).replacement, undefined);
   assert.equal(fs.existsSync(f.legacy), true);
+});
+
+for (const writable of [true, false]) test(`uninstall cleans retired global app when writable=${writable} without failing user uninstall`, t => {
+  const f = fixture(t, true); f.install();
+  const marker = path.join(f.loc().data, 'memory-marker'); fs.writeFileSync(marker, 'keep');
+  if (writable) f.allowGlobalWrites();
+  const result = applyUninstall({ homeDir: f.home, deactivate: false });
+  assert.equal(result.status, 'uninstalled');
+  assert.equal(fs.existsSync(f.app), false);
+  assert.equal(fs.existsSync(f.legacy), !writable);
+  assert.equal(result.leftover_apps.length, writable ? 0 : 1);
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'keep');
+  f.allowGlobalWrites();
+  assert.equal(applyUninstall({ homeDir: f.home, deactivate: false }).status, 'uninstalled');
+  assert.equal(fs.existsSync(f.legacy), false);
+});
+
+test('old receipts without retired inventory clean identified global WorkLog but preserve foreign bundles', t => {
+  const f = fixture(t, true); f.install(); f.allowGlobalWrites();
+  const receipt = readManifest(f.loc()); delete receipt.retired_app;
+  fs.writeFileSync(f.loc().manifest, JSON.stringify(receipt));
+  fs.writeFileSync(`${f.legacy}/Contents/Info.plist`, '<key>CFBundleIdentifier</key><string>other.app</string>');
+  const result = applyUninstall({ homeDir: f.home, deactivate: false });
+  assert.equal(result.status, 'uninstalled'); assert.ok(fs.existsSync(f.legacy));
+  fs.writeFileSync(`${f.legacy}/Contents/Info.plist`, '<key>CFBundleIdentifier</key><string>local.worklog.harness</string>');
+  assert.equal(applyUninstall({ homeDir: f.home, deactivate: false }).status, 'uninstalled');
+  assert.equal(fs.existsSync(f.legacy), false);
+});
+
+test('modified retired app is preserved without blocking removal of the current installation', t => {
+  const f = fixture(t, true); f.install(); f.allowGlobalWrites();
+  fs.writeFileSync(`${f.legacy}/user-file`, 'keep');
+  const result = applyUninstall({ homeDir: f.home, deactivate: false });
+  assert.equal(result.status, 'uninstalled'); assert.equal(result.leftover_apps.length, 1);
+  assert.equal(fs.readFileSync(`${f.legacy}/user-file`, 'utf8'), 'keep');
 });
