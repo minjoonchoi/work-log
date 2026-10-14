@@ -96,11 +96,6 @@ function applyInstallCore(plan, { homeDir = plan.homeDir, activate = true, launc
     }
     for (const file of ['Contents/MacOS/node', 'Contents/MacOS/WorkLogKeychain', ...plan.skills.map(s => `Contents/Resources/harness/skills/${s}/SKILL.md`)])
       assert(fs.existsSync(path.join(plan.sourceApp, file)), `최신 macOS 앱을 먼저 빌드하세요: ${file}`);
-    if (!plan.adopt && loc.app === '/Applications/WorkLog.app') {
-      safeInstallationPath(loc, loc.app);
-      try { fs.accessSync('/Applications', fs.constants.W_OK); }
-      catch { throw new Error('/Applications에 쓰기 권한이 없습니다. Finder에서 DMG의 WorkLog를 Applications로 복사하고 실행하세요.'); }
-    }
     const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-install-stage-'));
     let receipt;
     try {

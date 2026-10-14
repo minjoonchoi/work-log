@@ -51,7 +51,8 @@ function transaction(loc, receipt) {
   return { previous, paths: receipt.trees.map((tree, i) => ({
     target: tree.path,
     original: previous.trees[i].path,
-    backup: path.join(path.dirname(previous.trees[i].path), `.worklog-reinstall-${change.id}-${i}`),
+    preserveOriginal: i === 0 && previous.trees[i].path === '/Applications/WorkLog.app' && tree.path !== previous.trees[i].path,
+    backup: path.join(path.dirname(i === 0 && previous.trees[i].path === '/Applications/WorkLog.app' && tree.path !== previous.trees[i].path ? tree.path : previous.trees[i].path), `.worklog-reinstall-${change.id}-${i}`),
     stage: path.join(path.dirname(tree.path), `.worklog-stage-${change.id}-${i}`)
   })) };
 }
@@ -110,7 +111,10 @@ export function recoverReplacement(loc, receipt, { activate, launchctl, stopTime
   // Validate the entire rollback before touching any replacement files.
   for (const [i, entry] of paths.entries()) {
     safeReplacementPath(loc, entry.backup); safeReplacementPath(loc, entry.stage);
-    if (stat(entry.backup)) {
+    if (entry.preserveOriginal) {
+      exactTree({ ...loc, app: entry.original }, previous.trees[i], entry.original);
+      remainingOwned(loc, receipt.trees[i], entry.target);
+    } else if (stat(entry.backup)) {
       exactTree(loc, previous.trees[i], entry.backup);
       remainingOwned(loc, receipt.trees[i], entry.target);
     } else {
@@ -120,7 +124,9 @@ export function recoverReplacement(loc, receipt, { activate, launchctl, stopTime
     remainingOwned(loc, receipt.trees[i], entry.stage);
   }
   for (const [i, entry] of paths.entries()) {
-    if (stat(entry.backup)) {
+    if (entry.preserveOriginal) {
+      removeExact(loc, receipt.trees[i], entry.target);
+    } else if (stat(entry.backup)) {
       removeExact(loc, receipt.trees[i], entry.target);
       fs.renameSync(entry.backup, entry.original);
     }
@@ -163,6 +169,7 @@ export function replaceInstall(loc, previous, plan, staged, { activate, launchct
       safeReplacementPath(loc, entry.stage); safeReplacementPath(loc, entry.backup);
       assert(!stat(entry.stage) && !stat(entry.backup), '재설치 임시 경로가 이미 존재합니다.');
       // Stage alongside each target so the swap/rollback uses same-filesystem rename.
+      fs.mkdirSync(path.dirname(entry.stage), { recursive: true });
       fs.mkdirSync(entry.stage); prepared.push(entry.stage);
       fs.cpSync(staged[i], entry.stage, { recursive: true, verbatimSymlinks: true });
       exactTree(loc, receipt.trees[i], entry.stage);
@@ -177,7 +184,7 @@ export function replaceInstall(loc, previous, plan, staged, { activate, launchct
     for (const [i, entry] of paths.entries()) {
       exactTree(oldLoc, previous.trees[i], entry.original);
       if (entry.original !== entry.target) assert(!stat(entry.target), `설치 대상이 변경되었습니다: ${entry.target}`);
-      fs.renameSync(entry.original, entry.backup);
+      if (!entry.preserveOriginal) fs.renameSync(entry.original, entry.backup);
       fs.renameSync(entry.stage, entry.target);
     }
     for (const old of previous.files.filter(old => !receipt.files.some(file => file.label === old.label))) {

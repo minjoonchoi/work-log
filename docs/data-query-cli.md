@@ -17,13 +17,13 @@ node bin/harness.mjs query history --item ITEM_ID --session SESSION_ID --limit 2
 새 빌드로 설치한 앱에는 Node를 함께 사용하는 macOS 네이티브 `worklog` 바이너리가 포함됩니다. 내부 CLI는 앱에 포함된 Node 런타임으로 실행됩니다. 별도 Node 설치나 PATH 변경 없이 실행합니다.
 
 ```sh
-"/Applications/WorkLog.app/Contents/Helpers/worklog" query items
+"$HOME/Applications/WorkLog.app/Contents/Helpers/worklog" query items
 ```
 
 짧은 명령을 원하면 현재 셸에서 앱의 실행 파일 경로를 추가할 수 있습니다.
 
 ```sh
-export PATH="/Applications/WorkLog.app/Contents/Helpers:$PATH"
+export PATH="$HOME/Applications/WorkLog.app/Contents/Helpers:$PATH"
 worklog query items --search "인증"
 worklog query sessions --item ITEM_ID
 ```

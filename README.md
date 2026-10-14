@@ -65,7 +65,7 @@ JSON 모드는 완료·확인 필요 결과의 최종 객체 하나를 stdout에
 
 설치·제거 Node CLI의 종료 코드는 `0` 완료, `1` 오류, `2` 확인 필요입니다. `make` 자체는 자식 명령이 실패하면 `2`를 반환하므로 CLI 오류와 확인 필요를 구분하려면 Node CLI를 직접 실행하세요. 출력 형식과 관계없이 설치·제거 정책은 같습니다.
 
-`make install`은 매번 프로젝트 의존성을 설치하고 현재 소스로 임시 앱을 빌드한 뒤 `/Applications/WorkLog.app`에 설치합니다. 기존 설치가 있으면 소유 기록을 확인해 앱과 실행 파일을 새 빌드로 교체하므로, 먼저 제거할 필요가 없습니다. 이전 `~/Applications/WorkLog.app` 설치도 소유 기록을 검증한 뒤 `/Applications`로 이전하며 업무 데이터와 설정은 유지합니다. 대상에 다른 앱이 있거나 쓰기 권한이 없으면 기존 설치를 보존하고 중단합니다. 설치용 빌드는 `dist`에 앱이나 ZIP을 만들지 않으며, 임시 빌드 폴더는 성공·실패 모두 정리합니다.
+`make install`은 매번 프로젝트 의존성을 설치하고 현재 소스로 임시 앱을 빌드한 뒤 `~/Applications/WorkLog.app`에 설치합니다. 기존 설치가 있으면 소유 기록을 확인해 앱과 실행 파일을 새 빌드로 교체하므로, 먼저 제거할 필요가 없습니다. 이전 `/Applications/WorkLog.app` 설치 기록이 있으면 사용자 폴더에 새 앱을 설치하고 서비스 경로를 갱신합니다. 기존 전역 앱과 업무 데이터·설정은 그대로 둡니다. 사용자 설치 대상에 다른 앱이 있으면 덮어쓰지 않습니다. 설치용 빌드는 `dist`에 앱이나 ZIP을 만들지 않으며, 임시 빌드 폴더는 성공·실패 모두 정리합니다.
 
 처음 사용할 때 **연결 설정 → 에이전트 연결**에서 이력 수집을 연결하면 기록과 자동 생성 기능을 사용할 수 있습니다. 새 작업 위임과 직무 패키지는 제공하지 않습니다.
 
@@ -91,7 +91,7 @@ HARNESS_NODE_DOWNLOAD=0 make build
 
 설치·제거 대상을 먼저 보려면 `make install-plan`, `make uninstall-plan`을 사용합니다. 이 두 명령과 `make uninstall`, `make test`는 기존 Node만 사용하며 다운로드하지 않습니다. 제거는 빌드를 요구하지 않고, 셸에서 Node를 찾지 못하면 설치된 앱의 Node도 사용합니다.
 
-설치 후에는 `/Applications/WorkLog.app`을 실행합니다. 일반 실행은 업무 목록 창을 열고 메뉴 막대 아이콘은 빠른 패널을 엽니다. **연결 설정**에서 사용할 Claude 또는 Codex의 **이력 수집**과 선택적인 **하네스 위임**을 각각 연결합니다. 한쪽만 해제할 수 있으며 다른 엔진의 연결에도 영향을 주지 않습니다. Atlassian은 같은 화면의 별도 설정에서 관리합니다. 이후 최신 코드를 반영하려면 `make install`을 다시 실행합니다.
+설치 후에는 `~/Applications/WorkLog.app`을 실행합니다. 일반 실행은 업무 목록 창을 열고 메뉴 막대 아이콘은 빠른 패널을 엽니다. **연결 설정**에서 사용할 Claude 또는 Codex의 **이력 수집**과 선택적인 **하네스 위임**을 각각 연결합니다. 한쪽만 해제할 수 있으며 다른 엔진의 연결에도 영향을 주지 않습니다. Atlassian은 같은 화면의 별도 설정에서 관리합니다. 이후 최신 코드를 반영하려면 `make install`을 다시 실행합니다.
 
 설치·재설치는 임시 폴더에서 앱을 빌드해 Applications에 설치하고 임시 앱을 정리합니다. `dist/WorkLog.app`, `dist/package/WorkLog/WorkLog.app`에 남은 이전 WorkLog 빌드도 버전에 관계없이 정리합니다. WorkLog로 확인되지 않거나 심링크인 경로는 보존하고 `build_cleanup.preserved`에 알립니다. 업무 데이터·설정과 DMG·ZIP은 유지합니다.
 
@@ -110,7 +110,7 @@ make install-plan
 
 **설치 계획 생성은 사용자 설정을 변경하지 않습니다.** 실제 설치는 ZIP의 설치 명령을 사용하거나 `node scripts/install.mjs --apply`를 명시해 수행합니다. 다음 변경을 만듭니다.
 
-- `/Applications/WorkLog.app`
+- `~/Applications/WorkLog.app`
 - 사용자 LaunchAgent 1개: 로그인 시 WorkLog 앱 시작. 앱이 실행·관리 서비스를 자식 프로세스로 시작하고 재시작합니다. 앱 종료 시 서비스도 종료하며, 진행 중인 사용자 작업은 완료를 기다립니다. 기존 3개 등록은 재설치 시 WorkLog 앱 등록 하나로 이전합니다.
 - `~/Library/Application Support/WorkLog/versions/…`의 설치 전용 실행 파일. 재설치할 때 기존 경로는 유지하고 내용을 교체합니다.
 
@@ -166,7 +166,7 @@ OAuth 연결 자체는 Jira 티켓을 만들지 않습니다. 상세에서 새�
 
 ## 에이전트의 로컬 기록 조회
 
-`node bin/harness.mjs query items --search "인증"`으로 업무를 검색하고, `query sessions --item ITEM_ID`로 세션 요약을 조회할 수 있습니다. 원본 입출력은 `query history --item ITEM_ID --session SESSION_ID`로 조회합니다. 결과는 페이지 단위 JSON이며 모델 실행이나 데이터 변경을 일으키지 않습니다. 설치 앱에는 `/Applications/WorkLog.app/Contents/Helpers/worklog` 실행 파일도 포함됩니다. [전체 조회 명령과 사용법](docs/data-query-cli.md)을 참고하세요.
+`node bin/harness.mjs query items --search "인증"`으로 업무를 검색하고, `query sessions --item ITEM_ID`로 세션 요약을 조회할 수 있습니다. 원본 입출력은 `query history --item ITEM_ID --session SESSION_ID`로 조회합니다. 결과는 페이지 단위 JSON이며 모델 실행이나 데이터 변경을 일으키지 않습니다. 설치 앱에는 `~/Applications/WorkLog.app/Contents/Helpers/worklog` 실행 파일도 포함됩니다. [전체 조회 명령과 사용법](docs/data-query-cli.md)을 참고하세요.
 
 입력 뒤 응답 종료가 수집되지 않은 세션은 마지막 연결 이벤트로부터 20분이 지나고 해당 에이전트의 하네스 작업이 실행·대기 중이지 않으면 **응답 종료 미확인**으로 표시합니다. 실제 완료를 추정하지 않으며 관측된 이력만 자동 요약합니다. 출력·종료 시각·업무 시간을 만들어 채우거나 Jira 업무 로그를 확정하지 않습니다. 새 도구 이벤트나 입력이 수집되면 활동 상태를 재평가하고, 늦은 응답은 요약 근거에 반영합니다.
 
@@ -212,11 +212,11 @@ Claude Code도 기존 UserPromptSubmit·PreToolUse·PostToolUse·Stop 훅이 전
 
 
 팀 배포용 DMG도 `make build`에서 생성합니다: `dist/WorkLog-macos-arm64.dmg`.
-DMG를 열고 **WorkLog를 Applications 폴더로 드래그 → Applications에서 WorkLog 실행** 순서로 설치합니다. 앱은 `/Applications/WorkLog.app`에 위치하며, 첫 실행에서 사용자별 실행 서비스와 런타임을 준비합니다. 디스크 이미지에서 직접 실행하면 Applications로 옮기도록 안내합니다. 기존 업무 기록은 유지하며, Claude/Codex 및 Jira 연결은 각 사용자가 앱에서 설정합니다. 설치 후 DMG를 추출해도 됩니다. macOS 13 이상 Apple Silicon용이며, 현재 ad-hoc 서명으로 Apple 공증은 포함되지 않아 회사 보안 정책에 따라 실행 승인이 필요할 수 있습니다. 기존 ZIP 배포물도 함께 생성합니다.
+DMG를 열고 **WorkLog 설치.app 더블클릭 → 설치 → WorkLog 열기** 순서로 설치합니다. 현재 사용자의 `~/Applications/WorkLog.app`에 설치하므로 다른 Mac에서도 빌드한 사람의 홈 경로를 사용하지 않습니다. `/Applications` 쓰기 권한은 필요하지 않습니다. 업무 기록과 설정은 `~/Library/Application Support/WorkLog`에 그대로 유지되며 이전 전역 앱은 변경하지 않습니다. 설치 후 DMG를 추출해도 됩니다. macOS 13 이상 Apple Silicon용이며 ad-hoc 서명으로 Apple 공증은 포함되지 않습니다. ZIP 배포물도 함께 생성합니다.
 
 메뉴 막대 WorkLog 아이콘을 우클릭하고 **WorkLog 설치 제거…**를 선택하면 제거 확인 창을 엽니다. 앱·서비스와 WorkLog 소유 Codex/Claude 훅·스킬 연결을 제거하며 업무 기록은 보존합니다. **연결 정보도 모두 삭제**를 체크하면 Atlassian OAuth 토큰·Client 자격증명(Keychain), 사이트·인증 설정, 로컬 API 인증 파일, WorkLog가 만든 연결 설정 백업도 제거합니다. Codex/Claude 자체 로그인, 다른 앱의 훅·설정, 외부 인증서 원본, 업무·동기화 이력은 유지합니다. Keychain 삭제 실패 시 앱을 보존하고 재시도할 수 있습니다.
 
-**업데이트는 설치 제거 없이** WorkLog 메뉴에서 종료 → 새 DMG의 앱을 **기존 WorkLog와 같은 설치 폴더에 드래그하고 대치** → 새 앱 실행 순서로 진행합니다. 첫 실행에서 빌드 변경을 감지해 내부 런타임만 교체하며, 업무 기록·자동 작성 설정·Codex/Claude 훅 연결·Atlassian 설정·Keychain 인증은 유지됩니다. 실패하거나 중간에 종료되어도 다음 실행에서 복구하고 재시도합니다. 기존 `make install` 설치 경로는 `/Applications/WorkLog.app`이므로 이 경우 그 폴더에 대치하거나 `make install`을 다시 실행하세요. DMG의 Applications 바로가기는 `/Applications`를 가리키므로 서로 다른 경로에 앱을 중복 설치하지 마세요.
+**업데이트는 설치 제거 없이** WorkLog 메뉴에서 종료 → 새 DMG의 **WorkLog 설치.app** 실행 순서로 진행합니다. `make install`도 같은 사용자 Applications 경로를 사용합니다. 업무 기록·자동 작성 설정·Codex/Claude 훅 연결·Atlassian 설정·Keychain 인증은 유지합니다.
 
 ### 에이전트 CLI 경로 탐색
 

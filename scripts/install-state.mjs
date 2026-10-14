@@ -9,9 +9,7 @@ export const quote = s => `'${s.replaceAll("'", "'\\''")}'`;
 export const canonical = value => JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v)
   ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
 export const stat = file => { try { return fs.lstatSync(file); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
-// An explicit alternate home is an isolated installation sandbox.
-export const defaultAppLocation = home => path.resolve(home) === path.resolve(os.userInfo().homedir)
-  ? '/Applications/WorkLog.app' : path.join(path.resolve(home), 'Applications/WorkLog.app');
+export const defaultAppLocation = home => path.join(path.resolve(home), 'Applications/WorkLog.app');
 export function locations(homeDir = os.homedir()) {
   const home = path.resolve(homeDir), data = path.join(home, 'Library/Application Support/WorkLog');
   return { home, data, manifest: path.join(data, 'installation.json'), app: defaultAppLocation(home),

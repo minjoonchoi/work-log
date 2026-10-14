@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { prepareInstall, applyInstall, checkInstallation } from '../../scripts/install.mjs';
 import { locations, readManifest } from '../../scripts/install-state.mjs';
 import { applyUninstall } from '../../scripts/uninstall.mjs';
+import { installDraggedApp } from '../../scripts/first-launch.mjs';
 import { cleanBuildCopies } from '../../scripts/install-source.mjs';
 
 function fixture(t, legacy = false) {
@@ -17,27 +19,29 @@ function fixture(t, legacy = false) {
   fs.mkdirSync(path.join(sourceApp, 'Contents/Resources/harness/skills/work'), { recursive: true });
   fs.writeFileSync(path.join(sourceApp, 'Contents/Resources/harness/skills/work/SKILL.md'), 'fixture');
   const install = () => applyInstall(prepareInstall({ homeDir: home, sourceApp, output: path.join(root, 'plan') }), { activate: false, reinstall: true });
-  if (legacy) {
-    install();
-    const file = locations(home).manifest, receipt = JSON.parse(fs.readFileSync(file));
-    delete receipt.app_location; fs.writeFileSync(file, JSON.stringify(receipt));
-  }
   // Map every system filesystem operation to this test's private directory.
   // Production path resolution and receipts still use the literal /Applications.
+  let readOnly = false;
+  const denied = file => { if (readOnly && typeof file === 'string' && (file === '/Applications' || file.startsWith('/Applications/'))) throw Object.assign(new Error('read-only Applications'), { code: 'EACCES' }); };
   const map = value => typeof value === 'string' && (value === '/Applications' || value.startsWith('/Applications/')) ? system + value.slice('/Applications'.length) : value;
   for (const name of ['lstatSync', 'statSync', 'existsSync', 'readdirSync', 'readFileSync', 'writeFileSync', 'mkdirSync', 'rmdirSync', 'unlinkSync', 'rmSync', 'chmodSync', 'accessSync', 'readlinkSync', 'realpathSync']) {
-    const original = fs[name]; t.mock.method(fs, name, (file, ...args) => original(map(file), ...args));
+    const original = fs[name]; t.mock.method(fs, name, (file, ...args) => { if (['writeFileSync', 'mkdirSync', 'rmdirSync', 'unlinkSync', 'rmSync', 'chmodSync', 'accessSync'].includes(name)) denied(file); return original(map(file), ...args); });
   }
   for (const name of ['renameSync', 'cpSync', 'copyFileSync']) {
-    const original = fs[name]; t.mock.method(fs, name, (from, to, ...args) => original(map(from), map(to), ...args));
+    const original = fs[name]; t.mock.method(fs, name, (from, to, ...args) => { denied(to); if (name === 'renameSync') denied(from); return original(map(from), map(to), ...args); });
   }
   t.mock.method(os, 'homedir', () => home);
   const user = os.userInfo(); t.mock.method(os, 'userInfo', () => ({ ...user, homedir: home }));
   t.after(() => { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, home, sourceApp, install, app: '/Applications/WorkLog.app', legacy: path.join(home, 'Applications/WorkLog.app'), loc: () => locations(home) };
+  if (legacy) {
+    fs.cpSync(sourceApp, '/Applications/WorkLog.app', { recursive: true });
+    installDraggedApp('/Applications/WorkLog.app', { homeDir: home, activate: false });
+  }
+  readOnly = true;
+  return { root, home, sourceApp, install, app: path.join(home, 'Applications/WorkLog.app'), legacy: '/Applications/WorkLog.app', loc: () => locations(home) };
 }
 
-test('fresh source installation, replacement, cleanup and uninstall use system Applications and preserve data', t => {
+test('fresh source installation, replacement, cleanup and uninstall use user Applications and preserve data', t => {
   const f = fixture(t);
   assert.equal(f.install().installed, f.app);
   const marker = path.join(f.loc().data, 'work-record'); fs.writeFileSync(marker, 'keep');
@@ -50,29 +54,30 @@ test('fresh source installation, replacement, cleanup and uninstall use system A
   assert.equal(fs.readFileSync(marker, 'utf8'), 'keep');
 });
 
-test('legacy user installation moves once, preserving identity, runtime, settings and records', t => {
+test('read-only system installation switches to user Applications, preserving identity, runtime, settings and records', t => {
   const f = fixture(t, true), before = readManifest(f.loc());
   const marker = path.join(f.loc().data, 'settings.json'); fs.writeFileSync(marker, 'keep');
+  const db = new DatabaseSync(path.join(f.loc().data, 'memory.sqlite'));
+  db.exec("CREATE TABLE saved_session (summary TEXT); INSERT INTO saved_session VALUES ('keep session');");
+  t.after(() => db.close());
   const result = f.install(), after = readManifest(f.loc());
   assert.equal(result.installed, f.app); assert.equal(after.id, before.id);
   assert.equal(after.trees[1].path, before.trees[1].path);
-  assert.equal(fs.existsSync(f.legacy), false); assert.equal(fs.readFileSync(marker, 'utf8'), 'keep');
+  assert.equal(db.prepare('SELECT summary FROM saved_session').get().summary, 'keep session');
+  assert.equal(fs.existsSync(f.legacy), true); assert.equal(fs.readFileSync(marker, 'utf8'), 'keep');
   assert.equal(after.files[0].argv[0], `${f.app}/Contents/MacOS/WorkLog`);
   assert.equal(f.install().status, 'reinstalled');
 });
 
-test('occupied destination and permission denial leave legacy installation intact', t => {
+test('occupied user destination leaves system installation intact', t => {
   const f = fixture(t, true), before = fs.readFileSync(f.loc().manifest);
-  fs.mkdirSync(f.app); fs.writeFileSync(`${f.app}/foreign`, 'keep');
+  fs.mkdirSync(f.app, { recursive: true }); fs.writeFileSync(`${f.app}/foreign`, 'keep');
   assert.throws(f.install, /이미 앱이/);
   assert.deepEqual(fs.readFileSync(f.loc().manifest), before);
-  fs.rmSync(f.app, { recursive: true });
-  const access = fs.accessSync; t.mock.method(fs, 'accessSync', (file, mode) => { if (file === '/Applications') throw new Error('EACCES'); return access(file, mode); });
-  assert.throws(f.install, /쓰기 권한/);
-  assert.deepEqual(fs.readFileSync(f.loc().manifest), before); assert.ok(fs.existsSync(f.legacy));
+
 });
 
-for (const boundary of ['app', 'runtime']) test(`failed ${boundary} swap restores original user app and registration`, t => {
+for (const boundary of ['app', 'runtime']) test(`failed ${boundary} swap restores original system app and registration`, t => {
   const f = fixture(t, true), before = readManifest(f.loc()), rename = fs.renameSync;
   let failed = false;
   t.mock.method(fs, 'renameSync', (from, to) => {
@@ -103,5 +108,5 @@ for (const phase of ['pending', 'committed']) test(`interrupted migration at ${p
   checkInstallation({ homeDir: f.home, activate: false });
   assert.equal(f.install().installed, f.app);
   assert.equal(readManifest(f.loc()).replacement, undefined);
-  assert.equal(fs.existsSync(f.legacy), false);
+  assert.equal(fs.existsSync(f.legacy), true);
 });
